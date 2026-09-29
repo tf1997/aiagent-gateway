@@ -47,6 +47,59 @@ curl -N http://localhost:8080/proxy/research/chat \
 
 若上游无需会话粘性，创建路由时传 `"session_policy":{"enabled":false}`。上游 URL 的路径作为前缀，查询参数合并保留。凭据通过 Endpoint 的 `credential_ref` 指定环境变量名，启动或修改配置时校验变量存在；客户端 Authorization、Cookie 和身份转发头会被清理。
 
+## Linux systemd 一键安装
+
+服务管理已内置在二进制中，无需安装脚本。将编译好的 Linux 二进制复制到服务器，执行：
+
+```sh
+sudo ./aiagent-gateway install
+```
+
+从源码在 Linux 上构建并安装：
+
+```sh
+go build -o bin/aiagent-gateway ./cmd/gateway
+sudo ./bin/aiagent-gateway install
+```
+
+在 macOS 等开发机交叉构建 Linux 版本（ARM64 服务器将 `amd64` 改为 `arm64`）：
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd64 ./cmd/gateway
+```
+
+将产物复制到 Linux 服务器后执行 `sudo ./aiagent-gateway-linux-amd64 install`。
+
+目标服务器需要运行 systemd，并提供 `systemctl`、`getent`、`groupadd` 和 `useradd`。安装需要 root；运行服务使用独立的 `aiagent-gateway` 系统用户。二进制内嵌两个 unit 文件，目标机器无需 Go、源码或额外脚本。
+
+安装命令完成以下工作：
+
+- 安装当前二进制到 `/usr/local/bin/aiagent-gateway`。
+- 首次安装生成独立随机管理 Token 和调用方 Token，保存于 `/etc/aiagent-gateway/gateway.env`，权限 0600；Token 不输出到终端。
+- 首次通过一次性初始化服务创建 `/var/lib/aiagent-gateway/config.json`；常规启动不自动创建缺失的配置文件。
+- 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
+- 重复执行 `install` 更新二进制和 unit，保留凭据和路由数据。升级会重启进程，内存会话和 A2A 映射会清空；升级启动失败时尝试恢复旧二进制、unit 和原来的运行状态。
+
+默认数据面为 `:8080`，管理面为 `127.0.0.1:9090`。首次生成的调用方 ID 为 `default`，可访问所有路由。通过 root 编辑配置调整调用方权限、上游凭据和 `GATEWAY_PUBLIC_URL`；后者应改为客户端实际可访问的地址。配置文件使用 systemd `EnvironmentFile` 语法，例如 JSON 值用单引号包围，文件由 systemd 读取，不作为 shell 脚本执行。
+
+```sh
+sudo aiagent-gateway status
+sudo aiagent-gateway restart
+sudo aiagent-gateway stop
+sudo aiagent-gateway start
+sudo journalctl -u aiagent-gateway -f
+```
+
+停止服务不会取消下次开机启动；若要禁用开机启动，执行 `sudo systemctl disable aiagent-gateway`。卸载服务及已安装二进制：
+
+```sh
+sudo aiagent-gateway uninstall
+```
+
+卸载保留凭据、路由数据和系统用户，后续安装可复用。已有安装缺少凭据或配置文件时，`install` 拒绝覆盖，需先恢复相应文件。
+
+macOS 可前台运行网关，但不支持这些 systemd 管理命令。当前已完成安装控制流程的模拟测试和 Linux 交叉构建，真实 systemd 启停/开机自启需要在 Linux 主机复核。
+
 ## 管理与持久化
 
 - `POST/GET /admin/v1/routes`：创建、分页查询路由。

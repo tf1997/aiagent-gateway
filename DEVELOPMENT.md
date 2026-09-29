@@ -55,3 +55,14 @@
 首版运行状态与设计的差异：调用方 ID 承担隔离键，尚无独立租户/RBAC 管理；健康检查地址配置在实例 `health_url`；默认每 10 秒串行主动检查；配置幂等和审计按最近 1000 条保留；A2A 映射使用独立互斥锁，尚未分片；OpenTelemetry 和延迟指标待补充。以上是后续工程项，详见 README 的运行边界。
 
 验证命令、结果与未完成的外部验证见 VALIDATION.md。性能微基准只衡量会话绑定热路径，不代表包含网络、TLS 和上游调用的 QPS。
+
+
+## 8. 内置 systemd 服务管理
+
+`internal/service` 管理系统安装与服务生命周期；unit 通过 `go:embed` 编译进二进制。入口提供 install/uninstall/start/stop/restart/status 子命令，无参数仍以前台方式运行。仅 Linux 支持服务管理；除 status 外需要 root。命令通过 os/exec 直接传递参数，不调用 shell 或执行凭据文件。
+
+安装使用文件锁避免并发变更。先读入候选二进制和备份，再停止旧服务、原子替换二进制及 unit；启动失败恢复旧文件并尝试恢复原来的运行状态。首次创建独立管理及调用方凭据，升级不修改凭据和数据。普通 systemd 服务不设置 GATEWAY_INIT；安装时才调用一次性初始化 unit。启动检查通过 ExecStartPost 调用 --check-ready；主进程监听失败返回非零退出码，使 Restart=on-failure 生效。
+
+`--init-only` 完成配置创建或验证后退出，不监听端口；`--check-ready` 根据配置的数据监听地址访问本机 /readyz，最长等待 15 秒，不打开配置存储锁。服务默认预留 30 秒停止时间，覆盖网关 20 秒优雅停机窗口。
+
+控制流程测试使用临时文件系统和替代的命令执行器，验证首次安装、升级、回滚、状态丢失保护、卸载保留数据和嵌入资源；不调用真实 systemctl 或修改系统账户。真实 Linux 集成需验证 service 用户权限、EnvironmentFile 解析、重启/开机启动、端口冲突及进程异常后的重启行为。

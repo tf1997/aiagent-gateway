@@ -34,3 +34,16 @@ BenchmarkBoundSession-8   2517038   459.9 ns/op   122 B/op   5 allocs/op
 - 文件崩溃窗口目前通过注入返回错误检查行为；真实磁盘满、进程 kill 和掉电恢复未验证。
 
 在可监听端口的开发机上执行 `go test -race ./...` 进行 TCP 复核。生产部署前补齐上述验证，不以首版自动测试作为生产性能承诺。
+
+
+## 内置 systemd 管理验证
+
+新增服务管理使用二进制子命令和内嵌 unit，无外部安装脚本。
+
+- `GATEWAY_TEST_IN_MEMORY=true go test -race -cover ./...` 通过；网关核心包覆盖率 60.6%；服务管理包另补充首次未加载 unit 和系统账户校验回归测试。
+- 服务管理控制流程覆盖首次安装、升级保留凭据和数据、启动失败回滚、重试安装、缺失数据拒绝重建、卸载保留数据、凭据权限及符号链接保护。测试使用临时目录与模拟 systemctl/account 命令。
+- 二进制 CLI 冒烟检查通过：`--init-only` 创建/重复验证、损坏配置拒绝覆盖、帮助输出、未知子命令退出码、监听错误非零退出、非法 readiness 地址拒绝。
+- `go vet ./...` 和 `git diff --check` 通过。
+- Linux amd64 和 arm64 静态交叉构建通过，产物位于 `bin/aiagent-gateway-linux-amd64` 和 `bin/aiagent-gateway-linux-arm64`（构建目录不提交 Git）。
+
+当前主机为 macOS，未修改任何真实 systemd 服务或系统账户。Linux 上仍需验证 unit 加载、EnvironmentFile 解析、服务用户权限、实际启动/重启、开机自启和端口占用失败行为；模拟测试与交叉构建不等于这些环境验证。
