@@ -4,6 +4,10 @@ Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例�
 
 设计见 [DESIGN.md](DESIGN.md)，开发约定见 [DEVELOPMENT.md](DEVELOPMENT.md)，管理接口契约见 [api/openapi.yaml](api/openapi.yaml)。
 
+自动灰度升级：[操作说明](docs/ROLLOUT_OPERATIONS.md)、[本次实现过程](docs/ROLLOUT_IMPLEMENTATION_RECORD.md)，包含组件改造、会话到原 Agent 的映射持久化、自动切流/回退和验证结果。架构与规划见 [通用 HTTP 网关发布设计](docs/HTTP_GATEWAY_ROLLOUT_DESIGN.md)及 [本项目实施计划](docs/AGENT_GATEWAY_ROLLOUT_IMPLEMENTATION_PLAN.md)。
+
+发版与升级步骤见 [构建打包和上传](docs/ROLLOUT_OPERATIONS.md#构建发版)、[首次安装或维护迁移](docs/ROLLOUT_OPERATIONS.md#首次安装或维护迁移)、[日常灰度升级](docs/ROLLOUT_OPERATIONS.md#日常灰度升级) 和 [异常恢复及降级](docs/ROLLOUT_OPERATIONS.md#结果确认和异常处理)。
+
 Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原始来源和版本对照见 [会话接口调研](docs/HERMES_SESSION_API_RESEARCH.md)。
 
 实施进度见 [Hermes 适配与 A2A 1.0 开发方案](docs/HERMES_A2A_V1_DEVELOPMENT_PLAN.md)。现已接入 Hermes Sessions、Runs、Chat Completions、Responses、能力发现和后台核查；A2A 仅支持 1.0，依据官方规范 v1.0.1。官方 SDK 1.2.0 的 Card 与六个 RPC 已通过双实例真实联调，最新验证范围见 [VALIDATION.md](VALIDATION.md)。
@@ -102,15 +106,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 
 将产物复制到 Linux 服务器后执行 `sudo ./aiagent-gateway-linux-amd64 install`。
 
-目标服务器需要运行 systemd，并提供 `systemctl`、`getent`、`groupadd` 和 `useradd`。安装需要 root；运行服务使用独立的 `aiagent-gateway` 系统用户。二进制内嵌两个 unit 文件，目标机器无需 Go、源码或额外脚本。
+目标服务器需要运行 systemd，并提供 `systemctl`、`getent`、`groupadd` 和 `useradd`。安装需要 root；运行服务使用独立的 `aiagent-gateway` 系统用户。二进制内嵌所需 unit 文件，目标机器无需 Go、源码或额外脚本。
 
 安装命令完成以下工作：
 
-- 安装当前二进制到 `/usr/local/bin/aiagent-gateway`。
+- 首次安装或维护迁移将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
 - 首次安装生成独立随机管理 Token 和调用方 Token，保存于 `/etc/aiagent-gateway/gateway.env`，权限 0600；Token 不输出到终端。
 - 首次通过一次性初始化服务创建 `/var/lib/aiagent-gateway/config.json`；常规启动不自动创建缺失的配置文件。
 - 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
-- 重复执行 `install` 更新二进制和 unit，保留凭据和路由数据。升级会重启进程，内存会话和 A2A 映射会清空；升级启动失败时尝试恢复旧二进制、unit 和原来的运行状态。
+- 已迁入灰度架构后，重复执行新二进制的 `install` 会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；配置、资源归属和并发额度由共享状态服务统一管理。
+- 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
 默认数据面为 `:8080`，管理面为 `127.0.0.1:9090`。首次生成的调用方 ID 为 `default`，可访问所有路由。通过 root 编辑配置调整调用方权限、上游凭据和 `GATEWAY_PUBLIC_URL`；后者应改为客户端实际可访问的地址。配置文件使用 systemd `EnvironmentFile` 语法，例如 JSON 值用单引号包围，文件由 systemd 读取，不作为 shell 脚本执行。
 
@@ -145,7 +150,7 @@ macOS 可前台运行网关，但不支持这些 systemd 管理命令。当前�
 
 分页参数为 `offset`、`limit`（默认和最大均为 100）。详情 GET 返回 ETag，PATCH/DELETE 必须使用该资源的 `If-Match`；不匹配返回 412。创建支持 `Idempotency-Key`，相同键和相同原始请求重放结果，不同请求返回 409。首版保存最近 1000 条幂等记录与 1000 条审计。
 
-配置写入同目录临时文件，经 fsync、rename、目录同步后发布内存快照。文件和目录权限默认 0600 / 0700。多个进程不能同时打开同一数据目录；文件替换后目录同步失败时 ready 失败，需排查存储并重启恢复。
+配置写入同目录临时文件，经 fsync、rename、目录同步后发布内存快照。文件和目录权限默认 0600 / 0700。前台单进程模式下，多个进程不能同时打开同一数据目录；灰度模式由单个状态服务独占目录，worker 通过本机 Socket 访问；文件替换后目录同步失败时 ready 失败，需排查存储并重启恢复。
 
 实例状态支持 active、draining、disabled。draining 不接新会话，已有会话继续访问。有绑定或活跃调用的实例不能删除或替换地址。每个 `interfaces` 项的 `health_url` 可指定主动健康检查地址，默认每 10 秒串行检查，携带该接口的凭据；仅 2xx 表示健康，不跟随重定向。未配置探活或首次探活前默认可调度。两个接口健康互不影响，HTTP 并发共同计入实例上限；实例详情 GET 的 `runtime` 展示接口健康、各接口/实例 HTTP 并发和引用数。
 
@@ -157,7 +162,7 @@ macOS 可前台运行网关，但不支持这些 systemd 管理命令。当前�
 
 管理 API 接受纯旧形态创建，返回新形态；`protocol` 与新字段混用返回 409。旧 Endpoint 的 `url/credential_ref/health_url` 创建或 PATCH，以及旧 `protocol` PATCH，只适用于 `generic` 且 `expose` 为单项的路由；双入口使用新字段更新。旧幂等回执继续重放原响应，新回执使用新形态。
 
-回滚需先停止网关、导出保存升级后的 `config.json`，再同时恢复旧二进制和 `config.schema-1.backup.json` 对应的配置。旧二进制无法读取 schema 2；备份不包含升级后的配置修改。迁移不修改凭据，运行时绑定仍不跨重启恢复。
+回滚需先停止网关、导出保存升级后的 `config.json`，再同时恢复旧二进制和 `config.schema-1.backup.json` 对应的配置。旧二进制无法读取 schema 2；备份不包含升级后的配置修改。迁移不修改凭据，前台模式的运行时绑定仍不跨重启恢复；灰度模式使用独立共享状态日志，不应通过恢复旧配置文件回滚业务版本。
 
 ## A2A
 

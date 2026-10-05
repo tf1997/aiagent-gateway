@@ -1,0 +1,14 @@
+[Unit]
+Description=AI Agent Gateway release controller
+PartOf=aiagent-gateway.service
+After=aiagent-gateway-state.service aiagent-gateway-entry.service
+[Service]
+RuntimeDirectory=aiagent-gateway-control
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+EnvironmentFile=/etc/aiagent-gateway/gateway.env
+ExecStart=@BINARY@ rollout-controller
+Restart=on-failure
+RestartSec=2
+UMask=0077
+TimeoutStopSec=35

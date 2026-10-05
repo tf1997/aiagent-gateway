@@ -2,9 +2,13 @@ package gateway
 
 // Observe the adapter's known protocol fields atomically, before exposing any
 // IDs. Session compression may add lineage aliases; execution identity is fixed.
-func (d *resourceDirectory) observeHermes(session, execution resource, sessionIDs []string, activeSession, executionID string, state resourceState) error {
+func (d *resourceDirectory) observeHermes(session, execution resource, sessionIDs []string, activeSession, executionID string, state resourceState) (err error) {
+	if d.remote != nil {
+		return d.remote.call("hermes", sharedRequest{Resource: session, Execution: execution, IDs: sessionIDs, Session: activeSession, Endpoint: executionID, State: state}, nil)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.commit(&err)
 	s := d.items[session.key()]
 	if s == nil || s.Generation != session.Generation {
 		return errResourceNotFound
@@ -82,6 +86,11 @@ func (d *resourceDirectory) observeHermes(session, execution resource, sessionID
 }
 
 func (d *resourceDirectory) publicUpstream(owner, route string, kind resourceKind, ep, id string) string {
+	if d.remote != nil {
+		var out sharedResponse
+		d.remote.must("public", sharedRequest{Owner: owner, Route: route, Kind: kind, Endpoint: ep, Session: id}, &out)
+		return out.ID
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.reverse[resourceReverseKey{owner, route, kind, ep, id}].ID
@@ -94,15 +103,23 @@ func (h *hermesRequest) abandonPrepared() {
 		return
 	}
 	d := h.g.resources
+	if d.remote != nil {
+		_ = d.remote.call("abandon_prepared", sharedRequest{Resources: h.created, Flag: h.op.action == "response"}, nil)
+		return
+	}
+	d.abandonPrepared(h.created, h.op.action == "response")
+}
+func (d *resourceDirectory) abandonPrepared(created []resource, response bool) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for i := len(h.created) - 1; i >= 0; i-- {
-		expected := h.created[i]
+	defer d.commit(&err)
+	for i := len(created) - 1; i >= 0; i-- {
+		expected := created[i]
 		r := d.items[expected.key()]
 		if r == nil || r.Generation != expected.Generation || r.ActiveRefs > 0 || r.ChildRefs > 0 {
 			continue
 		}
-		if r.State != resourceReserved && !(h.op.action == "response" && r.Kind == hermesSession && r.State == resourceLive) {
+		if r.State != resourceReserved && !(response && r.Kind == hermesSession && r.State == resourceLive) {
 			continue
 		}
 		for key, op := range d.operations {
@@ -112,4 +129,5 @@ func (h *hermesRequest) abandonPrepared() {
 		}
 		d.removeLocked(r)
 	}
+	return nil
 }

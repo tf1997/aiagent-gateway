@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func (g *Gateway) transport(ms int) *http.Transport {
+func (g *Gateway) transport(ms int) http.RoundTripper {
 	g.transportMu.Lock()
 	defer g.transportMu.Unlock()
 	t := g.transports[ms]
@@ -25,7 +25,7 @@ func (g *Gateway) transport(ms int) *http.Transport {
 		}
 		g.transports[ms] = t
 	}
-	return t
+	return observedTransport{t}
 }
 func (g *Gateway) DataHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

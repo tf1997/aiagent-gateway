@@ -42,6 +42,29 @@ func main() { os.Exit(run()) }
 func run() int {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "entry", "worker", "state-server", "rollout-controller":
+			return runRole(os.Args[1], os.Args[2:])
+		case "rollout":
+			if len(os.Args) < 3 || len(os.Args) > 4 || (len(os.Args) == 4 && os.Args[3] != "--json") {
+				fmt.Fprintln(os.Stderr, "Usage: aiagent-gateway rollout status|resume|rollback [--json]")
+				return 2
+			}
+			if err := service.RolloutCommand(os.Args[2], os.Stdout); err != nil {
+				slog.Error("rollout command failed", "error", err)
+				return 1
+			}
+			return 0
+		}
+		if len(os.Args) == 3 && os.Args[1] == "install" && os.Args[2] == "--migrate" {
+			if err := service.Manage("migrate", os.Stdout); err != nil {
+				slog.Error("migration failed", "error", err)
+				return 1
+			}
+			return 0
+		}
+	}
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
 		case "install", "uninstall", "start", "stop", "restart", "status":
 			if len(os.Args) > 2 {
 				if len(os.Args) == 3 && (os.Args[2] == "--help" || os.Args[2] == "-h") {
@@ -59,7 +82,7 @@ func run() int {
 		}
 	}
 	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [install|uninstall|start|stop|restart|status]\nWithout a command, run the gateway in the foreground.\n", os.Args[0])
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [install|uninstall|start|stop|restart|status]\nUse install --migrate for a legacy maintenance migration. Use rollout status|resume|rollback to inspect a release.\nWithout a command, run the gateway in the foreground.\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 

@@ -124,3 +124,12 @@ P4 的本地协议实现已完成；后续已补齐第 12 节所列单实例 Her
 真实 Hermes v2026.9.24 忽略 SendMessage 的 returnImmediately，且 SubscribeToTask 缺少标准要求的初始 Task。`hermes_a2a.go` 分别通过同实例流式入口的有界后台读取、同实例 GetTask 首帧补全实现公开 1.0 语义；新增并发释放、初始 Task、后台完成和停止生命周期测试。generic A2A 的严格标准检查保留。
 
 本机增加第二个独立 Hermes 数据目录及端点；官方 a2a-sdk 固定 1.2.0，完整依赖锁定在 `deploy/hermes-local/requirements-a2a-sdk.txt`。SDK Card、六个 RPC、context 续接/分页、订阅取消已在两个实例上通过。原生资源、实例故障/排空和重启恢复边界由独立脚本检查，最终结果以 [验证记录](VALIDATION.md) 为准。P6 资源归属持久化仍按原方案单独交付。
+
+
+## 14. 同机自动灰度升级（2026-10-06）
+
+实现入口见 [操作说明](docs/ROLLOUT_OPERATIONS.md)，通用设计见 [HTTP 发布机制](docs/HTTP_GATEWAY_ROLLOUT_DESIGN.md)。新增固定入口、后台发布状态机、不可变 release 目录、独立 worker 端口和共享状态服务；默认 install 在新架构下验证真实代理结果后自动切流或回退。
+
+单进程前台模式继续使用原内存绑定；灰度 worker 通过本机 RPC 共享路由/资源/幂等/并发额度。资源与会话日志由单写者提交，公共 ID 在持久提交后输出。普通业务升级不重启状态服务；状态代次变化会拒绝旧 worker 写入。短期列表快照跨 worker 共享，但不跨状态服务重启。
+
+通用状态机和入口不依赖 Agent 包；systemd driver 及 Agent 适配位于本项目。安装与迁移仍需 Linux 实机验收，不以本机控制流程模拟或交叉构建作为已部署证明。

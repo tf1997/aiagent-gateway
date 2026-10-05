@@ -18,10 +18,11 @@ type routeSchedule struct {
 
 type sessionKey struct{ Owner, Route, ID, Interface string }
 type binding struct {
-	Endpoint string
-	Seen     time.Time
-	TTL      time.Duration
-	Active   int
+	WorkerOwner string
+	Endpoint    string
+	Seen        time.Time
+	TTL         time.Duration
+	Active      int
 }
 type sessionShard struct {
 	mu    sync.Mutex
@@ -84,6 +85,9 @@ func (g *Gateway) acquire(owner, key, sid, forced, entry string, expected *Route
 
 // Caller holds lifecycle.RLock. Never call with the resource directory locked.
 func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected *Route) (*lease, error) {
+	if g.remote != nil {
+		return g.sharedAcquire(owner, key, sid, forced, entry, expected)
+	}
 	if !g.healthy.Load() {
 		return nil, fmt.Errorf("GATEWAY_NOT_READY")
 	}
@@ -286,6 +290,7 @@ func (g *Gateway) maintenance(ctx context.Context) {
 				sh.mu.Unlock()
 			}
 			g.cleanupResources()
+			_ = g.persistSessions()
 			if time.Now().After(nextHealth) {
 				g.retireCaches()
 				g.checkHealth(ctx)
@@ -402,6 +407,11 @@ func (g *Gateway) retireCaches() {
 // reuse the reservation even if that instance is now unhealthy or draining;
 // acquireResource decides availability without selecting a replacement.
 func (g *Gateway) reserveResource(owner string, rt *Route, spec resourceCreation) (creationReservation, error) {
+	if g.remote != nil {
+		var out sharedResponse
+		err := g.remote.call("reserve", sharedRequest{Owner: owner, Route: rt.Key, Revision: rt.Version, Creation: spec}, &out)
+		return out.Reservation, err
+	}
 	g.lifecycle.RLock()
 	defer g.lifecycle.RUnlock()
 	if !g.healthy.Load() || g.current.Load().Routes[rt.Key] != rt || !rt.Enabled || !exposes(rt, resourceInterface(spec.Kind)) {

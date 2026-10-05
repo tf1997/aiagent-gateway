@@ -90,9 +90,11 @@ type Caller struct {
 }
 type Options struct {
 	dialContext                                          func(context.Context, string, string) (net.Conn, error)
+	StateSocket, WorkerID                                string
 	DataDir, AdminToken, PublicURL                       string
 	Callers                                              []Caller
 	Initialize                                           bool
+	DeferBackground                                      bool
 	MaxSessions, MaxTasks, MaxInflight                   int
 	MaxPerCaller, MaxPerEndpoint                         int
 	MaxResources, MaxResourceAliases, MaxDataIdempotency int

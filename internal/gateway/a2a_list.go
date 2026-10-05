@@ -36,12 +36,12 @@ type a2aListCache struct {
 }
 
 func (g *Gateway) listA2ATasks(w http.ResponseWriter, r *http.Request, c Caller, rt *Route, q rpc) {
-	if g.taskLists.active.Add(1) > 4 {
-		g.taskLists.active.Add(-1)
+	release, err := g.acquireList("tasks")
+	if err != nil {
 		rpcError(w, q.ID, -32603, "Task list capacity reached")
 		return
 	}
-	defer g.taskLists.active.Add(-1)
+	defer release()
 	params := map[string]any{}
 	for k, v := range q.Params {
 		if k != "pageToken" && k != "tenant" {
@@ -56,19 +56,12 @@ func (g *Gateway) listA2ATasks(w http.ResponseWriter, r *http.Request, c Caller,
 	filterRaw, _ := json.Marshal(params)
 	filter := string(filterRaw)
 	token := stringField(q.Params, "pageToken")
-	now := time.Now()
-	g.taskLists.mu.Lock()
-	for k, s := range g.taskLists.snapshots {
-		if !now.Before(s.expires) {
-			delete(g.taskLists.snapshots, k)
-		}
-	}
 	if token != "" {
 		decoded, err := base64.RawURLEncoding.DecodeString(token)
 		key, pos, ok := strings.Cut(string(decoded), ":")
 		offset, offsetErr := strconv.Atoi(pos)
-		s, found := g.taskLists.snapshots[key]
-		g.taskLists.mu.Unlock()
+		record, found := g.cacheGet("tasks", key)
+		s := record.snapshot()
 		if err != nil || !ok || offsetErr != nil || !found || s.owner != c.ID || s.route != rt.ID || s.revision != rt.Version || s.filter != filter || offset < 0 || offset >= len(s.tasks) || offset%s.size != 0 {
 			rpcError(w, q.ID, -32602, "Invalid or expired page token")
 			return
@@ -76,7 +69,6 @@ func (g *Gateway) listA2ATasks(w http.ResponseWriter, r *http.Request, c Caller,
 		writeA2APage(w, q.ID, key, s, offset)
 		return
 	}
-	g.taskLists.mu.Unlock()
 	refs := g.resources.list(c.ID, rt.ID, a2aTask, "")
 	ctxFilter := stringField(q.Params, "contextId")
 	if ctxFilter != "" {
@@ -155,22 +147,12 @@ func (g *Gateway) listA2ATasks(w http.ResponseWriter, r *http.Request, c Caller,
 	}
 	key := ""
 	if len(s.tasks) > size {
-		g.taskLists.mu.Lock()
-		used := 0
-		for _, snapshot := range g.taskLists.snapshots {
-			used += snapshot.bytes
-		}
-		if len(g.taskLists.snapshots) >= 64 || used+bytesUsed > a2aListCacheBytes {
-			g.taskLists.mu.Unlock()
+		var err error
+		key, err = g.cachePut("tasks", cacheWire(s))
+		if err != nil {
 			rpcError(w, q.ID, -32603, "Task list snapshot capacity reached")
 			return
 		}
-		if g.taskLists.snapshots == nil {
-			g.taskLists.snapshots = map[string]a2aListSnapshot{}
-		}
-		key = newID("list_")
-		g.taskLists.snapshots[key] = s
-		g.taskLists.mu.Unlock()
 	}
 	writeA2APage(w, q.ID, key, s, 0)
 }

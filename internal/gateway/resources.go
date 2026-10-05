@@ -56,21 +56,22 @@ type operationKey struct{ Owner, Route, Operation, Key string }
 // Values returned to adapters are copies. Generation guards late responses and
 // releases; only the directory may mutate live records.
 type resource struct {
-	ID         string        `json:"public_id"`
-	Owner      string        `json:"owner_id"`
-	RouteID    string        `json:"route_id"`
-	Kind       resourceKind  `json:"resource_kind"`
-	EndpointID string        `json:"endpoint_id"`
-	Interface  string        `json:"interface"`
-	Upstream   string        `json:"upstream_id"`
-	ParentID   string        `json:"parent_id,omitempty"`
-	ParentKind resourceKind  `json:"parent_kind,omitempty"`
-	Generation string        `json:"binding_generation"`
-	State      resourceState `json:"lifecycle_state"`
-	Seen       time.Time     `json:"last_seen_at"`
-	ActiveRefs int           `json:"active_refs"`
-	ChildRefs  int           `json:"child_refs"`
-	SessionID  string        `json:"session_id,omitempty"` // Legacy A2A routing hint.
+	WorkerOwner string        `json:"worker_owner,omitempty"`
+	ID          string        `json:"public_id"`
+	Owner       string        `json:"owner_id"`
+	RouteID     string        `json:"route_id"`
+	Kind        resourceKind  `json:"resource_kind"`
+	EndpointID  string        `json:"endpoint_id"`
+	Interface   string        `json:"interface"`
+	Upstream    string        `json:"upstream_id"`
+	ParentID    string        `json:"parent_id,omitempty"`
+	ParentKind  resourceKind  `json:"parent_kind,omitempty"`
+	Generation  string        `json:"binding_generation"`
+	State       resourceState `json:"lifecycle_state"`
+	Seen        time.Time     `json:"last_seen_at"`
+	ActiveRefs  int           `json:"active_refs"`
+	ChildRefs   int           `json:"child_refs"`
+	SessionID   string        `json:"session_id,omitempty"` // Legacy A2A routing hint.
 }
 
 func (r resource) key() resourceKey { return resourceKey{r.Owner, r.RouteID, r.Kind, r.ID} }
@@ -91,6 +92,10 @@ type operationReservation struct {
 	Seen        time.Time
 }
 type resourceDirectory struct {
+	remote    *sharedClient
+	persist   func() error
+	onFailure func()
+
 	mu                                                    sync.Mutex
 	items                                                 map[resourceKey]*resourceRecord
 	reverse                                               map[resourceReverseKey]resourceKey
@@ -154,6 +159,11 @@ func (d *resourceDirectory) touchLocked(r *resourceRecord, now time.Time) {
 	}
 }
 func (d *resourceDirectory) lookup(k resourceKey) (resource, error) {
+	if d.remote != nil {
+		var out sharedResponse
+		err := d.remote.call("lookup", sharedRequest{Key: k}, &out)
+		return out.Resource, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	r := d.lookupLocked(k)
@@ -164,6 +174,14 @@ func (d *resourceDirectory) lookup(k resourceKey) (resource, error) {
 	return r.resource, nil
 }
 func (d *resourceDirectory) pin(k resourceKey) (resource, func(), error) {
+	if d.remote != nil {
+		var out sharedResponse
+		err := d.remote.call("pin", sharedRequest{Key: k}, &out)
+		if err != nil {
+			return resource{}, nil, err
+		}
+		return out.Resource, d.remote.release(out.Lease), nil
+	}
 	d.mu.Lock()
 	r := d.lookupLocked(k)
 	if r == nil {
@@ -222,12 +240,13 @@ type creationReservation struct {
 
 // choose is called only for a new resource, under the directory lock and the
 // gateway lifecycle read lock. It selects an endpoint; it must not perform I/O.
-func (d *resourceDirectory) reserve(owner, route string, s resourceCreation, choose func(*resource) (string, error)) (creationReservation, error) {
+func (d *resourceDirectory) reserve(owner, route string, s resourceCreation, choose func(*resource) (string, error)) (result creationReservation, err error) {
 	if resourceInterface(s.Kind) == "" || (s.Alias != "" && !validResourceID(s.Alias)) || s.Fingerprint == "" || s.Operation == "" || len(s.IdempotencyKey) > 256 || strings.IndexFunc(s.IdempotencyKey, unicode.IsControl) >= 0 {
 		return creationReservation{}, errResourceInvalid
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.commit(&err)
 	now := d.now()
 	operation := resourceInterface(s.Kind) + "/" + s.Operation
 	op := operationKey{owner, route, operation, s.IdempotencyKey}
@@ -342,12 +361,16 @@ func dataFingerprint(method, path string, body []byte, h http.Header, headerName
 func validResourceState(s resourceState) bool {
 	return s == resourceReserved || s == resourceLive || s == resourceWaiting || s == resourceUnknown || s == resourceTerminal
 }
-func (d *resourceDirectory) update(r resource, state resourceState) error {
+func (d *resourceDirectory) update(r resource, state resourceState) (err error) {
+	if d.remote != nil {
+		return d.remote.call("update", sharedRequest{Resource: r, State: state}, nil)
+	}
 	if !validResourceState(state) {
 		return errResourceInvalid
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.commit(&err)
 	current := d.items[r.key()]
 	if current == nil || current.Generation != r.Generation {
 		return errResourceNotFound
@@ -365,12 +388,16 @@ func (d *resourceDirectory) update(r resource, state resourceState) error {
 
 // attachAlias preserves old upstream lineage IDs and may promote a new active
 // upstream ID. Client aliases never cross caller/route/kind boundaries.
-func (d *resourceDirectory) attachAlias(r resource, alias string, upstream bool) error {
+func (d *resourceDirectory) attachAlias(r resource, alias string, upstream bool) (err error) {
+	if d.remote != nil {
+		return d.remote.call("alias", sharedRequest{Resource: r, Endpoint: alias, Flag: upstream}, nil)
+	}
 	if (upstream && !validUpstreamID(alias)) || (!upstream && !validResourceID(alias)) {
 		return errResourceInvalid
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.commit(&err)
 	current := d.items[r.key()]
 	if current == nil || current.Generation != r.Generation {
 		return errResourceNotFound
@@ -428,9 +455,19 @@ type resourceObservation struct {
 
 // observeBatch stages every record and parent link before committing. Capacity,
 // conflicts or dangling references cannot leave half an event registered.
-func (d *resourceDirectory) observeBatch(owner, route, ep string, obs []resourceObservation) (map[resourceReverseKey]resource, error) {
+func (d *resourceDirectory) observeBatch(owner, route, ep string, obs []resourceObservation) (result map[resourceReverseKey]resource, err error) {
+	if d.remote != nil {
+		var out sharedResponse
+		err = d.remote.call("observe", sharedRequest{Owner: owner, Route: route, Endpoint: ep, Observations: obs}, &out)
+		m := map[resourceReverseKey]resource{}
+		for _, p := range out.Mapped {
+			m[p.Key] = p.Value
+		}
+		return m, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.commit(&err)
 	staged := map[resourceKey]*resourceRecord{}
 	rev := map[resourceReverseKey]resourceKey{}
 	add := map[resourceKind]int{}
@@ -550,9 +587,13 @@ func (d *resourceDirectory) removeLocked(r *resourceRecord) {
 		}
 	}
 }
-func (d *resourceDirectory) forget(r resource) error {
+func (d *resourceDirectory) forget(r resource) (err error) {
+	if d.remote != nil {
+		return d.remote.call("forget", sharedRequest{Resource: r}, nil)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.commit(&err)
 	current := d.items[r.key()]
 	if current == nil || current.Generation != r.Generation {
 		return errResourceNotFound
@@ -566,9 +607,13 @@ func (d *resourceDirectory) forget(r resource) error {
 
 // Abandon is only for a reservation known not to have been sent. Adapters mark
 // it unknown before dispatch; after that, uncertain outcomes retain ownership.
-func (d *resourceDirectory) abandon(r resource) error {
+func (d *resourceDirectory) abandon(r resource) (err error) {
+	if d.remote != nil {
+		return d.remote.call("abandon", sharedRequest{Resource: r}, nil)
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.commit(&err)
 	current := d.items[r.key()]
 	if current == nil || current.Generation != r.Generation {
 		return errResourceNotFound
@@ -596,6 +641,8 @@ func resourceExpires(r *resourceRecord) bool {
 func (d *resourceDirectory) cleanup(busy func(resource) bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	var err error
+	defer d.commit(&err)
 	now := d.now()
 	ttl := 24 * time.Hour
 	for key, op := range d.operations {
@@ -624,6 +671,11 @@ func (d *resourceDirectory) cleanup(busy func(resource) bool) {
 	}
 }
 func (d *resourceDirectory) list(owner, route string, kind resourceKind, ep string) []resource {
+	if d.remote != nil {
+		var out sharedResponse
+		d.remote.must("list", sharedRequest{Owner: owner, Route: route, Kind: kind, Endpoint: ep}, &out)
+		return out.Resources
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	out := []resource{}
@@ -657,6 +709,11 @@ func (d *resourceDirectory) sizes() (resources, aliases, operations int) {
 	return len(d.items), d.aliasCount, len(d.operations)
 }
 func (d *resourceDirectory) hasTask(owner, route, sid string) bool {
+	if d.remote != nil {
+		var out sharedResponse
+		d.remote.must("has_task", sharedRequest{Owner: owner, Route: route, Session: sid}, &out)
+		return out.Flag
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, r := range d.items {

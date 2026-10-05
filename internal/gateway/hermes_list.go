@@ -12,13 +12,12 @@ import (
 )
 
 func (g *Gateway) listHermesSessions(w http.ResponseWriter, r *http.Request, c Caller, rt *Route) {
-	cache := &g.sessionLists
-	if cache.active.Add(1) > 4 {
-		cache.active.Add(-1)
+	release, err := g.acquireList("sessions")
+	if err != nil {
 		problem(w, 503, "SESSION_LIST_CAPACITY")
 		return
 	}
-	defer cache.active.Add(-1)
+	defer release()
 	query := r.URL.Query()
 	for key, values := range query {
 		if len(values) != 1 || (key != "limit" && key != "offset" && key != "page_token" && key != "source" && key != "include_children") {
@@ -53,19 +52,12 @@ func (g *Gateway) listHermesSessions(w http.ResponseWriter, r *http.Request, c C
 	query.Del("offset")
 	query.Set("limit", strconv.Itoa(limit))
 	filter := query.Encode()
-	cache.mu.Lock()
-	now := time.Now()
-	for key, s := range cache.snapshots {
-		if !now.Before(s.expires) {
-			delete(cache.snapshots, key)
-		}
-	}
 	if token != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(token)
 		key, pos, ok := strings.Cut(string(raw), ":")
 		n, e := strconv.Atoi(pos)
-		s, found := cache.snapshots[key]
-		cache.mu.Unlock()
+		record, found := g.cacheGet("sessions", key)
+		s := record.snapshot()
 		if err != nil || e != nil || !ok || !found || s.owner != c.ID || s.route != rt.ID || s.revision != rt.Version || s.filter != filter || n < 0 || n >= len(s.tasks) || (offset != 0 && offset != n) {
 			problem(w, 400, "INVALID_PAGE_TOKEN")
 			return
@@ -73,7 +65,6 @@ func (g *Gateway) listHermesSessions(w http.ResponseWriter, r *http.Request, c C
 		writeHermesPage(w, key, s, n)
 		return
 	}
-	cache.mu.Unlock()
 	refs := g.resources.list(c.ID, rt.ID, hermesSession, "")
 	if len(refs) > 1000 {
 		problem(w, 503, "SESSION_LIST_CAPACITY")
@@ -119,22 +110,12 @@ func (g *Gateway) listHermesSessions(w http.ResponseWriter, r *http.Request, c C
 	}
 	key := ""
 	if offset+limit < len(s.tasks) {
-		cache.mu.Lock()
-		used := 0
-		for _, s := range cache.snapshots {
-			used += s.bytes
-		}
-		if len(cache.snapshots) >= 64 || used+s.bytes > 32<<20 {
-			cache.mu.Unlock()
+		var err error
+		key, err = g.cachePut("sessions", cacheWire(s))
+		if err != nil {
 			problem(w, 503, "SESSION_LIST_CAPACITY")
 			return
 		}
-		if cache.snapshots == nil {
-			cache.snapshots = map[string]a2aListSnapshot{}
-		}
-		key = newID("sessions_")
-		cache.snapshots[key] = s
-		cache.mu.Unlock()
 	}
 	writeHermesPage(w, key, s, offset)
 }

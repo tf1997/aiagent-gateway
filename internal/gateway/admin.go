@@ -61,6 +61,10 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 		problem(w, 405, "METHOD_NOT_ALLOWED")
 		return
 	}
+	if g.configFrozen.Load() {
+		problem(w, 409, "ROLLOUT_IN_PROGRESS")
+		return
+	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
 	if err != nil {
 		problem(w, 413, "BODY_TOO_LARGE")
@@ -68,6 +72,10 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.configFrozen.Load() {
+		problem(w, 409, "ROLLOUT_IN_PROGRESS")
+		return
+	}
 	g.lifecycle.Lock()
 	defer g.lifecycle.Unlock()
 	if !g.healthy.Load() {
@@ -291,6 +299,10 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := g.backupLegacy(); err != nil {
 		reject(503, "MIGRATION_BACKUP_FAILED")
+		return
+	}
+	if err := g.persistSessions(); err != nil {
+		reject(503, "STATE_PERSISTENCE_FAILED")
 		return
 	}
 	renamed, err := g.persist(c)

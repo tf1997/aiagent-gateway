@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Agent Gateway stable entry
+PartOf=aiagent-gateway.service
+After=aiagent-gateway-state.service
+[Service]
+User=aiagent-gateway
+Group=aiagent-gateway
+EnvironmentFile=/etc/aiagent-gateway/gateway.env
+ExecStart=@BINARY@ entry
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=aiagent-gateway
+RuntimeDirectoryPreserve=yes
+StateDirectory=aiagent-gateway
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aiagent-gateway /run/aiagent-gateway
+LimitNOFILE=65536
+TimeoutStopSec=35

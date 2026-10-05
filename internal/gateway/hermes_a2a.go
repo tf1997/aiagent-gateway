@@ -51,6 +51,9 @@ func (g *Gateway) hermesSubscriptionSeed(ctx context.Context, q rpc, c Caller, l
 // the caller so closing the response does not cancel the execution.
 func (g *Gateway) hermesImmediate(w http.ResponseWriter, r *http.Request, c Caller, l *lease, q rpc, sid string) {
 	ctx, cancel := context.WithTimeout(g.background, time.Duration(l.route.Timeout.MaxDurationMS)*time.Millisecond)
+	if attempt := r.Context().Value(attemptKey{}); attempt != nil {
+		ctx = context.WithValue(ctx, attemptKey{}, attempt)
+	}
 	cancelOnDisconnect := context.AfterFunc(r.Context(), cancel)
 	q.Method = "SendStreamingMessage"
 	req, err := a2aUpstreamRequest(ctx, q, c, l.iface)

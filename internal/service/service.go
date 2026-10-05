@@ -89,9 +89,12 @@ func Manage(action string, output io.Writer) error {
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	switch action {
-	case "install":
-		return m.install(ctx)
+	case "install", "migrate":
+		return m.installRollout(ctx, action == "migrate")
 	case "uninstall":
+		if _, err := os.Stat(m.path(DeploymentPath)); err == nil {
+			return m.uninstallRollout(ctx)
+		}
 		return m.uninstall(ctx)
 	case "start", "stop", "restart":
 		return m.run(ctx, "systemctl", action, Name+".service")

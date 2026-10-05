@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"aiagent-gateway/internal/state"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,12 @@ import (
 )
 
 type Gateway struct {
+	workerRequests atomic.Int64
+	remote         *sharedClient
+	journal        *state.Journal
+	sessionPersist sync.Mutex
+	configFrozen   atomic.Bool
+
 	callerCounts map[string]*atomic.Int64
 	opts         Options
 	current      atomic.Pointer[snapshot]
@@ -86,37 +93,62 @@ func Open(o Options) (*Gateway, error) {
 	if o.HealthInterval <= 0 {
 		o.HealthInterval = 10 * time.Second
 	}
-	if err := os.MkdirAll(o.DataDir, 0700); err != nil {
-		return nil, err
+	var f *os.File
+	var remote *sharedClient
+	if o.StateSocket != "" {
+		remote = newSharedClient(o.StateSocket, o.AdminToken, o.WorkerID)
+	} else {
+		if err := os.MkdirAll(o.DataDir, 0700); err != nil {
+			return nil, err
+		}
+		var err error
+		f, err = os.OpenFile(filepath.Join(o.DataDir, "gateway.lock"), os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return nil, err
+		}
+		if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			f.Close()
+			return nil, fmt.Errorf("data directory already locked: %w", err)
+		}
 	}
-	f, err := os.OpenFile(filepath.Join(o.DataDir, "gateway.lock"), os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, err
-	}
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("data directory already locked: %w", err)
-	}
-	g := &Gateway{opts: o, lock: f, states: map[string]*endpointState{}, sched: map[string]*routeSchedule{}, resources: newResourceDirectory(o), transports: map[int]*http.Transport{}}
+	g := &Gateway{remote: remote, opts: o, lock: f, states: map[string]*endpointState{}, sched: map[string]*routeSchedule{}, resources: newResourceDirectory(o), transports: map[int]*http.Transport{}}
 	g.callerCounts = map[string]*atomic.Int64{}
 	for _, c := range o.Callers {
 		g.callerCounts[c.ID] = &atomic.Int64{}
 	}
 	g.persist = g.save
+	g.resources.remote = remote
 	for i := range g.shards {
 		g.shards[i].items = map[sessionKey]*binding{}
 	}
 	fail := func(err error) (*Gateway, error) {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
+		if f != nil {
+			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			f.Close()
+		}
 		return nil, err
 	}
-	raw, err := os.ReadFile(filepath.Join(o.DataDir, "config.json"))
+	var raw []byte
+	var err error
 	var c Config
+	if remote != nil {
+		var out sharedResponse
+		err = remote.call("config", sharedRequest{}, &out)
+		if err == nil && out.Config != nil {
+			c = *out.Config
+		} else {
+			if err == nil {
+				err = fmt.Errorf("missing shared configuration")
+			}
+			return fail(err)
+		}
+	} else {
+		raw, err = os.ReadFile(filepath.Join(o.DataDir, "config.json"))
+	}
 	if errors.Is(err, os.ErrNotExist) && o.Initialize {
 		c = Config{Schema: 2, Revision: 1, Routes: []Route{}, Receipts: map[string]Receipt{}}
 		_, err = g.save(c)
-	} else if err == nil {
+	} else if err == nil && remote == nil {
 		var migrated bool
 		c, migrated, err = loadConfig(raw)
 		if migrated {
@@ -137,10 +169,9 @@ func Open(o Options) (*Gateway, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	g.cancel = cancel
 	g.background = ctx
-	g.wg.Add(1)
-	go g.maintenance(ctx)
-	g.wg.Add(1)
-	go g.reconcileLoop(ctx)
+	if remote == nil && !o.DeferBackground {
+		g.StartBackground()
+	}
 	return g, nil
 }
 func (g *Gateway) save(c Config) (renamed bool, err error) {
@@ -183,8 +214,14 @@ func (g *Gateway) Close() error {
 		t.CloseIdleConnections()
 	}
 	g.transportMu.Unlock()
-	syscall.Flock(int(g.lock.Fd()), syscall.LOCK_UN)
-	return g.lock.Close()
+	if g.remote != nil {
+		g.remote.client.CloseIdleConnections()
+	}
+	if g.lock != nil {
+		syscall.Flock(int(g.lock.Fd()), syscall.LOCK_UN)
+		return g.lock.Close()
+	}
+	return nil
 }
 func clone(c Config) Config {
 	b, _ := json.Marshal(c)
@@ -195,3 +232,9 @@ func clone(c Config) Config {
 
 // BeginShutdown rejects new data requests before listeners drain.
 func (g *Gateway) BeginShutdown() { g.lifecycle.Lock(); g.healthy.Store(false); g.lifecycle.Unlock() }
+
+func (g *Gateway) StartBackground() {
+	g.wg.Add(2)
+	go g.maintenance(g.background)
+	go g.reconcileLoop(g.background)
+}

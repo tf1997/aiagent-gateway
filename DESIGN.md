@@ -1,5 +1,7 @@
 # AI Agent 网关实现方案
 
+> 2026-10-06 更新：本文的单进程约束仍适用于前台模式。安装部署新增固定入口、双 worker 和共享状态服务，详见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)及 [通用发布设计](docs/HTTP_GATEWAY_ROLLOUT_DESIGN.md)。普通业务版本升级共享资源归属，基础组件迁移另行处理。
+
 本文描述目标架构；当前实现、运行方式和差异见 [README.md](README.md)，开发约定见 [DEVELOPMENT.md](DEVELOPMENT.md)，验证记录见 [VALIDATION.md](VALIDATION.md)。
 
 下一阶段对路由协议模型及 Hermes 接入的调整见 [Hermes 适配与 A2A 1.0 开发方案](docs/HERMES_A2A_V1_DEVELOPMENT_PLAN.md)。该方案的 P1（schema 2、双接口、统一入口及独立健康检查）已落地；P2 公共资源目录已接入 A2A，协议现已替换为仅支持 1.0（依据 v1.0.1），含六个 RPC 方法与 SSE；Hermes HTTP 和真实互操作按后续阶段实施。下文保留原版架构，冲突处以新方案和实际实现记录为准。
