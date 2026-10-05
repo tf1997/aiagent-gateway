@@ -68,15 +68,45 @@ func (g *Gateway) DataHandler() http.Handler {
 			problem(w, 403, "FORBIDDEN")
 			return
 		}
-		if p[0] == "agents" && len(p) == 3 && p[2] == ".well-known/agent-card.json" && r.Method == "GET" {
-			g.card(w, r, rt)
+		if !g.healthy.Load() {
+			problem(w, 503, "GATEWAY_NOT_READY")
 			return
 		}
-		if p[0] == "a2a" && len(p) == 2 && rt.Protocol == "a2a" {
-			g.a2a(w, r, *caller, rt)
+		suffix := ""
+		if len(p) == 3 {
+			suffix = p[2]
+		}
+		switch p[0] {
+		case "a2a":
+			if len(p) != 2 {
+				problem(w, 404, "NOT_FOUND")
+				return
+			}
+			suffix = "a2a"
+		case "agents", "proxy":
+		default:
+			problem(w, 404, "NOT_FOUND")
 			return
 		}
-		if p[0] != "proxy" || rt.Protocol != "proxy" {
+		if suffix == "a2a" || strings.HasPrefix(suffix, "a2a/") || suffix == ".well-known" || strings.HasPrefix(suffix, ".well-known/") {
+			if !exposes(rt, "a2a") {
+				problem(w, 404, "NOT_FOUND")
+				return
+			}
+			if suffix == ".well-known/agent-card.json" {
+				if r.Method != "GET" {
+					problem(w, 405, "METHOD_NOT_ALLOWED")
+					return
+				}
+				g.card(w, r, rt)
+			} else if suffix == "a2a" {
+				g.a2a(w, r, *caller, rt)
+			} else {
+				problem(w, 404, "NOT_FOUND")
+			}
+			return
+		}
+		if !exposes(rt, "proxy") {
 			problem(w, 404, "NOT_FOUND")
 			return
 		}
@@ -92,6 +122,10 @@ func (g *Gateway) DataHandler() http.Handler {
 				return
 			}
 		}
+		if rt.AgentType == "hermes" {
+			g.hermes(w, r, *caller, rt, "/"+suffix)
+			return
+		}
 		sid, err := sessionID(r, rt)
 		if err != nil {
 			problem(w, 400, "INVALID_SESSION_ID")
@@ -103,7 +137,7 @@ func (g *Gateway) DataHandler() http.Handler {
 			problem(w, 400, "SESSION_ID_REQUIRED")
 			return
 		}
-		l, err := g.acquire(caller.ID, key, sid, "")
+		l, err := g.acquire(caller.ID, key, sid, "", "proxy", rt)
 		if err != nil {
 			problem(w, 503, err.Error())
 			return
@@ -120,7 +154,7 @@ func cleanHeaders(h http.Header) {
 		}
 	}
 }
-func upstreamHeaders(h http.Header, c Caller, e *Endpoint) {
+func upstreamHeaders(h http.Header, c Caller, e EndpointInterface) {
 	cleanHeaders(h)
 	h.Set("X-Gateway-Caller-ID", c.ID)
 	if e.CredentialRef != "" {
@@ -194,22 +228,25 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, c Caller, l *lea
 	defer cancel()
 	r = r.WithContext(ctx)
 	r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
-	target, _ := url.Parse(l.ep.URL)
+	target, _ := url.Parse(l.iface.URL)
 	idle := time.Duration(l.route.Timeout.StreamIdleMS) * time.Millisecond
 	dw := &deadlineWriter{w, idle}
 	defer http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	rp := &httputil.ReverseProxy{Transport: g.transport(l.route.Timeout.ResponseHeaderMS), BufferPool: &copyBuffers, Rewrite: func(pr *httputil.ProxyRequest) {
-		prefix := "/proxy/" + l.route.Key
+		prefix := "/" + strings.SplitN(strings.TrimPrefix(pr.In.URL.Path, "/"), "/", 2)[0] + "/" + l.route.Key
 		pr.Out.URL.Path = strings.TrimPrefix(pr.In.URL.Path, prefix)
 		pr.Out.URL.RawPath = ""
 		if pr.In.URL.RawPath != "" {
-			pr.Out.URL.RawPath = strings.TrimPrefix(pr.In.URL.RawPath, prefix)
+			parts := strings.SplitN(strings.TrimPrefix(pr.In.URL.EscapedPath(), "/"), "/", 3)
+			if len(parts) == 3 {
+				pr.Out.URL.RawPath = "/" + parts[2]
+			}
 		}
 		if pr.Out.URL.Path == "" {
 			pr.Out.URL.Path = "/"
 		}
 		pr.SetURL(target)
-		upstreamHeaders(pr.Out.Header, c, l.ep)
+		upstreamHeaders(pr.Out.Header, c, l.iface)
 		pr.Out.Header.Del("Idempotency-Key")
 		pr.Out.Header.Del("X-Idempotency-Key")
 	}, ModifyResponse: func(res *http.Response) error {

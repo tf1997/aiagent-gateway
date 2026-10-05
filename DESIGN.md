@@ -2,6 +2,8 @@
 
 本文描述目标架构；当前实现、运行方式和差异见 [README.md](README.md)，开发约定见 [DEVELOPMENT.md](DEVELOPMENT.md)，验证记录见 [VALIDATION.md](VALIDATION.md)。
 
+下一阶段对路由协议模型及 Hermes 接入的调整见 [Hermes 适配与 A2A 1.0 开发方案](docs/HERMES_A2A_V1_DEVELOPMENT_PLAN.md)。该方案的 P1（schema 2、双接口、统一入口及独立健康检查）已落地；P2 公共资源目录已接入 A2A，协议现已替换为仅支持 1.0（依据 v1.0.1），含六个 RPC 方法与 SSE；Hermes HTTP 和真实互操作按后续阶段实施。下文保留原版架构，冲突处以新方案和实际实现记录为准。
+
 ## 1. 目标与范围
 
 使用 Go 构建独立网关，支持 A2A 协议转发和普通 Agent 的 HTTP / SSE 代理。通过 HTTP 管理 API 管理路由及其所属实例，请求从内存读取配置和绑定，每次管理配置更新同步写入本地文件并发布到内存，会话和任务路由绑定仅保存在内存。第一期采用单进程单节点部署，无数据库或 Redis 依赖。
@@ -270,6 +272,8 @@ A2A 首次请求可能尚无 context ID，允许先选实例，在上游返回 c
 ## 7. HTTP API
 
 ### 7.1 数据面
+
+以下为首版路径。下一阶段统一为 `/agents/{appId}`，A2A 使用该基础地址下的 `/a2a` 和 `/.well-known/agent-card.json`；完整契约及旧路径兼容见 [开发方案](docs/HERMES_A2A_V1_DEVELOPMENT_PLAN.md#34-对外地址契约)，尚未实现。
 
 ```text
 :8080

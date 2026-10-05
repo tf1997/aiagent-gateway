@@ -15,33 +15,33 @@ import (
 )
 
 type Gateway struct {
-	callerCounts   map[string]*atomic.Int64
-	taskReverse    map[upstreamKey]string
-	contextReverse map[upstreamKey]string
-	opts           Options
-	current        atomic.Pointer[snapshot]
-	healthy        atomic.Bool
-	mu             sync.Mutex
-	lifecycle      sync.RWMutex
-	lock           *os.File
-	shards         [256]sessionShard
-	statesMu       sync.Mutex
-	states         map[string]*endpointState
-	schedMu        sync.Mutex
-	sched          map[string]*routeSchedule
-	bindings       atomic.Int64
-	inflight       atomic.Int64
-	requests       atomic.Uint64
-	failures       atomic.Uint64
-	a2aMu          sync.Mutex
-	tasks          map[string]*taskBinding
-	contexts       map[string]*contextBinding
-	transportMu    sync.Mutex
-	transports     map[int]*http.Transport
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
+	callerCounts map[string]*atomic.Int64
+	opts         Options
+	current      atomic.Pointer[snapshot]
+	healthy      atomic.Bool
+	mu           sync.Mutex
+	lifecycle    sync.RWMutex
+	lock         *os.File
+	legacyRaw    []byte
+	shards       [256]sessionShard
+	statesMu     sync.Mutex
+	states       map[string]*endpointState
+	schedMu      sync.Mutex
+	sched        map[string]*routeSchedule
+	bindings     atomic.Int64
+	inflight     atomic.Int64
+	requests     atomic.Uint64
+	failures     atomic.Uint64
+	resources    *resourceDirectory
+	taskLists    a2aListCache
+	sessionLists a2aListCache
+	transportMu  sync.Mutex
+	transports   map[int]*http.Transport
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 	// Persist seam allows fault injection without changing production semantics.
-	persist func(Config) (bool, error)
+	persist    func(Config) (bool, error)
+	background context.Context
 }
 
 func Open(o Options) (*Gateway, error) {
@@ -64,6 +64,15 @@ func Open(o Options) (*Gateway, error) {
 	}
 	if o.MaxTasks <= 0 {
 		o.MaxTasks = 100000
+	}
+	if o.MaxResources <= 0 {
+		o.MaxResources = 200000
+	}
+	if o.MaxResourceAliases <= 0 {
+		o.MaxResourceAliases = 200000
+	}
+	if o.MaxDataIdempotency <= 0 {
+		o.MaxDataIdempotency = 100000
 	}
 	if o.MaxInflight <= 0 {
 		o.MaxInflight = 4096
@@ -88,9 +97,7 @@ func Open(o Options) (*Gateway, error) {
 		f.Close()
 		return nil, fmt.Errorf("data directory already locked: %w", err)
 	}
-	g := &Gateway{opts: o, lock: f, states: map[string]*endpointState{}, sched: map[string]*routeSchedule{}, tasks: map[string]*taskBinding{}, contexts: map[string]*contextBinding{}, transports: map[int]*http.Transport{}}
-	g.taskReverse = map[upstreamKey]string{}
-	g.contextReverse = map[upstreamKey]string{}
+	g := &Gateway{opts: o, lock: f, states: map[string]*endpointState{}, sched: map[string]*routeSchedule{}, resources: newResourceDirectory(o), transports: map[int]*http.Transport{}}
 	g.callerCounts = map[string]*atomic.Int64{}
 	for _, c := range o.Callers {
 		g.callerCounts[c.ID] = &atomic.Int64{}
@@ -107,10 +114,14 @@ func Open(o Options) (*Gateway, error) {
 	raw, err := os.ReadFile(filepath.Join(o.DataDir, "config.json"))
 	var c Config
 	if errors.Is(err, os.ErrNotExist) && o.Initialize {
-		c = Config{Schema: 1, Revision: 1, Routes: []Route{}, Receipts: map[string]Receipt{}}
+		c = Config{Schema: 2, Revision: 1, Routes: []Route{}, Receipts: map[string]Receipt{}}
 		_, err = g.save(c)
 	} else if err == nil {
-		err = decode(raw, &c)
+		var migrated bool
+		c, migrated, err = loadConfig(raw)
+		if migrated {
+			g.legacyRaw = raw
+		}
 	}
 	if err != nil {
 		return fail(err)
@@ -125,8 +136,11 @@ func Open(o Options) (*Gateway, error) {
 	g.healthy.Store(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	g.cancel = cancel
+	g.background = ctx
 	g.wg.Add(1)
 	go g.maintenance(ctx)
+	g.wg.Add(1)
+	go g.reconcileLoop(ctx)
 	return g, nil
 }
 func (g *Gateway) save(c Config) (renamed bool, err error) {
@@ -161,7 +175,7 @@ func (g *Gateway) save(c Config) (renamed bool, err error) {
 	return true, d.Sync()
 }
 func (g *Gateway) Close() error {
-	g.healthy.Store(false)
+	g.BeginShutdown()
 	g.cancel()
 	g.wg.Wait()
 	g.transportMu.Lock()
@@ -180,4 +194,4 @@ func clone(c Config) Config {
 }
 
 // BeginShutdown rejects new data requests before listeners drain.
-func (g *Gateway) BeginShutdown() { g.healthy.Store(false) }
+func (g *Gateway) BeginShutdown() { g.lifecycle.Lock(); g.healthy.Store(false); g.lifecycle.Unlock() }

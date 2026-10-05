@@ -1,0 +1,38 @@
+name: aiagent-hermes-local
+services:
+  hermes:
+    image: nousresearch/hermes-agent:v2026.9.24@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7
+    restart: unless-stopped
+    command: ["gateway", "run"]
+    ports:
+      - "127.0.0.1:${HERMES_HTTP_PORT:-18642}:8642"
+      - "127.0.0.1:${HERMES_A2A_PORT:-19900}:9900"
+    volumes:
+      - ./.runtime/home:/opt/data
+    env_file:
+      - path: ./.runtime/hermes.env
+        format: raw
+    environment:
+      HERMES_UID: "${HERMES_LOCAL_UID:-10000}"
+      HERMES_GID: "${HERMES_LOCAL_GID:-10000}"
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "8642"
+      A2A_HOST: "0.0.0.0"
+      A2A_PORT: "9900"
+      A2A_PUBLIC_URL: "http://127.0.0.1:${HERMES_A2A_PORT:-19900}/"
+      A2A_AGENT_NAME: "gateway-test-agent"
+      TERMINAL_ENV: "local"
+      TERMINAL_CWD: "/opt/data/workspace"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8642/health', timeout=5).close()"]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 60s
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

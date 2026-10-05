@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":"fixture-1","result":{"task":{"id":"up-task","contextId":"up-context","status":{"state":"TASK_STATE_WORKING","timestamp":"2026-09-30T00:00:00Z"},"artifacts":[{"artifactId":"a-1","parts":[{"data":{"taskId":"business-task","number":9007199254740993}}]}]}}}

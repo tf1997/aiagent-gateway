@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "AI Agent Gateway Administration",
-    "version": "0.1.0",
-    "description": "Single-node administration. The file uses JSON syntax, which is valid YAML."
+    "version": "0.2.0",
+    "description": "Single-node schema 2 administration. Legacy schema 1 create/update input remains supported where unambiguous; GET returns schema 2. The file uses JSON syntax, which is valid YAML. A2A supports protocol 1.0 only (specification release v1.0.1); upgrade upstreams before changing old A2A configurations."
   },
   "servers": [
     {
@@ -295,7 +295,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Route"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Route"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LegacyRoute"
+                  }
+                ]
               }
             }
           }
@@ -564,7 +571,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RoutePatch"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/RoutePatch"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LegacyRoutePatch"
+                  }
+                ]
               }
             }
           }
@@ -1001,7 +1015,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Endpoint"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Endpoint"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LegacyEndpoint"
+                  }
+                ]
               }
             }
           }
@@ -1036,7 +1057,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Endpoint"
+                  "$ref": "#/components/schemas/EndpointDetail"
                 }
               }
             },
@@ -1286,7 +1307,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EndpointPatch"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/EndpointPatch"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LegacyEndpointPatch"
+                  }
+                ]
               }
             }
           }
@@ -1606,7 +1634,7 @@
     },
     "/admin/v1/routes/{id}/tasks": {
       "get": {
-        "summary": "List in-memory tasks",
+        "summary": "List A2A tasks from the resource directory",
         "parameters": [
           {
             "name": "id",
@@ -1632,6 +1660,31 @@
               "minimum": 1,
               "maximum": 100
             }
+          },
+          {
+            "name": "owner_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endpoint_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interface",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "proxy",
+                "a2a"
+              ]
+            }
           }
         ],
         "responses": {
@@ -1645,8 +1698,7 @@
                     "items": {
                       "type": "array",
                       "items": {
-                        "type": "object",
-                        "additionalProperties": true
+                        "$ref": "#/components/schemas/TaskResource"
                       }
                     },
                     "total": {
@@ -2038,7 +2090,7 @@
     },
     "/metrics": {
       "get": {
-        "summary": "Prometheus counters and gauges",
+        "summary": "Prometheus request, inflight, binding, resource, alias and data idempotency counters/gauges",
         "responses": {
           "200": {
             "description": "Metrics",
@@ -2052,6 +2104,390 @@
           }
         },
         "operationId": "get_metrics"
+      }
+    },
+    "/admin/v1/routes/{id}/runs": {
+      "get": {
+        "summary": "List registered Hermes run resources",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "owner_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endpoint_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interface",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "proxy",
+                "a2a"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Resource"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Resource version for detail/create/update responses"
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Referenced resource or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "ETag mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Persistence or readiness failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_admin_v1_routes_id_runs"
+      }
+    },
+    "/admin/v1/routes/{id}/resources": {
+      "get": {
+        "summary": "List resource ownership, lifecycle and references",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "owner_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endpoint_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interface",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "proxy",
+                "a2a"
+              ]
+            }
+          },
+          {
+            "name": "resource_kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hermes_session",
+                "hermes_run",
+                "hermes_response",
+                "a2a_context",
+                "a2a_task"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Resource"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Resource version for detail/create/update responses"
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Referenced resource or idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "ETag mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Persistence or readiness failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_admin_v1_routes_id_resources"
       }
     }
   },
@@ -2073,10 +2509,6 @@
           "name": {
             "type": "string"
           },
-          "url": {
-            "type": "string",
-            "format": "uri"
-          },
           "weight": {
             "type": "integer",
             "minimum": 1,
@@ -2092,21 +2524,16 @@
             ],
             "default": "active"
           },
-          "credential_ref": {
-            "type": "string",
-            "description": "Environment variable containing an upstream Bearer token"
-          },
-          "health_url": {
-            "type": "string",
-            "format": "uri"
-          },
           "version": {
             "type": "integer",
             "readOnly": true
+          },
+          "interfaces": {
+            "$ref": "#/components/schemas/Interfaces"
           }
         },
         "required": [
-          "url"
+          "interfaces"
         ],
         "additionalProperties": false
       },
@@ -2116,10 +2543,6 @@
           "name": {
             "type": "string"
           },
-          "url": {
-            "type": "string",
-            "format": "uri"
-          },
           "weight": {
             "type": "integer",
             "minimum": 1,
@@ -2135,13 +2558,8 @@
             ],
             "default": "active"
           },
-          "credential_ref": {
-            "type": "string",
-            "description": "Environment variable containing an upstream Bearer token"
-          },
-          "health_url": {
-            "type": "string",
-            "format": "uri"
+          "interfaces": {
+            "$ref": "#/components/schemas/InterfacesPatch"
           }
         },
         "additionalProperties": false
@@ -2157,13 +2575,6 @@
             "type": "string",
             "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$"
           },
-          "protocol": {
-            "type": "string",
-            "enum": [
-              "proxy",
-              "a2a"
-            ]
-          },
           "enabled": {
             "type": "boolean",
             "default": true
@@ -2189,7 +2600,7 @@
           "agent_card": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Required for A2A: name, description, version, skills, defaultInputModes, defaultOutputModes; capabilities.streaming controls streaming support"
+            "description": "Optional descriptive Card fields. When provided requires name, description, version, skills, defaultInputModes and defaultOutputModes. Omitted Card uses route key and empty skills; streaming defaults false. Public URL, security and supported protocol are generated by the gateway."
           },
           "endpoints": {
             "type": "array",
@@ -2200,11 +2611,34 @@
           "version": {
             "type": "integer",
             "readOnly": true
+          },
+          "agent_type": {
+            "type": "string",
+            "enum": [
+              "generic",
+              "hermes"
+            ],
+            "default": "generic",
+            "description": "Hermes adapter supports Sessions, Runs, Chat Completions and Responses with caller-scoped resource ownership. Unsupported paths return HTTP 501."
+          },
+          "expose": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "proxy",
+                "a2a"
+              ]
+            },
+            "description": "Enabled entries beneath /agents/{key}; does not infer upstream capabilities."
           }
         },
         "required": [
           "key",
-          "protocol"
+          "expose"
         ],
         "additionalProperties": false
       },
@@ -2214,13 +2648,6 @@
           "key": {
             "type": "string",
             "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$"
-          },
-          "protocol": {
-            "type": "string",
-            "enum": [
-              "proxy",
-              "a2a"
-            ]
           },
           "enabled": {
             "type": "boolean",
@@ -2247,7 +2674,30 @@
           "agent_card": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Required for A2A: name, description, version, skills, defaultInputModes, defaultOutputModes; capabilities.streaming controls streaming support"
+            "description": "Optional descriptive Card fields. When provided requires name, description, version, skills, defaultInputModes and defaultOutputModes. Omitted Card uses route key and empty skills; streaming defaults false. Public URL, security and supported protocol are generated by the gateway."
+          },
+          "agent_type": {
+            "type": "string",
+            "enum": [
+              "generic",
+              "hermes"
+            ],
+            "default": "generic",
+            "description": "Hermes adapter supports Sessions, Runs, Chat Completions and Responses with caller-scoped resource ownership. Unsupported paths return HTTP 501."
+          },
+          "expose": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "proxy",
+                "a2a"
+              ]
+            },
+            "description": "Enabled entries beneath /agents/{key}; does not infer upstream capabilities."
           }
         },
         "additionalProperties": false
@@ -2318,6 +2768,638 @@
         },
         "required": [
           "error"
+        ]
+      },
+      "LegacyEndpoint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 100
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "draining",
+              "disabled"
+            ],
+            "default": "active"
+          },
+          "credential_ref": {
+            "type": "string",
+            "description": "Environment variable containing an upstream Bearer token"
+          },
+          "health_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "version": {
+            "type": "integer",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false,
+        "deprecated": true,
+        "description": "Compatibility input for a generic route exposing a single interface. Never mixed with interfaces."
+      },
+      "LegacyRoute": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "key": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "proxy",
+              "a2a"
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "balance_policy": {
+            "type": "string",
+            "enum": [
+              "weighted_round_robin"
+            ]
+          },
+          "session_policy": {
+            "$ref": "#/components/schemas/SessionPolicy"
+          },
+          "timeout": {
+            "$ref": "#/components/schemas/Timeout"
+          },
+          "allowed_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agent_card": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Required for A2A: name, description, version, skills, defaultInputModes, defaultOutputModes; capabilities.streaming controls streaming support"
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegacyEndpoint"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "key",
+          "protocol"
+        ],
+        "additionalProperties": false,
+        "deprecated": true,
+        "description": "Pure schema 1 input; normalized to generic, expose and interfaces. Cannot contain agent_type, expose or interfaces. Replayed pre-migration receipts preserve their original response."
+      },
+      "EndpointInterface": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Proxy base URL or exact A2A JSON-RPC URL, including its path/query."
+          },
+          "credential_ref": {
+            "type": "string",
+            "description": "Environment variable holding this interface’s upstream Bearer token."
+          },
+          "health_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Optional authenticated GET probe; only 2xx is healthy; redirects are not followed."
+          },
+          "protocol_version": {
+            "type": "string",
+            "enum": [
+              "1.0"
+            ],
+            "description": "Required for A2A; omitted for proxy. Only A2A 1.0 JSON-RPC/SSE is supported (specification v1.0.1). Old wire protocols are not translated."
+          },
+          "tenant": {
+            "type": "string",
+            "description": "Optional upstream A2A routing tenant, injected by the gateway; public clients cannot select a tenant. Omitted for proxy. Cannot change while resources reference this endpoint."
+          }
+        }
+      },
+      "EndpointInterfacePatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Proxy base URL or exact A2A JSON-RPC URL, including its path/query."
+          },
+          "credential_ref": {
+            "type": "string",
+            "description": "Environment variable holding this interface’s upstream Bearer token.",
+            "nullable": true
+          },
+          "health_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Optional authenticated GET probe; only 2xx is healthy; redirects are not followed.",
+            "nullable": true
+          },
+          "protocol_version": {
+            "type": "string",
+            "enum": [
+              "1.0"
+            ],
+            "description": "Required for A2A; omitted for proxy. Only A2A 1.0 JSON-RPC/SSE is supported (specification v1.0.1). Old wire protocols are not translated."
+          },
+          "tenant": {
+            "type": "string",
+            "description": "Optional upstream A2A routing tenant, injected by the gateway; public clients cannot select a tenant. Omitted for proxy. Cannot change while resources reference this endpoint.",
+            "nullable": true
+          }
+        }
+      },
+      "Interfaces": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "proxy": {
+            "$ref": "#/components/schemas/EndpointInterface"
+          },
+          "a2a": {
+            "$ref": "#/components/schemas/EndpointInterface"
+          }
+        },
+        "description": "Every endpoint must contain each exposed interface. All A2A versions in one route must match."
+      },
+      "InterfacesPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "proxy": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EndpointInterfacePatch"
+              }
+            ],
+            "nullable": true
+          },
+          "a2a": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/EndpointInterfacePatch"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "description": "JSON merge patch. Interface removal/address/version changes are blocked while the endpoint is referenced; exposed interfaces cannot be removed."
+      },
+      "LegacyRoutePatch": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "proxy",
+              "a2a"
+            ]
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "balance_policy": {
+            "type": "string",
+            "enum": [
+              "weighted_round_robin"
+            ]
+          },
+          "session_policy": {
+            "$ref": "#/components/schemas/SessionPolicy"
+          },
+          "timeout": {
+            "$ref": "#/components/schemas/Timeout"
+          },
+          "allowed_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agent_card": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Required for A2A: name, description, version, skills, defaultInputModes, defaultOutputModes; capabilities.streaming controls streaming support"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "protocol"
+        ],
+        "deprecated": true,
+        "description": "Only for generic single-entry routes; protocol switches move the existing interface and are blocked by references."
+      },
+      "LegacyEndpointPatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 100
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "draining",
+              "disabled"
+            ],
+            "default": "active"
+          },
+          "credential_ref": {
+            "type": "string",
+            "description": "Environment variable containing an upstream Bearer token"
+          },
+          "health_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false,
+        "deprecated": true,
+        "anyOf": [
+          {
+            "required": [
+              "url"
+            ]
+          },
+          {
+            "required": [
+              "credential_ref"
+            ]
+          },
+          {
+            "required": [
+              "health_url"
+            ]
+          }
+        ],
+        "description": "Only for generic single-entry routes; never mixed with interfaces."
+      },
+      "EndpointDetail": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 100
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "draining",
+              "disabled"
+            ],
+            "default": "active"
+          },
+          "version": {
+            "type": "integer",
+            "readOnly": true
+          },
+          "interfaces": {
+            "$ref": "#/components/schemas/Interfaces"
+          },
+          "runtime": {
+            "type": "object",
+            "readOnly": true,
+            "properties": {
+              "http_inflight": {
+                "type": "integer"
+              },
+              "resource_references": {
+                "type": "integer"
+              },
+              "interfaces": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "healthy": {
+                      "type": "boolean"
+                    },
+                    "http_inflight": {
+                      "type": "integer"
+                    },
+                    "ready": {
+                      "type": "boolean",
+                      "description": "Interface health and, for Hermes routes, compatible capabilities observed within two minutes."
+                    },
+                    "capabilities": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "checked_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "ready": {
+                          "type": "boolean"
+                        },
+                        "features": {
+                          "type": "object",
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "resources": {
+                "type": "object",
+                "properties": {
+                  "nonterminal_tasks": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "nonterminal_runs": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "unknown_resources": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "reserved_resources": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            },
+            "description": "Approximate runtime counters and resource states. Hermes interface readiness also requires a fresh compatible capability discovery result. Background reconciliation retains unknown executions when probes fail."
+          }
+        },
+        "required": [
+          "interfaces"
+        ],
+        "additionalProperties": false
+      },
+      "Resource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "public_id": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "upstream_id": {
+            "type": "string"
+          },
+          "binding_generation": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": "string"
+          },
+          "resource_kind": {
+            "type": "string",
+            "enum": [
+              "hermes_session",
+              "hermes_run",
+              "hermes_response",
+              "a2a_context",
+              "a2a_task"
+            ]
+          },
+          "parent_kind": {
+            "type": "string",
+            "enum": [
+              "hermes_session",
+              "hermes_run",
+              "hermes_response",
+              "a2a_context",
+              "a2a_task"
+            ]
+          },
+          "interface": {
+            "type": "string",
+            "enum": [
+              "proxy",
+              "a2a"
+            ]
+          },
+          "lifecycle_state": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "live",
+              "waiting",
+              "unknown",
+              "terminal"
+            ]
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "active_refs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "child_refs": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "description": "Administrative resource ownership view. Upstream IDs and endpoint identity are not exposed in data-plane results. In-memory; restart drops resources, aliases and data idempotency reservations.",
+        "required": [
+          "public_id",
+          "owner_id",
+          "route_id",
+          "endpoint_id",
+          "upstream_id",
+          "binding_generation",
+          "resource_kind",
+          "interface",
+          "lifecycle_state",
+          "last_seen_at",
+          "active_refs",
+          "child_refs"
+        ]
+      },
+      "TaskResource": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "public_id": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "endpoint_id": {
+            "type": "string"
+          },
+          "upstream_id": {
+            "type": "string"
+          },
+          "binding_generation": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": "string"
+          },
+          "resource_kind": {
+            "type": "string",
+            "enum": [
+              "hermes_session",
+              "hermes_run",
+              "hermes_response",
+              "a2a_context",
+              "a2a_task"
+            ]
+          },
+          "parent_kind": {
+            "type": "string",
+            "enum": [
+              "hermes_session",
+              "hermes_run",
+              "hermes_response",
+              "a2a_context",
+              "a2a_task"
+            ]
+          },
+          "interface": {
+            "type": "string",
+            "enum": [
+              "proxy",
+              "a2a"
+            ]
+          },
+          "lifecycle_state": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "live",
+              "waiting",
+              "unknown",
+              "terminal"
+            ]
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "active_refs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "child_refs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gateway_task_id": {
+            "type": "string",
+            "description": "Compatibility alias for public_id."
+          },
+          "upstream_task_id": {
+            "type": "string",
+            "description": "Compatibility alias for upstream_id."
+          },
+          "terminal": {
+            "type": "boolean"
+          }
+        },
+        "description": "Administrative resource ownership view. Upstream IDs and endpoint identity are not exposed in data-plane results. In-memory; restart drops resources, aliases and data idempotency reservations.",
+        "required": [
+          "public_id",
+          "owner_id",
+          "route_id",
+          "endpoint_id",
+          "upstream_id",
+          "binding_generation",
+          "resource_kind",
+          "interface",
+          "lifecycle_state",
+          "last_seen_at",
+          "active_refs",
+          "child_refs",
+          "gateway_task_id",
+          "upstream_task_id",
+          "terminal"
         ]
       }
     }

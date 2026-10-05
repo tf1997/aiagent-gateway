@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "config_revision": 9,
+  "routes": [
+    {
+      "id": "rt_existing", "key": "test", "protocol": "proxy", "enabled": true,
+      "balance_policy": "weighted_round_robin",
+      "session_policy": {"enabled": true, "header": "X-Session-ID", "idle_ttl_seconds": 86400, "on_endpoint_unavailable": "fail", "on_expired": "reselect", "accept_a2a_context": true},
+      "timeout": {"response_header_ms": 10000, "stream_idle_ms": 120000, "max_duration_ms": 1800000},
+      "endpoints": [{"id": "ep_existing", "name": "existing", "url": "http://localhost:1234/base", "weight": 90, "state": "draining", "health_url": "http://localhost:1234/health", "version": 3}],
+      "version": 5
+    }
+  ],
+  "idempotency": {}, "idempotency_order": [],
+  "audit": [{"at": "2026-09-29T08:00:00Z", "actor": "admin", "action": "POST", "path": "/admin/v1/routes", "revision": 9}]
+}

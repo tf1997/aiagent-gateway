@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -30,6 +31,8 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/metrics" {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		fmt.Fprintf(w, "gateway_requests_total %d\ngateway_failures_total %d\ngateway_inflight %d\ngateway_sessions %d\ngateway_config_revision %d\n", g.requests.Load(), g.failures.Load(), g.inflight.Load(), g.bindings.Load(), g.current.Load().Config.Revision)
+		resources, aliases, reservations := g.resources.sizes()
+		fmt.Fprintf(w, "gateway_resources %d\ngateway_resource_aliases %d\ngateway_data_idempotency_reservations %d\n", resources, aliases, reservations)
 		return
 	}
 	if r.URL.Path == "/admin/v1/config/status" && r.Method == "GET" {
@@ -107,11 +110,18 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	reject := func(code int, msg string) { problem(w, code, msg) }
+	rejectInput := func(err error) {
+		code := 400
+		if errors.Is(err, errConfigConflict) {
+			code = 409
+		}
+		reject(code, err.Error())
+	}
 	switch {
 	case len(p) == 3 && r.Method == "POST":
 		rt := Route{Enabled: true, Session: SessionPolicy{Enabled: true, AcceptA2AContext: true}, Endpoints: []Endpoint{}}
-		if err := decode(raw, &rt); err != nil {
-			reject(400, err.Error())
+		if err := decodeRouteInput(raw, &rt); err != nil {
+			rejectInput(err)
 			return
 		}
 		if rt.ID != "" || rt.Version != 0 {
@@ -156,11 +166,20 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			old := *rt
-			if err := merge(raw, rt); err != nil {
-				reject(400, err.Error())
+			patch, err := routePatchInput(raw, rt)
+			if err != nil {
+				rejectInput(err)
 				return
 			}
-			if (old.Protocol != rt.Protocol || old.Key != rt.Key) && g.references(rt.ID, "") > 0 {
+			if err := merge(patch, rt); err != nil {
+				rejectInput(err)
+				return
+			}
+			changed := old.Key != rt.Key || old.AgentType != rt.AgentType
+			for _, entry := range old.Expose {
+				changed = changed || !exposes(rt, entry)
+			}
+			if changed && g.references(rt.ID, "") > 0 {
 				reject(409, "ROUTE_IN_USE")
 				return
 			}
@@ -169,8 +188,13 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 		}
 	case len(p) == 5 && p[4] == "endpoints" && r.Method == "POST":
 		var ep Endpoint
-		if err := decode(raw, &ep); err != nil {
-			reject(400, err.Error())
+		input, err := endpointInput(raw, &c.Routes[ri], false)
+		if err != nil {
+			rejectInput(err)
+			return
+		}
+		if err := decode(input, &ep); err != nil {
+			rejectInput(err)
 			return
 		}
 		if err := initEndpoint(&ep); err != nil {
@@ -220,12 +244,22 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			old := ep.URL
-			if err := merge(raw, ep); err != nil {
-				reject(400, err.Error())
+			old := ep.Interfaces
+			patch, err := endpointInput(raw, rt, true)
+			if err != nil {
+				rejectInput(err)
 				return
 			}
-			if old != ep.URL && g.references(rt.ID, ep.ID) > 0 {
+			if err := merge(patch, ep); err != nil {
+				rejectInput(err)
+				return
+			}
+			changed := false
+			for entry, iface := range old {
+				next, ok := ep.Interfaces[entry]
+				changed = changed || !ok || next.URL != iface.URL || next.ProtocolVersion != iface.ProtocolVersion || next.Tenant != iface.Tenant
+			}
+			if changed && g.references(rt.ID, ep.ID) > 0 {
 				reject(409, "ENDPOINT_IN_USE")
 				return
 			}
@@ -255,6 +289,10 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 			c.ReceiptOrder = c.ReceiptOrder[1:]
 		}
 	}
+	if err := g.backupLegacy(); err != nil {
+		reject(503, "MIGRATION_BACKUP_FAILED")
+		return
+	}
 	renamed, err := g.persist(c)
 	if err != nil {
 		if renamed {
@@ -263,7 +301,9 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 		reject(503, "PERSISTENCE_FAILED")
 		return
 	}
+	g.resetHealth(g.current.Load(), &c)
 	g.current.Store(build(c))
+	g.legacyRaw = nil
 	w.Header().Set("ETag", tag(version))
 	w.Header().Set("X-Config-Revision", strconv.FormatUint(c.Revision, 10))
 	writeJSON(w, status, result)
@@ -388,24 +428,84 @@ func (g *Gateway) readAdmin(w http.ResponseWriter, r *http.Request, p []string) 
 			return
 		}
 		w.Header().Set("ETag", tag(e.Version))
-		writeJSON(w, 200, e)
+		writeJSON(w, 200, g.endpointDetail(rt, e))
 		return
 	}
 	if len(p) == 5 && p[4] == "sessions" {
 		writeJSON(w, 200, page(g.sessions(rt.ID, r.URL.Query().Get("endpoint_id")), r))
 		return
 	}
-	if len(p) == 5 && p[4] == "tasks" {
-		g.a2aMu.Lock()
-		out := []taskBinding{}
-		for _, t := range g.tasks {
-			if t.RouteID == rt.ID {
-				out = append(out, *t)
-			}
+	if len(p) == 5 && (p[4] == "tasks" || p[4] == "runs" || p[4] == "resources") {
+		kind := resourceKind(r.URL.Query().Get("resource_kind"))
+		if p[4] == "tasks" {
+			kind = a2aTask
 		}
-		g.a2aMu.Unlock()
-		writeJSON(w, 200, page(out, r))
+		if p[4] == "runs" {
+			kind = hermesRun
+		}
+		if kind != "" && resourceInterface(kind) == "" {
+			problem(w, 400, "INVALID_RESOURCE_KIND")
+			return
+		}
+		resources := g.resources.list(r.URL.Query().Get("owner_id"), rt.ID, kind, r.URL.Query().Get("endpoint_id"))
+		entry := r.URL.Query().Get("interface")
+		if entry != "" && entry != "proxy" && entry != "a2a" {
+			problem(w, 400, "INVALID_INTERFACE")
+			return
+		}
+		out := []resource{}
+		for _, res := range resources {
+			if entry != "" && res.Interface != entry {
+				continue
+			}
+			out = append(out, res)
+		}
+		if p[4] == "tasks" {
+			tasks := []taskResourceView{}
+			for _, res := range out {
+				tasks = append(tasks, taskResourceView{res, res.ID, res.Upstream, res.State == resourceTerminal})
+			}
+			writeJSON(w, 200, page(tasks, r))
+		} else {
+			writeJSON(w, 200, page(out, r))
+		}
 		return
 	}
 	problem(w, 404, "NOT_FOUND")
+}
+
+// Preserve the existing administrative task field names during migration.
+type taskResourceView struct {
+	resource
+	GatewayTaskID  string `json:"gateway_task_id"`
+	UpstreamTaskID string `json:"upstream_task_id"`
+	Terminal       bool   `json:"terminal"`
+}
+
+func (g *Gateway) endpointDetail(rt *Route, ep *Endpoint) any {
+	st := g.state(rt.ID, ep.ID)
+	interfaces := map[string]any{}
+	for entry := range ep.Interfaces {
+		is := st.iface(entry)
+		interfaces[entry] = map[string]any{"healthy": is.healthy.Load(), "http_inflight": is.active.Load(), "ready": g.interfaceReady(rt, ep, entry), "capabilities": is.discovery.Load()}
+	}
+	counts := map[string]int{"nonterminal_tasks": 0, "nonterminal_runs": 0, "unknown_resources": 0, "reserved_resources": 0}
+	for _, res := range g.resources.list("", rt.ID, "", ep.ID) {
+		if res.Kind == a2aTask && res.State != resourceTerminal {
+			counts["nonterminal_tasks"]++
+		}
+		if res.Kind == hermesRun && res.State != resourceTerminal {
+			counts["nonterminal_runs"]++
+		}
+		if res.State == resourceUnknown {
+			counts["unknown_resources"]++
+		}
+		if res.State == resourceReserved {
+			counts["reserved_resources"]++
+		}
+	}
+	return struct {
+		*Endpoint
+		Runtime map[string]any `json:"runtime"`
+	}{ep, map[string]any{"http_inflight": st.active.Load(), "resource_references": g.references(rt.ID, ep.ID), "interfaces": interfaces, "resources": counts}}
 }

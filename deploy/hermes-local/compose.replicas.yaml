@@ -1,0 +1,15 @@
+services:
+  hermes2:
+    extends:
+      file: compose.yaml
+      service: hermes
+    ports: !override
+      - "127.0.0.1:18643:8642"
+      - "127.0.0.1:19901:9900"
+    volumes: !override
+      - ./.runtime/home-2:/opt/data
+    env_file: !override
+      - path: ./.runtime/hermes-2.env
+        format: raw
+    environment:
+      A2A_PUBLIC_URL: "http://127.0.0.1:19901/"

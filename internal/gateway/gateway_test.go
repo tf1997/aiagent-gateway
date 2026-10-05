@@ -141,7 +141,7 @@ func TestStickyConcurrentDrain(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			l, err := g.acquire("alice", "test", "same", "")
+			l, err := g.acquire("alice", "test", "same", "", "proxy", nil)
 			if err != nil {
 				t.Error(err)
 				return
@@ -164,12 +164,12 @@ func TestStickyConcurrentDrain(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
-	l, err := g.acquire("alice", "test", "same", "")
+	l, err := g.acquire("alice", "test", "same", "", "proxy", nil)
 	if err != nil || l.ep.ID != chosen {
 		t.Fatal("drain broke affinity", err)
 	}
 	l.release()
-	other, err := g.acquire("alice", "test", "new", "")
+	other, err := g.acquire("alice", "test", "new", "", "proxy", nil)
 	if err != nil || other.ep.ID == chosen {
 		t.Fatal("new session sent to draining")
 	}
@@ -177,8 +177,8 @@ func TestStickyConcurrentDrain(t *testing.T) {
 	if admin(t, g, "DELETE", path, "", `"2"`, "").Code != 409 {
 		t.Fatal("deleted bound endpoint")
 	}
-	g.state(rt.ID, chosen).healthy.Store(false)
-	if l, err := g.acquire("alice", "test", "same", ""); err == nil {
+	g.state(rt.ID, chosen).proxy.healthy.Store(false)
+	if l, err := g.acquire("alice", "test", "same", "", "proxy", nil); err == nil {
 		l.release()
 		t.Fatal("failed endpoint silently reselected")
 	}
@@ -252,6 +252,7 @@ func TestProxyStatusAndPath(t *testing.T) {
 func rpcCall(t *testing.T, g *Gateway, caller, body, sid string) map[string]any {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/a2a/test", strings.NewReader(body))
+	r.Header.Set("A2A-Version", "1.0")
 	r.Header.Set("Authorization", "Bearer "+caller+"-secret")
 	if sid != "" {
 		r.Header.Set("X-Session-ID", sid)
@@ -269,25 +270,26 @@ func TestA2ATaskMappingIsolation(t *testing.T) {
 	up := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var q rpc
 		json.NewDecoder(r.Body).Decode(&q)
-		if q.Method == "tasks/get" {
+		if q.Method == "GetTask" {
 			queried, _ = q.Params["id"].(string)
 		}
-		writeJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": q.ID, "result": map[string]any{"kind": "task", "id": "up-task", "contextId": "up-context", "status": map[string]any{"state": "working"}, "artifacts": []any{map[string]any{"parts": []any{map[string]any{"kind": "data", "data": map[string]any{"taskId": "user-data"}}}}}}})
+		writeTestTask(w, q, map[string]any{"id": "up-task", "contextId": "up-context", "status": map[string]any{"state": "TASK_STATE_INPUT_REQUIRED"}, "artifacts": []any{map[string]any{"artifactId": "a", "parts": []any{map[string]any{"data": map[string]any{"taskId": "user-data"}}}}}})
 	}))
 	defer up.Close()
 	g := setup(t)
 	create(t, g, "a2a", up.URL)
-	v := rpcCall(t, g, "alice", `{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"message":{"kind":"message","messageId":"m","role":"user","parts":[{"kind":"text","text":"hello"}]}}}`, "s")
+	v := rpcCall(t, g, "alice", `{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{"messageId":"m","role":"ROLE_USER","parts":[{"text":"hello"}]}}}`, "s")
 	result, ok := v["result"].(map[string]any)
 	if !ok {
 		t.Fatal(v)
 	}
+	result = result["task"].(map[string]any)
 	id := result["id"].(string)
 	ctx := result["contextId"].(string)
 	if id == "up-task" || ctx == "up-context" {
 		t.Fatal("raw IDs exposed")
 	}
-	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"id":%q}}`, id)
+	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":2,"method":"GetTask","params":{"id":%q}}`, id)
 	v = rpcCall(t, g, "alice", body, "")
 	if v["error"] != nil || queried != "up-task" {
 		t.Fatal(v, queried)
@@ -308,12 +310,13 @@ func TestA2ATaskMappingIsolation(t *testing.T) {
 func TestA2AStream(t *testing.T) {
 	up := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"kind\":\"status-update\",\"taskId\":\"up\",\"contextId\":\"ctx\",\"status\":{\"state\":\"completed\"},\"final\":true}}\n\n")
+		fmt.Fprint(w, "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"task\":{\"id\":\"up\",\"contextId\":\"ctx\",\"status\":{\"state\":\"TASK_STATE_WORKING\"}}}}\n\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"statusUpdate\":{\"taskId\":\"up\",\"contextId\":\"ctx\",\"status\":{\"state\":\"TASK_STATE_COMPLETED\"}}}}\n\n")
 	}))
 	defer up.Close()
 	g := setup(t)
 	create(t, g, "a2a", up.URL)
-	r := httptest.NewRequest("POST", "/a2a/test", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"message/stream","params":{"message":{"kind":"message","messageId":"m","role":"user","parts":[]}}}`))
+	r := httptest.NewRequest("POST", "/a2a/test", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"SendStreamingMessage","params":{"message":{"messageId":"m","role":"ROLE_USER","parts":[{"text":"hello"}]}}}`))
+	r.Header.Set("A2A-Version", "1.0")
 	r.Header.Set("Authorization", "Bearer alice-secret")
 	w := httptest.NewRecorder()
 	g.DataHandler().ServeHTTP(w, r)
@@ -325,21 +328,21 @@ func TestSessionCapacityAndTTL(t *testing.T) {
 	g := setup(t)
 	g.opts.MaxSessions = 1
 	create(t, g, "proxy", "http://localhost:1")
-	l, err := g.acquire("alice", "test", "a", "")
+	l, err := g.acquire("alice", "test", "a", "", "proxy", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	l.release()
-	if l, err := g.acquire("alice", "test", "b", ""); err == nil {
+	if l, err := g.acquire("alice", "test", "b", "", "proxy", nil); err == nil {
 		l.release()
 		t.Fatal("capacity ignored")
 	}
-	key := sessionKey{"alice", g.current.Load().Routes["test"].ID, "a"}
+	key := sessionKey{"alice", g.current.Load().Routes["test"].ID, "a", "proxy"}
 	sh := g.shard(key)
 	sh.mu.Lock()
 	sh.items[key].Seen = time.Now().Add(-48 * time.Hour)
 	sh.mu.Unlock()
-	l, err = g.acquire("alice", "test", "a", "")
+	l, err = g.acquire("alice", "test", "a", "", "proxy", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,13 +377,13 @@ func BenchmarkBoundSession(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer g.Close()
-	r := Route{ID: "rt", Key: "test", Protocol: "proxy", Enabled: true, Endpoints: []Endpoint{{ID: "ep", URL: "http://localhost:1", State: "active", Weight: 100}}}
+	r := Route{ID: "rt", Key: "test", AgentType: "generic", Expose: []string{"proxy"}, Enabled: true, Endpoints: []Endpoint{{ID: "ep", Interfaces: map[string]EndpointInterface{"proxy": {URL: "http://localhost:1"}}, State: "active", Weight: 100}}}
 	defaults(&r)
-	g.current.Store(build(Config{Schema: 1, Routes: []Route{r}}))
+	g.current.Store(build(Config{Schema: 2, Routes: []Route{r}}))
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			l, err := g.acquire("alice", "test", "session", "")
+			l, err := g.acquire("alice", "test", "session", "", "proxy", nil)
 			if err != nil {
 				b.Error(err)
 				return
@@ -394,15 +397,15 @@ func TestCallerIsolationAndLimits(t *testing.T) {
 	g := setup(t)
 	g.opts.MaxPerCaller = 1
 	create(t, g, "proxy", "http://localhost:1", "http://localhost:2")
-	a, err := g.acquire("alice", "test", "same", "")
+	a, err := g.acquire("alice", "test", "same", "", "proxy", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if extra, err := g.acquire("alice", "test", "other", ""); err == nil {
+	if extra, err := g.acquire("alice", "test", "other", "", "proxy", nil); err == nil {
 		extra.release()
 		t.Fatal("caller concurrency limit ignored")
 	}
-	b, err := g.acquire("bob", "test", "same", "")
+	b, err := g.acquire("bob", "test", "same", "", "proxy", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,20 +438,18 @@ func TestRestartDropsTasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	create(t, g, "a2a", "http://localhost:1")
-	g.a2aMu.Lock()
-	g.mapResult(map[string]any{"kind": "task", "id": "up", "contextId": "ctx", "status": map[string]any{"state": "working"}}, "alice", g.current.Load().Routes["test"].ID, "ep", "s")
+	g.mapResult(map[string]any{"id": "up", "contextId": "ctx", "status": map[string]any{"state": "TASK_STATE_WORKING"}}, "alice", g.current.Load().Routes["test"].ID, "ep", "s")
 	var id string
-	for k := range g.tasks {
-		id = k
+	for _, res := range g.resources.list("alice", g.current.Load().Routes["test"].ID, a2aTask, "") {
+		id = res.ID
 	}
-	g.a2aMu.Unlock()
 	g.Close()
 	g, err = Open(testOptions(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer g.Close()
-	v := rpcCall(t, g, "alice", fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tasks/get","params":{"id":%q}}`, id), "")
+	v := rpcCall(t, g, "alice", fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"GetTask","params":{"id":%q}}`, id), "")
 	if v["error"] == nil {
 		t.Fatal("task survived restart")
 	}

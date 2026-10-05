@@ -82,7 +82,7 @@ func run() int {
 		slog.Error("GATEWAY_CALLERS must be a JSON array")
 		return 1
 	}
-	g, err := gateway.Open(gateway.Options{DataDir: env("GATEWAY_DATA_DIR", "./data"), AdminToken: os.Getenv("GATEWAY_ADMIN_TOKEN"), Callers: callers, Initialize: *initOnly || os.Getenv("GATEWAY_INIT") == "true", PublicURL: os.Getenv("GATEWAY_PUBLIC_URL"), MaxInflight: positiveEnv("GATEWAY_MAX_INFLIGHT", 4096), MaxPerCaller: positiveEnv("GATEWAY_MAX_PER_CALLER", 1024), MaxPerEndpoint: positiveEnv("GATEWAY_MAX_PER_ENDPOINT", 256), MaxSessions: positiveEnv("GATEWAY_MAX_SESSIONS", 100000), MaxTasks: positiveEnv("GATEWAY_MAX_TASKS", 100000)})
+	g, err := gateway.Open(gateway.Options{DataDir: env("GATEWAY_DATA_DIR", "./data"), AdminToken: os.Getenv("GATEWAY_ADMIN_TOKEN"), Callers: callers, Initialize: *initOnly || os.Getenv("GATEWAY_INIT") == "true", PublicURL: os.Getenv("GATEWAY_PUBLIC_URL"), MaxInflight: positiveEnv("GATEWAY_MAX_INFLIGHT", 4096), MaxPerCaller: positiveEnv("GATEWAY_MAX_PER_CALLER", 1024), MaxPerEndpoint: positiveEnv("GATEWAY_MAX_PER_ENDPOINT", 256), MaxSessions: positiveEnv("GATEWAY_MAX_SESSIONS", 100000), MaxTasks: positiveEnv("GATEWAY_MAX_TASKS", 100000), MaxResources: positiveEnv("GATEWAY_MAX_RESOURCES", 200000), MaxResourceAliases: positiveEnv("GATEWAY_MAX_RESOURCE_ALIASES", 200000), MaxDataIdempotency: positiveEnv("GATEWAY_MAX_DATA_IDEMPOTENCY", 100000)})
 	if err != nil {
 		slog.Error("startup failed", "error", err)
 		return 1

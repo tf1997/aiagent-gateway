@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net/http"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,7 +16,7 @@ type routeSchedule struct {
 	weights map[string]int64
 }
 
-type sessionKey struct{ Owner, Route, ID string }
+type sessionKey struct{ Owner, Route, ID, Interface string }
 type binding struct {
 	Endpoint string
 	Seen     time.Time
@@ -26,14 +27,30 @@ type sessionShard struct {
 	mu    sync.Mutex
 	items map[sessionKey]*binding
 }
-type endpointState struct {
-	healthy atomic.Bool
-	active  atomic.Int64
+type interfaceState struct {
+	healthy     atomic.Bool
+	active      atomic.Int64
+	discovery   atomic.Pointer[capabilitySnapshot]
+	discoveryMu sync.Mutex
 }
+type endpointState struct {
+	active atomic.Int64
+	proxy  interfaceState
+	a2a    interfaceState
+}
+
+func (s *endpointState) iface(entry string) *interfaceState {
+	if entry == "a2a" {
+		return &s.a2a
+	}
+	return &s.proxy
+}
+
 type lease struct {
 	route   *Route
 	ep      *Endpoint
 	state   *endpointState
+	iface   EndpointInterface
 	release func()
 }
 
@@ -53,20 +70,29 @@ func (g *Gateway) state(route, id string) *endpointState {
 	s := g.states[k]
 	if s == nil {
 		s = &endpointState{}
-		s.healthy.Store(true)
+		s.proxy.healthy.Store(true)
+		s.a2a.healthy.Store(true)
 		g.states[k] = s
 	}
 	return s
 }
-func (g *Gateway) acquire(owner, key, sid, forced string) (*lease, error) {
+func (g *Gateway) acquire(owner, key, sid, forced, entry string, expected *Route) (*lease, error) {
 	g.lifecycle.RLock()
 	defer g.lifecycle.RUnlock()
+	return g.acquireLocked(owner, key, sid, forced, entry, expected)
+}
+
+// Caller holds lifecycle.RLock. Never call with the resource directory locked.
+func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected *Route) (*lease, error) {
 	if !g.healthy.Load() {
 		return nil, fmt.Errorf("GATEWAY_NOT_READY")
 	}
 	rt := g.current.Load().Routes[key]
-	if rt == nil || !rt.Enabled {
+	if rt == nil || !rt.Enabled || !exposes(rt, entry) {
 		return nil, fmt.Errorf("ROUTE_UNAVAILABLE")
+	}
+	if expected != nil && rt != expected {
+		return nil, fmt.Errorf("ROUTE_CONFIGURATION_CHANGED")
 	}
 	if g.inflight.Add(1) > int64(g.opts.MaxInflight) {
 		g.inflight.Add(-1)
@@ -91,13 +117,13 @@ func (g *Gateway) acquire(owner, key, sid, forced string) (*lease, error) {
 	}()
 	var sh *sessionShard
 	var b *binding
-	k := sessionKey{owner, rt.ID, sid}
+	k := sessionKey{owner, rt.ID, sid, entry}
 	if sid != "" {
 		sh = g.shard(k)
 		sh.mu.Lock()
 		defer sh.mu.Unlock()
 		b = sh.items[k]
-		if b != nil && b.Active == 0 && time.Since(b.Seen) > b.TTL && !g.hasTask(owner, rt.ID, sid) {
+		if b != nil && b.Active == 0 && time.Since(b.Seen) > b.TTL && (entry != "a2a" || !g.hasTask(owner, rt.ID, sid)) {
 			delete(sh.items, k)
 			g.bindings.Add(-1)
 			b = nil
@@ -112,11 +138,11 @@ func (g *Gateway) acquire(owner, key, sid, forced string) (*lease, error) {
 	var ep *Endpoint
 	if forced != "" {
 		ep = endpoint(rt, forced)
-		if ep == nil || ep.State == "disabled" || !g.state(rt.ID, ep.ID).healthy.Load() {
+		if ep == nil || ep.State == "disabled" || !g.interfaceReady(rt, ep, entry) {
 			return nil, fmt.Errorf("SESSION_ENDPOINT_UNAVAILABLE")
 		}
 	} else {
-		ep = g.selectEndpoint(rt)
+		ep = g.selectEndpoint(rt, entry)
 		if ep == nil {
 			return nil, fmt.Errorf("NO_HEALTHY_ENDPOINT")
 		}
@@ -143,10 +169,13 @@ func (g *Gateway) acquire(owner, key, sid, forced string) (*lease, error) {
 		b.Active++
 		b.Seen = time.Now()
 	}
+	ist := st.iface(entry)
+	ist.active.Add(1)
 	success = true
 	var once sync.Once
-	return &lease{route: rt, ep: ep, state: st, release: func() {
+	return &lease{route: rt, ep: ep, state: st, iface: ep.Interfaces[entry], release: func() {
 		once.Do(func() {
+			ist.active.Add(-1)
 			st.active.Add(-1)
 			callerCount.Add(-1)
 			g.inflight.Add(-1)
@@ -159,12 +188,13 @@ func (g *Gateway) acquire(owner, key, sid, forced string) (*lease, error) {
 		})
 	}}, nil
 }
-func (g *Gateway) selectEndpoint(r *Route) *Endpoint {
+func (g *Gateway) selectEndpoint(r *Route, entry string) *Endpoint {
 	g.schedMu.Lock()
-	schedule := g.sched[r.ID]
+	scheduleKey := r.ID + "/" + entry
+	schedule := g.sched[scheduleKey]
 	if schedule == nil {
 		schedule = &routeSchedule{weights: map[string]int64{}}
-		g.sched[r.ID] = schedule
+		g.sched[scheduleKey] = schedule
 	}
 	g.schedMu.Unlock()
 	schedule.mu.Lock()
@@ -179,7 +209,7 @@ func (g *Gateway) selectEndpoint(r *Route) *Endpoint {
 	var total int64
 	for i := range r.Endpoints {
 		e := &r.Endpoints[i]
-		if e.State != "active" || !g.state(r.ID, e.ID).healthy.Load() {
+		if e.State != "active" || !g.interfaceReady(r, e, entry) {
 			continue
 		}
 		m[e.ID] += int64(e.Weight)
@@ -205,18 +235,7 @@ func (g *Gateway) references(route, id string) int {
 		}
 		sh.mu.Unlock()
 	}
-	g.a2aMu.Lock()
-	for _, t := range g.tasks {
-		if t.RouteID == route && (id == "" || t.EndpointID == id) {
-			n++
-		}
-	}
-	for _, c := range g.contexts {
-		if c.RouteID == route && (id == "" || c.EndpointID == id) {
-			n++
-		}
-	}
-	g.a2aMu.Unlock()
+	n += g.resources.references(route, id)
 	g.statesMu.Lock()
 	for k, st := range g.states {
 		if (id != "" && k == route+"/"+id) || (id == "" && len(k) > len(route) && k[:len(route)+1] == route+"/") {
@@ -227,14 +246,7 @@ func (g *Gateway) references(route, id string) int {
 	return n
 }
 func (g *Gateway) hasTask(owner, route, sid string) bool {
-	g.a2aMu.Lock()
-	defer g.a2aMu.Unlock()
-	for _, t := range g.tasks {
-		if t.Owner == owner && t.RouteID == route && t.SessionID == sid && !t.Terminal {
-			return true
-		}
-	}
-	return false
+	return g.resources.hasTask(owner, route, sid)
 }
 func (g *Gateway) sessions(route, ep string) []map[string]any {
 	out := []map[string]any{}
@@ -243,7 +255,7 @@ func (g *Gateway) sessions(route, ep string) []map[string]any {
 		sh.mu.Lock()
 		for k, b := range sh.items {
 			if k.Route == route && (ep == "" || ep == b.Endpoint) {
-				out = append(out, map[string]any{"owner_id": k.Owner, "session_id": k.ID, "endpoint_id": b.Endpoint, "last_seen_at": b.Seen, "active": b.Active})
+				out = append(out, map[string]any{"owner_id": k.Owner, "session_id": k.ID, "endpoint_id": b.Endpoint, "last_seen_at": b.Seen, "active": b.Active, "interface": k.Interface})
 			}
 		}
 		sh.mu.Unlock()
@@ -266,14 +278,14 @@ func (g *Gateway) maintenance(ctx context.Context) {
 				shardIndex++
 				sh.mu.Lock()
 				for k, b := range sh.items {
-					if b.Active == 0 && time.Since(b.Seen) > b.TTL && !g.hasTask(k.Owner, k.Route, k.ID) {
+					if b.Active == 0 && time.Since(b.Seen) > b.TTL && (k.Interface != "a2a" || !g.hasTask(k.Owner, k.Route, k.ID)) {
 						delete(sh.items, k)
 						g.bindings.Add(-1)
 					}
 				}
 				sh.mu.Unlock()
 			}
-			g.cleanupA2A()
+			g.cleanupResources()
 			if time.Now().After(nextHealth) {
 				g.retireCaches()
 				g.checkHealth(ctx)
@@ -285,31 +297,61 @@ func (g *Gateway) maintenance(ctx context.Context) {
 func (g *Gateway) checkHealth(ctx context.Context) {
 	client := &http.Client{Transport: g.transport(3000), Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	for _, r := range g.current.Load().Routes {
+		if r.AgentType == "hermes" {
+			g.discoverHermes(ctx, r)
+			g.discoverA2A(ctx, r)
+		}
 		for _, ep := range r.Endpoints {
-			if ep.HealthURL == "" || ep.State == "disabled" {
-				continue
-			}
-			req, err := http.NewRequestWithContext(ctx, "GET", ep.HealthURL, nil)
-			if err != nil {
-				continue
-			}
-			res, err := client.Do(req)
-			ok := err == nil
-			if res != nil {
-				ok = res.StatusCode >= 200 && res.StatusCode < 400
-				res.Body.Close()
-			}
-			g.lifecycle.RLock()
-			latest := g.current.Load().Routes[r.Key]
-			if latest != nil {
-				currentEP := endpoint(latest, ep.ID)
-				if currentEP != nil && currentEP.URL == ep.URL && currentEP.HealthURL == ep.HealthURL {
-					g.state(r.ID, ep.ID).healthy.Store(ok)
+			for entry, iface := range ep.Interfaces {
+				if iface.HealthURL == "" || ep.State == "disabled" || !exposes(r, entry) {
+					continue
+				}
+				req, err := http.NewRequestWithContext(ctx, "GET", iface.HealthURL, nil)
+				if err != nil {
+					continue
+				}
+				if iface.CredentialRef != "" {
+					req.Header.Set("Authorization", "Bearer "+os.Getenv(iface.CredentialRef))
+				}
+				res, err := client.Do(req)
+				ok := err == nil
+				if res != nil {
+					ok = res.StatusCode >= 200 && res.StatusCode < 300
+					res.Body.Close()
+				}
+				g.lifecycle.RLock()
+				latest := g.current.Load().Routes[r.Key]
+				if latest != nil && latest.ID == r.ID {
+					currentEP := endpoint(latest, ep.ID)
+					if currentEP != nil && currentEP.Interfaces[entry] == iface {
+						g.state(r.ID, ep.ID).iface(entry).healthy.Store(ok)
+					}
+				}
+				g.lifecycle.RUnlock()
+				if ctx.Err() != nil {
+					return
 				}
 			}
-			g.lifecycle.RUnlock()
-			if ctx.Err() != nil {
-				return
+		}
+	}
+}
+
+// Called under the lifecycle write lock before publishing a new configuration.
+func (g *Gateway) resetHealth(old *snapshot, next *Config) {
+	for _, rt := range next.Routes {
+		previous := old.Routes[rt.Key]
+		if previous == nil || previous.ID != rt.ID {
+			continue
+		}
+		for _, ep := range rt.Endpoints {
+			before := endpoint(previous, ep.ID)
+			if before == nil {
+				continue
+			}
+			for entry, iface := range ep.Interfaces {
+				if before.Interfaces[entry] != iface {
+					g.state(rt.ID, ep.ID).iface(entry).healthy.Store(true)
+				}
 			}
 		}
 	}
@@ -324,7 +366,9 @@ func (g *Gateway) retireCaches() {
 	routes := map[string]bool{}
 	timeouts := map[int]bool{3000: true}
 	for _, r := range s.Routes {
-		routes[r.ID] = true
+		for _, entry := range r.Expose {
+			routes[r.ID+"/"+entry] = true
+		}
 		timeouts[r.Timeout.ResponseHeaderMS] = true
 		for _, e := range r.Endpoints {
 			live[r.ID+"/"+e.ID] = true
@@ -352,4 +396,72 @@ func (g *Gateway) retireCaches() {
 		}
 	}
 	g.transportMu.Unlock()
+}
+
+// Resource creation reserves the instance before any upstream request. Replays
+// reuse the reservation even if that instance is now unhealthy or draining;
+// acquireResource decides availability without selecting a replacement.
+func (g *Gateway) reserveResource(owner string, rt *Route, spec resourceCreation) (creationReservation, error) {
+	g.lifecycle.RLock()
+	defer g.lifecycle.RUnlock()
+	if !g.healthy.Load() || g.current.Load().Routes[rt.Key] != rt || !rt.Enabled || !exposes(rt, resourceInterface(spec.Kind)) {
+		return creationReservation{}, fmt.Errorf("ROUTE_UNAVAILABLE")
+	}
+	permitted := false
+	for _, c := range g.opts.Callers {
+		if c.ID == owner && allowed(c, rt.Key) {
+			permitted = true
+			break
+		}
+	}
+	if !permitted {
+		return creationReservation{}, errResourceNotFound
+	}
+	return g.resources.reserve(owner, rt.ID, spec, func(parent *resource) (string, error) {
+		var ep *Endpoint
+		if parent != nil {
+			if parent.State == resourceReserved || parent.State == resourceUnknown {
+				return "", errResourceInUse
+			}
+			ep = endpoint(rt, parent.EndpointID)
+		} else {
+			ep = g.selectEndpoint(rt, resourceInterface(spec.Kind))
+		}
+		newSession := parent == nil || spec.Kind == hermesSession || spec.Kind == a2aContext
+		if ep == nil || ep.State == "disabled" || (ep.State == "draining" && newSession) || !g.interfaceReady(rt, ep, resourceInterface(spec.Kind)) {
+			return "", fmt.Errorf("NO_HEALTHY_ENDPOINT")
+		}
+		return ep.ID, nil
+	})
+}
+func (g *Gateway) acquireResource(owner string, rt *Route, kind resourceKind, id string) (*lease, resource, error) {
+	g.lifecycle.RLock()
+	defer g.lifecycle.RUnlock()
+	permitted := false
+	for _, c := range g.opts.Callers {
+		if c.ID == owner && allowed(c, rt.Key) {
+			permitted = true
+			break
+		}
+	}
+	if !permitted {
+		return nil, resource{}, errResourceNotFound
+	}
+	res, unpin, err := g.resources.pin(resourceKey{owner, rt.ID, kind, id})
+	if err != nil {
+		return nil, resource{}, err
+	}
+	l, err := g.acquireLocked(owner, rt.Key, "", res.EndpointID, res.Interface, rt)
+	if err != nil {
+		unpin()
+		return nil, resource{}, err
+	}
+	release := l.release
+	l.release = func() { release(); unpin() }
+	return l, res, nil
+}
+func (g *Gateway) cleanupResources() {
+	g.lifecycle.RLock()
+	defer g.lifecycle.RUnlock()
+	g.resources.cleanup(func(r resource) bool { return g.state(r.RouteID, r.EndpointID).active.Load() > 0 })
 }

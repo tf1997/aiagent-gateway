@@ -30,20 +30,26 @@ type SessionPolicy struct {
 	AcceptA2AContext bool   `json:"accept_a2a_context"`
 }
 type Endpoint struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	URL           string `json:"url"`
-	Weight        int    `json:"weight"`
-	State         string `json:"state"`
-	CredentialRef string `json:"credential_ref,omitempty"`
-	HealthURL     string `json:"health_url,omitempty"`
-	Version       uint64 `json:"version"`
+	ID         string                       `json:"id"`
+	Name       string                       `json:"name"`
+	Weight     int                          `json:"weight"`
+	State      string                       `json:"state"`
+	Interfaces map[string]EndpointInterface `json:"interfaces"`
+	Version    uint64                       `json:"version"`
+}
+type EndpointInterface struct {
+	URL             string `json:"url"`
+	CredentialRef   string `json:"credential_ref,omitempty"`
+	HealthURL       string `json:"health_url,omitempty"`
+	ProtocolVersion string `json:"protocol_version,omitempty"`
+	Tenant          string `json:"tenant,omitempty"`
 }
 type Route struct {
 	endpointIndex  map[string]*Endpoint
 	ID             string          `json:"id"`
 	Key            string          `json:"key"`
-	Protocol       string          `json:"protocol"`
+	AgentType      string          `json:"agent_type"`
+	Expose         []string        `json:"expose"`
 	Enabled        bool            `json:"enabled"`
 	BalancePolicy  string          `json:"balance_policy"`
 	Session        SessionPolicy   `json:"session_policy"`
@@ -83,13 +89,14 @@ type Caller struct {
 	Routes []string `json:"routes"`
 }
 type Options struct {
-	dialContext                        func(context.Context, string, string) (net.Conn, error)
-	DataDir, AdminToken, PublicURL     string
-	Callers                            []Caller
-	Initialize                         bool
-	MaxSessions, MaxTasks, MaxInflight int
-	MaxPerCaller, MaxPerEndpoint       int
-	HealthInterval                     time.Duration
+	dialContext                                          func(context.Context, string, string) (net.Conn, error)
+	DataDir, AdminToken, PublicURL                       string
+	Callers                                              []Caller
+	Initialize                                           bool
+	MaxSessions, MaxTasks, MaxInflight                   int
+	MaxPerCaller, MaxPerEndpoint                         int
+	MaxResources, MaxResourceAliases, MaxDataIdempotency int
+	HealthInterval                                       time.Duration
 }
 
 var validKey = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
@@ -103,6 +110,9 @@ func newID(prefix string) string {
 }
 func tag(v uint64) string { return fmt.Sprintf(`"%d"`, v) }
 func defaults(r *Route) {
+	if r.AgentType == "" {
+		r.AgentType = "generic"
+	}
 	if r.BalancePolicy == "" {
 		r.BalancePolicy = "weighted_round_robin"
 	}
@@ -133,7 +143,7 @@ func validURL(s string) bool {
 	return e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.Fragment == ""
 }
 func validate(c *Config) error {
-	if c.Schema != 1 {
+	if c.Schema != 2 {
 		return fmt.Errorf("unsupported schema_version")
 	}
 	ids := map[string]bool{}
@@ -145,8 +155,18 @@ func validate(c *Config) error {
 		}
 		ids[r.ID] = true
 		keys[r.Key] = true
-		if r.Protocol != "proxy" && r.Protocol != "a2a" {
-			return fmt.Errorf("protocol must be proxy or a2a")
+		if r.AgentType != "generic" && r.AgentType != "hermes" {
+			return fmt.Errorf("agent_type must be generic or hermes")
+		}
+		if len(r.Expose) == 0 {
+			return fmt.Errorf("expose must not be empty")
+		}
+		entries := map[string]bool{}
+		for _, entry := range r.Expose {
+			if (entry != "proxy" && entry != "a2a") || entries[entry] {
+				return fmt.Errorf("invalid or duplicate expose entry")
+			}
+			entries[entry] = true
 		}
 		if r.BalancePolicy != "weighted_round_robin" {
 			return fmt.Errorf("unsupported balance policy")
@@ -158,18 +178,37 @@ func validate(c *Config) error {
 			return fmt.Errorf("invalid timeout")
 		}
 		for _, e := range r.Endpoints {
-			if e.ID == "" || ids[e.ID] || !validURL(e.URL) || e.Weight < 1 || e.Weight > 10000 || (e.State != "active" && e.State != "draining" && e.State != "disabled") {
+			if e.ID == "" || ids[e.ID] || e.Weight < 1 || e.Weight > 10000 || (e.State != "active" && e.State != "draining" && e.State != "disabled") {
 				return fmt.Errorf("invalid endpoint")
 			}
 			ids[e.ID] = true
-			if e.HealthURL != "" && !validURL(e.HealthURL) {
-				return fmt.Errorf("invalid health_url")
+			for entry := range entries {
+				if _, ok := e.Interfaces[entry]; !ok {
+					return fmt.Errorf("endpoint requires interfaces.%s", entry)
+				}
 			}
-			if e.CredentialRef != "" && os.Getenv(e.CredentialRef) == "" {
-				return fmt.Errorf("missing credential environment variable")
+			for entry, iface := range e.Interfaces {
+				if (entry != "proxy" && entry != "a2a") || !validURL(iface.URL) {
+					return fmt.Errorf("invalid endpoint interface")
+				}
+				if iface.HealthURL != "" && !validURL(iface.HealthURL) {
+					return fmt.Errorf("invalid health_url")
+				}
+				if iface.CredentialRef != "" && os.Getenv(iface.CredentialRef) == "" {
+					return fmt.Errorf("missing credential environment variable")
+				}
+				if entry == "proxy" && (iface.ProtocolVersion != "" || iface.Tenant != "") {
+					return fmt.Errorf("proxy interface must not specify protocol_version or tenant")
+				}
+				if entry == "a2a" {
+					if iface.ProtocolVersion != "1.0" {
+						return fmt.Errorf("a2a protocol_version must be 1.0; upgrade upstream and configuration")
+					}
+
+				}
 			}
 		}
-		if r.Protocol == "a2a" {
+		if exposes(r, "a2a") && len(r.Card) != 0 {
 			var card map[string]any
 			if len(r.Card) == 0 || json.Unmarshal(r.Card, &card) != nil {
 				return fmt.Errorf("a2a route requires agent_card")
@@ -187,6 +226,14 @@ func validate(c *Config) error {
 		}
 	}
 	return nil
+}
+func exposes(r *Route, entry string) bool {
+	for _, v := range r.Expose {
+		if v == entry {
+			return true
+		}
+	}
+	return false
 }
 func build(c Config) *snapshot {
 	s := &snapshot{Config: c, Routes: make(map[string]*Route, len(c.Routes))}
