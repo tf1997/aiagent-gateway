@@ -6,8 +6,8 @@ After=aiagent-gateway-state.service
 [Service]
 User=aiagent-gateway
 Group=aiagent-gateway
-EnvironmentFile=/etc/aiagent-gateway/gateway.env
-ExecStart=@BINARY@ worker --slot=@SLOT@ --release=@RELEASE@ --listen=127.0.0.1:@DATA_PORT@ --admin=127.0.0.1:@ADMIN_PORT@
+LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml
+ExecStart=@BINARY@ worker --slot=@SLOT@ --release=@RELEASE@ --listen=127.0.0.1:@DATA_PORT@ --admin=127.0.0.1:@ADMIN_PORT@ --config=%d/gateway.yaml
 Restart=on-failure
 RestartSec=2
 UMask=0077

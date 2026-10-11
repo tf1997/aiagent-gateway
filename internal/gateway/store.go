@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -22,6 +24,7 @@ type Gateway struct {
 	sessionPersist sync.Mutex
 	configFrozen   atomic.Bool
 
+	callerMu     sync.Mutex
 	callerCounts map[string]*atomic.Int64
 	opts         Options
 	current      atomic.Pointer[snapshot]
@@ -51,21 +54,29 @@ type Gateway struct {
 	background context.Context
 }
 
-func Open(o Options) (*Gateway, error) {
+func ValidateOptions(o Options) error {
 	if o.PublicURL != "" && !validURL(o.PublicURL) {
-		return nil, fmt.Errorf("invalid public URL")
+		return fmt.Errorf("invalid public URL")
 	}
-	if o.AdminToken == "" || len(o.Callers) == 0 {
-		return nil, fmt.Errorf("admin token and callers required")
+	if o.AdminToken == "" {
+		return fmt.Errorf("admin_token required")
 	}
-	seen := map[string]bool{}
-	for _, c := range o.Callers {
-		if c.ID == "" || c.Token == "" || seen[c.ID] || seen[c.Token] || c.Token == o.AdminToken {
-			return nil, fmt.Errorf("unique caller IDs and distinct tokens required")
+	if strings.ContainsAny(o.AdminToken, "\r\n\x00") {
+		return fmt.Errorf("admin_token must be a single-line token")
+	}
+	for key, token := range o.Credentials {
+		if key == "" || token == "" || strings.ContainsAny(token, "\r\n\x00") {
+			return fmt.Errorf("credentials require nonempty keys and single-line tokens")
 		}
-		seen[c.ID] = true
-		seen[c.Token] = true
 	}
+	return nil
+}
+
+func Open(o Options) (*Gateway, error) {
+	if err := ValidateOptions(o); err != nil {
+		return nil, err
+	}
+	o.Credentials = maps.Clone(o.Credentials)
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = 100000
 	}
@@ -113,9 +124,6 @@ func Open(o Options) (*Gateway, error) {
 	}
 	g := &Gateway{remote: remote, opts: o, lock: f, states: map[string]*endpointState{}, sched: map[string]*routeSchedule{}, resources: newResourceDirectory(o), transports: map[int]*http.Transport{}}
 	g.callerCounts = map[string]*atomic.Int64{}
-	for _, c := range o.Callers {
-		g.callerCounts[c.ID] = &atomic.Int64{}
-	}
 	g.persist = g.save
 	g.resources.remote = remote
 	for i := range g.shards {
@@ -158,7 +166,7 @@ func Open(o Options) (*Gateway, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err = validate(&c); err != nil {
+	if err = validate(&c, o.Credentials); err != nil {
 		return fail(err)
 	}
 	if c.Receipts == nil {

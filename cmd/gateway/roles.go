@@ -1,6 +1,7 @@
 package main
 
 import (
+	"aiagent-gateway/internal/appconfig"
 	"aiagent-gateway/internal/entry"
 	"aiagent-gateway/internal/gateway"
 	p "aiagent-gateway/internal/releaseprotocol"
@@ -8,7 +9,6 @@ import (
 	"aiagent-gateway/internal/service"
 	"aiagent-gateway/internal/state"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -21,13 +21,6 @@ import (
 	"time"
 )
 
-func roleOptions() (gateway.Options, error) {
-	var callers []gateway.Caller
-	if err := json.Unmarshal([]byte(os.Getenv("GATEWAY_CALLERS")), &callers); err != nil {
-		return gateway.Options{}, err
-	}
-	return gateway.Options{DataDir: env("GATEWAY_DATA_DIR", "./data"), AdminToken: os.Getenv("GATEWAY_ADMIN_TOKEN"), PublicURL: os.Getenv("GATEWAY_PUBLIC_URL"), Callers: callers, MaxInflight: positiveEnv("GATEWAY_MAX_INFLIGHT", 4096), MaxPerCaller: positiveEnv("GATEWAY_MAX_PER_CALLER", 1024), MaxPerEndpoint: positiveEnv("GATEWAY_MAX_PER_ENDPOINT", 256), MaxSessions: positiveEnv("GATEWAY_MAX_SESSIONS", 100000), MaxTasks: positiveEnv("GATEWAY_MAX_TASKS", 100000), MaxResources: positiveEnv("GATEWAY_MAX_RESOURCES", 200000), MaxResourceAliases: positiveEnv("GATEWAY_MAX_RESOURCE_ALIASES", 200000), MaxDataIdempotency: positiveEnv("GATEWAY_MAX_DATA_IDEMPOTENCY", 100000)}, nil
-}
 func unixListener(path string) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return nil, err
@@ -64,26 +57,34 @@ func runRole(role string, args []string) int {
 	return 0
 }
 func serveRole(role string, args []string) error {
-	opts, err := roleOptions()
-	if err != nil {
-		return err
-	}
 	fs := flag.NewFlagSet(role, flag.ContinueOnError)
+	configPath := fs.String("config", appconfig.DefaultPath, "YAML configuration file")
 	slot := fs.String("slot", "", "worker slot")
 	release := fs.String("release", "", "release digest")
-	listen := fs.String("listen", env("GATEWAY_LISTEN", ":8080"), "data listener")
-	admin := fs.String("admin", env("GATEWAY_ADMIN_LISTEN", "127.0.0.1:9090"), "admin listener")
-	if err = fs.Parse(args); err != nil {
+	listen := fs.String("listen", "", "override YAML data listener for this role")
+	admin := fs.String("admin", "", "override YAML admin listener for this role")
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments")
 	}
+	cfg, err := appconfig.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	opts := cfg.Options()
+	if *listen == "" {
+		*listen = cfg.Listen
+	}
+	if *admin == "" {
+		*admin = cfg.AdminListen
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	stateSocket := env("GATEWAY_STATE_SOCKET", service.StateSocket)
-	entrySocket := env("GATEWAY_ENTRY_SOCKET", service.EntrySocket)
-	controlSocket := env("GATEWAY_CONTROL_SOCKET", service.ControllerSocket)
+	stateSocket := cfg.StateSocket
+	entrySocket := cfg.EntrySocket
+	controlSocket := cfg.ControlSocket
 	type endpoint struct {
 		server   *http.Server
 		listener net.Listener
@@ -189,11 +190,11 @@ func serveRole(role string, args []string) error {
 			return err
 		}
 	case "rollout-controller":
-		d, err := service.LoadDeployment(env("GATEWAY_DEPLOYMENT", service.DeploymentPath))
+		d, err := service.LoadDeployment(cfg.Deployment)
 		if err != nil {
 			return err
 		}
-		j, err := state.Open(env("GATEWAY_ROLLOUT_DATA", service.RolloutData))
+		j, err := state.Open(cfg.RolloutData)
 		if err != nil {
 			return err
 		}

@@ -19,7 +19,7 @@ func createDual(t *testing.T, g *Gateway, eps ...map[string]EndpointInterface) R
 	for _, ep := range eps {
 		endpoints = append(endpoints, map[string]any{"interfaces": ep})
 	}
-	raw, _ := json.Marshal(map[string]any{"key": "test", "expose": []string{"proxy", "a2a"}, "endpoints": endpoints, "agent_card": map[string]any{"name": "test", "description": "test", "version": "1", "skills": []any{}, "defaultInputModes": []string{"text/plain"}, "defaultOutputModes": []string{"text/plain"}, "capabilities": map[string]any{"streaming": true}, "supportedInterfaces": []any{map[string]any{"url": "http://internal:9900"}}}})
+	raw, _ := json.Marshal(map[string]any{"consumers": testConsumers(), "key": "test", "expose": []string{"proxy", "a2a"}, "endpoints": endpoints, "agent_card": map[string]any{"name": "test", "description": "test", "version": "1", "skills": []any{}, "defaultInputModes": []string{"text/plain"}, "defaultOutputModes": []string{"text/plain"}, "capabilities": map[string]any{"streaming": true}, "supportedInterfaces": []any{map[string]any{"url": "http://internal:9900"}}}})
 	w := admin(t, g, "POST", "/admin/v1/routes", string(raw), "", "")
 	if w.Code != 201 {
 		t.Fatal(w.Body.String())
@@ -48,8 +48,6 @@ func localInterfaces() map[string]EndpointInterface {
 	return map[string]EndpointInterface{"proxy": {URL: "http://localhost:1"}, "a2a": {URL: "http://localhost:2/rpc", ProtocolVersion: "1.0"}}
 }
 func TestUnifiedEntriesAndAliases(t *testing.T) {
-	t.Setenv("TEST_PROXY_KEY", "proxy-key")
-	t.Setenv("TEST_A2A_KEY", "a2a-key")
 	var proxyCalls, rpcCalls atomic.Int64
 	proxy := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		proxyCalls.Add(1)
@@ -168,7 +166,6 @@ func TestReservedPathsAndDisabledEntries(t *testing.T) {
 }
 
 func TestInterfaceHealthAndSharedCapacity(t *testing.T) {
-	t.Setenv("TEST_HEALTH_KEY", "health-key")
 	var failProxy atomic.Bool
 	failProxy.Store(true)
 	up := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,5 @@
 /data/
+/gateway.yaml
 /bin/
 *.test
 coverage.out

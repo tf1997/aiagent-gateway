@@ -46,17 +46,18 @@ def main():
     servers, processes, logs = [], [], []
     with tempfile.TemporaryDirectory(prefix='gw-rollout-', dir='/tmp') as temp:
         root = pathlib.Path(temp)
-        env = os.environ.copy()
-        env.update(GATEWAY_ADMIN_TOKEN=admin,
-                   GATEWAY_CALLERS=json.dumps([{'id': 'probe', 'token': caller, 'routes': ['*']}]),
-                   GATEWAY_DATA_DIR=str(root / 'data'),
-                   GATEWAY_STATE_SOCKET=str(root / 'state.sock'),
-                   GATEWAY_ENTRY_SOCKET=str(root / 'entry.sock'),
-                   GATEWAY_PUBLIC_URL='http://localhost:8080')
-        env.pop('GATEWAY_INIT', None)
         admin_port, public_port = port(), port()
-        env['GATEWAY_ADMIN_LISTEN'] = f'127.0.0.1:{admin_port}'
-        env['GATEWAY_LISTEN'] = f'127.0.0.1:{public_port}'
+        config_path = root / 'gateway.yaml'
+        config_path.write_text(json.dumps({
+            'admin_token': admin,
+            'data_dir': str(root / 'data'),
+            'state_socket': str(root / 'state.sock'),
+            'entry_socket': str(root / 'entry.sock'),
+            'public_url': f'http://127.0.0.1:{public_port}',
+            'admin_listen': f'127.0.0.1:{admin_port}',
+            'listen': f'127.0.0.1:{public_port}',
+        }))
+        config_path.chmod(0o600)
 
         def request(target, method='GET', value=None, token=admin, session=None):
             body = None if value is None else json.dumps(value).encode()
@@ -96,7 +97,7 @@ def main():
         def start(name, *args):
             log = open(root / (name + '.log'), 'w+')
             logs.append(log)
-            process = subprocess.Popen([binary, *args], env=env, stdout=log, stderr=log)
+            process = subprocess.Popen([binary, *args, "--config", str(config_path)], stdout=log, stderr=log)
             processes.append(process)
             return process
 
@@ -127,13 +128,13 @@ def main():
             return 'http://127.0.0.1:' + str(server.server_port)
 
         try:
-            subprocess.run([binary, '--init-only'], env=env, check=True,
+            subprocess.run([binary, '--config', str(config_path), '--init-only'], check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             start('state', 'state-server')
             admin_url = f'http://127.0.0.1:{admin_port}'
             wait(lambda: request(admin_url + '/admin/v1/config/status')[0] == 200)
             status, _ = request(admin_url + '/admin/v1/routes', 'POST', {
-                'key': 'probe', 'agent_type': 'generic', 'expose': ['proxy'],
+                'key': 'probe', 'consumers': [{'id': 'probe', 'token': caller}], 'agent_type': 'generic', 'expose': ['proxy'],
                 'endpoints': [{'interfaces': {'proxy': {'url': upstream(i)}}} for i in (1, 2)]})
             assert status == 201
             targets = []
@@ -176,6 +177,17 @@ def main():
             request('/control/v1/traffic', 'PUT', {'Expected': 3, 'Traffic': traffic})
             status, restored = request(url + '/ok', token=caller, session='existing')
             assert status == 200 and restored['backend'] == original['backend']
+            new_caller = secrets.token_hex(24)
+            status, _ = request(admin_url + '/admin/v1/routes', 'POST', {
+                'key': 'probe', 'consumers': [{'id': 'probe', 'token': new_caller}]})
+            assert status == 200
+            assert request(url + '/ok', token=caller, session='existing')[0] == 401
+            status, rotated = request(url + '/ok', token=new_caller, session='existing')
+            assert status == 200 and rotated['backend'] == original['backend']
+            status, _ = request(admin_url + '/admin/v1/routes', 'POST', {'key': 'probe', 'consumers': []})
+            assert status == 200
+            assert request(url + '/ok', token=new_caller, session='existing')[0] == 401
+            print('PASS dynamic consumer token rotation/revocation and original session ownership')
             print('PASS real state/entry/two-worker processes, 5% allocation, full switch,')
             print('     session ownership, failed POST without replay, and traffic rollback')
         finally:

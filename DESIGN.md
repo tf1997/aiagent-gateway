@@ -1,5 +1,6 @@
 # AI Agent 网关实现方案
 
+> 2026-10-11：消费者在路由 consumers 动态配置，YAML 不接受 callers；进程配置统一为 YAML，环境变量入口移除；详见 [YAML 配置说明](docs/CONFIGURATION.md)。
 > 2026-10-06 更新：本文的单进程约束仍适用于前台模式。安装部署新增固定入口、双 worker 和共享状态服务，详见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)及 [通用发布设计](docs/HTTP_GATEWAY_ROLLOUT_DESIGN.md)。普通业务版本升级共享资源归属，基础组件迁移另行处理。
 
 本文描述目标架构；当前实现、运行方式和差异见 [README.md](README.md)，开发约定见 [DEVELOPMENT.md](DEVELOPMENT.md)，验证记录见 [VALIDATION.md](VALIDATION.md)。
@@ -133,7 +134,7 @@ research
 }
 ```
 
-路由详情与列表中的每个路由均包含 `endpoints`，从同一配置快照读取，保证路由策略和实例列表一致。创建路由支持内嵌实例；创建后的实例增删改使用路由下的实例 API。
+路由详情与列表中的每个路由均包含 `endpoints`，从同一配置快照读取，保证路由策略和实例列表一致。POST 按 key 创建或更新路由，支持提交完整实例列表；也可通过路由下的实例 API 单独增删改。
 
 ### 3.2 多实例选择示例
 
@@ -295,24 +296,24 @@ GET  /readyz
 :9090
 POST   /admin/v1/routes
 GET    /admin/v1/routes
-GET    /admin/v1/routes/{id}
-PATCH  /admin/v1/routes/{id}
-DELETE /admin/v1/routes/{id}
+GET    /admin/v1/routes/{key}
+PATCH  /admin/v1/routes/{key}
+DELETE /admin/v1/routes/{key}
 
-POST   /admin/v1/routes/{id}/endpoints
-GET    /admin/v1/routes/{id}/endpoints
-GET    /admin/v1/routes/{id}/endpoints/{endpointID}
-PATCH  /admin/v1/routes/{id}/endpoints/{endpointID}
-DELETE /admin/v1/routes/{id}/endpoints/{endpointID}
+POST   /admin/v1/routes/{key}/endpoints
+GET    /admin/v1/routes/{key}/endpoints
+GET    /admin/v1/routes/{key}/endpoints/{endpointID}
+PATCH  /admin/v1/routes/{key}/endpoints/{endpointID}
+DELETE /admin/v1/routes/{key}/endpoints/{endpointID}
 
-GET    /admin/v1/routes/{id}/sessions         分页查询绑定，支持状态和实例筛选
-GET    /admin/v1/routes/{id}/tasks            分页查询任务绑定
+GET    /admin/v1/routes/{key}/sessions         分页查询绑定，支持状态和实例筛选
+GET    /admin/v1/routes/{key}/tasks            分页查询任务绑定
 GET    /admin/v1/config/status               文件与内存版本、持久化健康状态
 GET    /admin/v1/audit-logs
 GET    /metrics                             内部受控访问
 ```
 
-所有管理接口需要独立认证和资源授权。支持分页、稳定错误码、OpenAPI 文档。创建接口支持 `Idempotency-Key`，幂等记录与资源创建在同一个文件快照中提交；更新使用 ETag / `If-Match`，版本不匹配返回 412。
+所有管理接口需要独立认证和资源授权，支持分页、稳定错误码和 OpenAPI 文档。`POST /admin/v1/routes` 按正文 key 创建（201）或更新（200）；GET/DELETE 路径优先按 key 匹配，并兼容内部 ID。POST 支持 `Idempotency-Key`，回执与变更在同一文件快照提交，重放返回原状态码和响应。POST 更新及按 key 删除路由可选 `If-Match`；PATCH、实例 DELETE、按内部 ID 删除路由仍要求它，版本不匹配返回 412。
 
 删除有会话、任务或活跃请求引用的路由、实例返回 409，并提供引用数量。删除路由时连同其内嵌实例配置一起提交；仅在这些实例均无引用时允许删除。凭据管理接口只返回元信息，不回显密钥。
 
@@ -373,7 +374,7 @@ Idempotency-Key: add-research-instance-003
 }
 ```
 
-`PATCH /admin/v1/routes/{id}` 修改路由策略，不接受整体替换 `endpoints`；实例权重、地址及排空状态通过实例 PATCH 修改，逐次检查绑定约束。所有实例变更都递增所属路由版本及全局配置版本；实例自身版本随修改递增。路由和实例 GET 返回各自 ETag，对应 PATCH/DELETE 必须携带 `If-Match`，防止并发覆盖。所有成功变更均先持久化再发布内存。
+`POST /admin/v1/routes` 更新时合并提交的路由字段，省略的字段保留；提供 `endpoints` 则整体替换列表。每项是完整实例配置，同名实例保留内部 ID，未命名实例仅按完全相同的 interfaces 匹配，歧义返回 409；移除或变更仍有引用的实例身份返回 409。兼容的路由 PATCH 只修改策略，不接受 endpoints；实例也可单独 PATCH。所有实例变更都递增所属路由及全局配置版本，实例自身有变更时递增其版本。GET 返回 ETag；POST 更新和按 key 删除路由可选传入，原 PATCH/实例 DELETE 仍强制检查。所有成功变更均先持久化再发布内存。
 
 同一调用方连续发送 `X-Session-ID: session-001`，从内存绑定中取得相同实例；网关重启后首次请求重新选择实例，不保证命中重启前的实例。
 

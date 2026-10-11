@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -11,32 +10,14 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
+	"aiagent-gateway/internal/appconfig"
 	"aiagent-gateway/internal/gateway"
 	"aiagent-gateway/internal/service"
 )
 
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
-}
-func positiveEnv(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 {
-		slog.Error("invalid positive integer", "variable", key)
-		os.Exit(1)
-	}
-	return n
-}
 func main() { os.Exit(run()) }
 
 func run() int {
@@ -81,31 +62,40 @@ func run() int {
 			return 0
 		}
 	}
-	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [install|uninstall|start|stop|restart|status]\nUse install --migrate for a legacy maintenance migration. Use rollout status|resume|rollback to inspect a release.\nWithout a command, run the gateway in the foreground.\n", os.Args[0])
-		flag.PrintDefaults()
-	}
+	return runForeground(os.Args[1:])
+}
 
-	initOnly := flag.Bool("init-only", false, "initialize or validate the configuration file, then exit")
-	checkReady := flag.Bool("check-ready", false, "wait for the local HTTP readiness endpoint, then exit")
-	flag.Parse()
-	if flag.NArg() != 0 {
-		slog.Error("unknown command", "command", flag.Arg(0))
+func runForeground(args []string) int {
+	fs := flag.NewFlagSet("gateway", flag.ContinueOnError)
+	configPath := fs.String("config", appconfig.DefaultPath, "YAML configuration file")
+	initialize := fs.Bool("init", false, "allow first-time route store initialization")
+	initOnly := fs.Bool("init-only", false, "initialize or validate the route store, then exit")
+	checkReady := fs.Bool("check-ready", false, "wait for the local HTTP readiness endpoint, then exit")
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return 0
+		}
 		return 2
 	}
+	if fs.NArg() != 0 {
+		slog.Error("unexpected command arguments")
+		return 2
+	}
+	cfg, err := appconfig.Load(*configPath)
+	if err != nil {
+		slog.Error("configuration failed", "error", err)
+		return 1
+	}
 	if *checkReady {
-		if err := waitReady(env("GATEWAY_LISTEN", ":8080"), 15*time.Second); err != nil {
+		if err := waitReady(cfg.Listen, 15*time.Second); err != nil {
 			slog.Error("readiness check failed", "error", err)
 			return 1
 		}
 		return 0
 	}
-	var callers []gateway.Caller
-	if err := json.Unmarshal([]byte(os.Getenv("GATEWAY_CALLERS")), &callers); err != nil {
-		slog.Error("GATEWAY_CALLERS must be a JSON array")
-		return 1
-	}
-	g, err := gateway.Open(gateway.Options{DataDir: env("GATEWAY_DATA_DIR", "./data"), AdminToken: os.Getenv("GATEWAY_ADMIN_TOKEN"), Callers: callers, Initialize: *initOnly || os.Getenv("GATEWAY_INIT") == "true", PublicURL: os.Getenv("GATEWAY_PUBLIC_URL"), MaxInflight: positiveEnv("GATEWAY_MAX_INFLIGHT", 4096), MaxPerCaller: positiveEnv("GATEWAY_MAX_PER_CALLER", 1024), MaxPerEndpoint: positiveEnv("GATEWAY_MAX_PER_ENDPOINT", 256), MaxSessions: positiveEnv("GATEWAY_MAX_SESSIONS", 100000), MaxTasks: positiveEnv("GATEWAY_MAX_TASKS", 100000), MaxResources: positiveEnv("GATEWAY_MAX_RESOURCES", 200000), MaxResourceAliases: positiveEnv("GATEWAY_MAX_RESOURCE_ALIASES", 200000), MaxDataIdempotency: positiveEnv("GATEWAY_MAX_DATA_IDEMPOTENCY", 100000)})
+	opts := cfg.Options()
+	opts.Initialize = *initialize || *initOnly
+	g, err := gateway.Open(opts)
 	if err != nil {
 		slog.Error("startup failed", "error", err)
 		return 1
@@ -115,8 +105,8 @@ func run() int {
 		slog.Info("configuration initialized or validated")
 		return 0
 	}
-	data := &http.Server{Addr: env("GATEWAY_LISTEN", ":8080"), Handler: g.DataHandler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
-	admin := &http.Server{Addr: env("GATEWAY_ADMIN_LISTEN", "127.0.0.1:9090"), Handler: g.AdminHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
+	data := &http.Server{Addr: cfg.Listen, Handler: g.DataHandler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
+	admin := &http.Server{Addr: cfg.AdminListen, Handler: g.AdminHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
 	errs := make(chan error, 2)
 	go func() { errs <- data.ListenAndServe() }()
 	go func() { errs <- admin.ListenAndServe() }()

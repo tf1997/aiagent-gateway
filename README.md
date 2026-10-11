@@ -1,8 +1,10 @@
 # AI Agent Gateway
 
-Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例、会话粘性、HTTP/SSE 代理，以及 A2A 1.0 JSON-RPC 转发。无第三方 Go 依赖。
+Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例、会话粘性、HTTP/SSE 代理，以及 A2A 1.0 JSON-RPC 转发。YAML 解析使用 go.yaml.in/yaml/v3，其余运行逻辑使用 Go 标准库。
 
 设计见 [DESIGN.md](DESIGN.md)，开发约定见 [DEVELOPMENT.md](DEVELOPMENT.md)，管理接口契约见 [api/openapi.yaml](api/openapi.yaml)。
+
+从启动到接入、调用和日常运维，见 [网关使用说明](docs/USAGE.md)，包含 HTTP/SSE、Hermes、A2A 示例、配置速查及常见问题。
 
 自动灰度升级：[操作说明](docs/ROLLOUT_OPERATIONS.md)、[本次实现过程](docs/ROLLOUT_IMPLEMENTATION_RECORD.md)，包含组件改造、会话到原 Agent 的映射持久化、自动切流/回退和验证结果。架构与规划见 [通用 HTTP 网关发布设计](docs/HTTP_GATEWAY_ROLLOUT_DESIGN.md)及 [本项目实施计划](docs/AGENT_GATEWAY_ROLLOUT_IMPLEMENTATION_PLAN.md)。
 
@@ -17,14 +19,20 @@ Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原
 需要 Go 1.24+，支持 Linux/macOS。先启动自己的 Agent 服务，再执行：
 
 ```sh
-export GATEWAY_ADMIN_TOKEN='replace-with-admin-secret'
-export GATEWAY_CALLERS='[{"id":"app-a","token":"replace-with-caller-secret","routes":["research"]}]'
-export GATEWAY_DATA_DIR='./data'
-export GATEWAY_PUBLIC_URL='http://localhost:8080'
-GATEWAY_INIT=true go run ./cmd/gateway
+cp gateway.example.yaml gateway.yaml
+chmod 600 gateway.yaml
+# 编辑 gateway.yaml，替换示例 Token 和地址。
+go run ./cmd/gateway --config ./gateway.yaml --init
 ```
 
-`GATEWAY_INIT=true` 仅允许在没有配置文件时初始化。常规重启移除该变量；已有文件损坏时始终拒绝启动。数据面默认 `:8080`，管理面默认 `127.0.0.1:9090`，可通过 `GATEWAY_LISTEN` / `GATEWAY_ADMIN_LISTEN` 修改。部署时持久化数据目录，TLS 由入口代理终止。
+后续启动省略 `--init`；已有路由文件损坏时始终拒绝启动。省略 `--config` 默认读取当前目录的 `gateway.yaml`，相对数据路径以 YAML 所在目录为准。旧 `GATEWAY_*` 启动变量及上游凭据环境变量均不再读取；完整字段、上游凭据和旧部署迁移见 [YAML 配置说明](docs/CONFIGURATION.md)。部署时持久化数据目录，TLS 由入口代理终止。
+
+以下仅为 curl 客户端设置 shell 变量，值须与 YAML 中的 Token 一致；网关不会读取这些变量：
+
+```sh
+GATEWAY_ADMIN_TOKEN='replace-with-admin-secret'
+GATEWAY_CALLER_TOKEN='replace-with-caller-secret'
+```
 
 创建一个普通代理路由：
 
@@ -35,6 +43,7 @@ curl http://localhost:9090/admin/v1/routes \
   -H 'Idempotency-Key: research-v1' \
   -d '{
     "key":"research",
+    "consumers":[{"id":"app-a","token":"replace-with-caller-secret"}],
     "agent_type":"generic",
     "expose":["proxy"],
     "endpoints":[
@@ -54,7 +63,7 @@ curl -N http://localhost:8080/agents/research/chat \
   -d '{"message":"hello"}'
 ```
 
-若上游无需会话粘性，创建路由时传 `"session_policy":{"enabled":false}`。上游 URL 的路径作为前缀，查询参数合并保留。凭据通过 Endpoint 的 `interfaces.proxy.credential_ref` 指定环境变量名，启动或修改配置时校验变量存在；客户端 Authorization、Cookie 和身份转发头会被清理。
+若上游无需会话粘性，创建路由时传 `"session_policy":{"enabled":false}`。上游 URL 的路径作为前缀，查询参数合并保留。凭据通过 Endpoint 的 `interfaces.proxy.credential_ref` 引用 YAML `credentials` 字典键，启动或修改路由时校验凭据存在；客户端 Authorization、Cookie 和身份转发头会被清理。
 
 ## 同一 Agent 的聊天与 A2A
 
@@ -63,6 +72,7 @@ curl -N http://localhost:8080/agents/research/chat \
 ```json
 {
   "key": "research",
+  "consumers": [{"id":"app-a","token":"replace-with-caller-secret"}],
   "agent_type": "generic",
   "expose": ["proxy", "a2a"],
   "endpoints": [{
@@ -106,18 +116,18 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 
 将产物复制到 Linux 服务器后执行 `sudo ./aiagent-gateway-linux-amd64 install`。
 
-目标服务器需要运行 systemd，并提供 `systemctl`、`getent`、`groupadd` 和 `useradd`。安装需要 root；运行服务使用独立的 `aiagent-gateway` 系统用户。二进制内嵌所需 unit 文件，目标机器无需 Go、源码或额外脚本。
+目标服务器需要运行 systemd 247+（支持 LoadCredential），并提供 `systemctl`、`getent`、`groupadd` 和 `useradd`。安装需要 root；运行服务使用独立的 `aiagent-gateway` 系统用户。二进制内嵌所需 unit 文件，目标机器无需 Go、源码或额外脚本。
 
 安装命令完成以下工作：
 
 - 首次安装或维护迁移将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
-- 首次安装生成独立随机管理 Token 和调用方 Token，保存于 `/etc/aiagent-gateway/gateway.env`，权限 0600；Token 不输出到终端。
+- 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/gateway.yaml`，权限 0600；Token 不输出到终端。
 - 首次通过一次性初始化服务创建 `/var/lib/aiagent-gateway/config.json`；常规启动不自动创建缺失的配置文件。
 - 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
 - 已迁入灰度架构后，重复执行新二进制的 `install` 会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；配置、资源归属和并发额度由共享状态服务统一管理。
 - 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
-默认数据面为 `:8080`，管理面为 `127.0.0.1:9090`。首次生成的调用方 ID 为 `default`，可访问所有路由。通过 root 编辑配置调整调用方权限、上游凭据和 `GATEWAY_PUBLIC_URL`；后者应改为客户端实际可访问的地址。配置文件使用 systemd `EnvironmentFile` 语法，例如 JSON 值用单引号包围，文件由 systemd 读取，不作为 shell 脚本执行。
+默认数据面为 `:8080`，管理面为 `127.0.0.1:9090`。消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token、`credentials` 和 `public_url`；后者应改为客户端实际可访问的地址。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。环境变量版本需按 [迁移说明](docs/CONFIGURATION.md#从环境变量版本迁移) 做维护迁移。
 
 ```sh
 sudo aiagent-gateway status
@@ -139,16 +149,40 @@ macOS 可前台运行网关，但不支持这些 systemd 管理命令。当前�
 
 ## 管理与持久化
 
-- `POST/GET /admin/v1/routes`：创建、分页查询路由。
-- `GET/PATCH/DELETE /admin/v1/routes/{id}`：详情、策略修改、删除。
-- `/admin/v1/routes/{id}/endpoints`：POST 添加、GET 分页查询实例。
-- `/admin/v1/routes/{id}/endpoints/{endpointID}`：GET、PATCH、DELETE。
-- `/admin/v1/routes/{id}/sessions`：普通粘性绑定查询；`/tasks`：A2A 任务查询。
-- `/admin/v1/routes/{id}/resources`、`/runs`：公共资源与 Run 归属查询，支持 `owner_id`、`endpoint_id`、`interface` 筛选；`/resources` 另支持 `resource_kind`。这些接口需要管理 Token，`/runs` 当前仅反映已登记资源，Hermes HTTP 接入仍待 P3。
+消费者凭据只在路由正文 `consumers` 中配置，YAML 不接受 `callers`。例如对已有路由 POST `{"key":"research","consumers":[{"id":"app-a","token":"new-secret"}]}` 即可立即轮换 Token；省略 consumers 保留原列表，传 `[]` 撤销全部。保持消费者 ID 可续接原资源；GET/POST 只返回 ID，Token 只保存哈希。详细规则见 [动态消费者](docs/USAGE.md#动态配置消费者)。
+
+- `POST /admin/v1/routes`：正文 `key` 不存在则创建（201），存在则更新（200），默认不需要 `If-Match`。
+- `GET /admin/v1/routes`：分页查询路由。
+- `GET/DELETE /admin/v1/routes/{key}`：按 key 获取、删除；删除默认不需要 `If-Match`，有引用时仍返回 409。
+- `/admin/v1/routes/{key}/endpoints`：POST 添加、GET 分页查询实例。
+- `/admin/v1/routes/{key}/endpoints/{endpointID}`：GET、PATCH、DELETE。
+- `/admin/v1/routes/{key}/sessions`：普通粘性绑定查询；`/tasks`：A2A 任务查询。
+- `/admin/v1/routes/{key}/resources`、`/runs`：公共资源与 Hermes Run 归属查询，支持 `owner_id`、`endpoint_id`、`interface` 筛选；`/resources` 另支持 `resource_kind`。这些接口需要管理 Token。
 - `/admin/v1/config/status`：内存版本及持久化健康状态。
 - `/admin/v1/audit-logs`、`/metrics`：审计、Prometheus 文本指标，均需管理 Token。
 
-分页参数为 `offset`、`limit`（默认和最大均为 100）。详情 GET 返回 ETag，PATCH/DELETE 必须使用该资源的 `If-Match`；不匹配返回 412。创建支持 `Idempotency-Key`，相同键和相同原始请求重放结果，不同请求返回 409。首版保存最近 1000 条幂等记录与 1000 条审计。
+POST 更新保留未提供的路由字段；提供 `endpoints` 时按完整列表替换，同名实例保留 ID 和绑定，列表内每项按完整实例配置处理。使用稳定且唯一的实例 `name`；未命名实例仅能按完全相同的 interfaces 匹配，歧义返回 409。删除、换地址或移除接口仍受引用保护。
+
+分页参数为 `offset`、`limit`（默认和最大均为 100）。详情 GET 返回 ETag；POST 更新和按 key 删除可选传 `If-Match`，传入但不匹配返回 412。原内部 ID 路径与路由 PATCH 保留兼容，PATCH、实例 DELETE 及按内部 ID 删除路由仍必须使用该资源的 `If-Match`。路径优先匹配 key，无匹配时才尝试内部 ID。POST 支持 `Idempotency-Key`，相同键和相同原始请求重放原状态码及结果，不同请求返回 409；新的更新操作必须换幂等键。保存最近 1000 条幂等记录与 1000 条审计。
+
+例如直接按 key 修改超时、查询和删除无需引用的路由：
+
+```sh
+curl -fsS http://127.0.0.1:9090/admin/v1/routes \
+  -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"key":"research","timeout":{"response_header_ms":180000}}'
+
+curl -fsS http://127.0.0.1:9090/admin/v1/routes/research \
+  -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN"
+
+curl -fsS -X DELETE http://127.0.0.1:9090/admin/v1/routes/research \
+  -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN"
+```
+
+上述部分更新示例要求 `research` 已存在；首次创建还需提供 `expose` 等必要配置。启动参数现在只从 YAML 读取，环境变量已弃用；`config.json` 是管理 API 自动维护的路由存储，不替代进程配置。
+
+前台模式使用新二进制启动即可启用本次管理接口。灰度部署的管理接口由 state-server 提供，现有部署需按基础组件维护流程更新该组件；日常 install 只替换业务 worker，不会自动升级管理接口。
 
 配置写入同目录临时文件，经 fsync、rename、目录同步后发布内存快照。文件和目录权限默认 0600 / 0700。前台单进程模式下，多个进程不能同时打开同一数据目录；灰度模式由单个状态服务独占目录，worker 通过本机 Socket 访问；文件替换后目录同步失败时 ready 失败，需排查存储并重启恢复。
 
@@ -180,7 +214,7 @@ macOS 可前台运行网关，但不支持这些 systemd 管理命令。当前�
 }
 ```
 
-Card 位于 `/agents/{appId}/.well-known/agent-card.json`，JSON-RPC/SSE 位于 `POST /agents/{appId}/a2a`，其中 `appId` 是路由 `key`。两者均需要调用方认证；Card 只宣告新的 RPC 地址，网关改写认证声明和协议版本。设置 `GATEWAY_PUBLIC_URL` 为客户端实际可访问的网关基础地址。
+Card 位于 `/agents/{appId}/.well-known/agent-card.json`，JSON-RPC/SSE 位于 `POST /agents/{appId}/a2a`，其中 `appId` 是路由 `key`。两者均需要调用方认证；Card 只宣告新的 RPC 地址，网关改写认证声明和协议版本。设置 YAML `public_url` 为客户端实际可访问的网关基础地址。
 
 支持 `SendMessage`、`SendStreamingMessage`、`GetTask`、`ListTasks`、`CancelTask`、`SubscribeToTask`。请求必须携带 `A2A-Version: 1.0`；缺失、0.3/0.3.0 或其他版本返回 `-32009`，旧方法名不再支持。任务和 context 使用网关生成的 ID，隔离不同调用方及实例的同名 ID；协议数据中的文件、parts 和 metadata 保持原样。已有任务与 context 必须携带网关返回的标识；未知任务返回协议错误，不随机转发。
 
@@ -217,7 +251,7 @@ A2A 1.0 task/context 现已使用公共目录，按调用方、路由、资源�
 
 路由快照原子读取、会话索引使用 256 个分片、已有会话按实例 ID 查找；新会话按权重轮询。HTTP 连接和复制缓冲复用，默认没有应用层重试。普通代理请求体上限 32 MiB；管理/A2A JSON 和单个 A2A SSE 事件上限 2 MiB。Hermes JSON 请求上限 2 MiB、响应 4 MiB、单帧 2 MiB。SSE 使用独立的空闲/最大时长控制，普通流的客户端断开会取消上游 HTTP 请求；已确认的 Hermes A2A returnImmediately 请求由网关继续读取有界后台流，显式取消使用 CancelTask。
 
-默认全局并发 4096、每调用方 1024、每实例 256，会话和任务容量各 100000。超限返回不可用，不排无限队列。上限可通过 `GATEWAY_MAX_INFLIGHT`、`GATEWAY_MAX_PER_CALLER`、`GATEWAY_MAX_PER_ENDPOINT`、`GATEWAY_MAX_SESSIONS`、`GATEWAY_MAX_TASKS` 调整。会话空闲 TTL 默认 24 小时，活跃请求不会被过期清理。公共目录另有 `GATEWAY_MAX_RESOURCES`（默认 200000）、`GATEWAY_MAX_RESOURCE_ALIASES`（200000，客户端别名及额外上游谱系 ID）、`GATEWAY_MAX_DATA_IDEMPOTENCY`（100000）容量上限。目录内 session/context 共享 `GATEWAY_MAX_SESSIONS` 上限，Run/Task 共享 `GATEWAY_MAX_TASKS` 上限；generic 粘性表仍单独计数。`/metrics` 增加资源、别名和数据幂等预留数量。
+默认全局并发 4096、每调用方 1024、每实例 256，会话和任务容量各 100000。超限返回不可用，不排无限队列。上限可通过 `max_inflight`、`max_per_caller`、`max_per_endpoint`、`max_sessions`、`max_tasks` 调整。会话空闲 TTL 默认 24 小时，活跃请求不会被过期清理。公共目录另有 `max_resources`（默认 200000）、`max_resource_aliases`（200000，客户端别名及额外上游谱系 ID）、`max_data_idempotency`（100000）容量上限。目录内 session/context 共享 `max_sessions` 上限，Run/Task 共享 `max_tasks` 上限；generic 粘性表仍单独计数。`/metrics` 增加资源、别名和数据幂等预留数量。
 
 首版提供 Prometheus 基础计数和进程启动/停机结构化日志；OpenTelemetry、延迟直方图、被动熔断和完整访问日志尚未接入。主动健康检查串行执行，大规模实例部署前需要压测并改为有界并发。公共资源目录目前采用独立互斥锁，批量映射与并发测试已覆盖；大规模资源/列表查询和 A2A 高并发场景需进一步压测。设计文档中的全部生产运行保障不等于已经实现。
 

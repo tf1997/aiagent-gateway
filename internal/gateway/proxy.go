@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -42,17 +41,6 @@ func (g *Gateway) DataHandler() http.Handler {
 			return
 		}
 		g.requests.Add(1)
-		var caller *Caller
-		for i := range g.opts.Callers {
-			if tokenOK(r.Header.Get("Authorization"), g.opts.Callers[i].Token) {
-				caller = &g.opts.Callers[i]
-				break
-			}
-		}
-		if caller == nil {
-			problem(w, 401, "UNAUTHORIZED")
-			return
-		}
 		p := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 3)
 		if len(p) < 2 {
 			problem(w, 404, "NOT_FOUND")
@@ -64,8 +52,9 @@ func (g *Gateway) DataHandler() http.Handler {
 			problem(w, 404, "ROUTE_NOT_FOUND")
 			return
 		}
-		if !allowed(*caller, key) {
-			problem(w, 403, "FORBIDDEN")
+		caller := authenticateConsumer(rt, r.Header.Get("Authorization"))
+		if caller == nil {
+			problem(w, 401, "UNAUTHORIZED")
 			return
 		}
 		if !g.healthy.Load() {
@@ -154,11 +143,11 @@ func cleanHeaders(h http.Header) {
 		}
 	}
 }
-func upstreamHeaders(h http.Header, c Caller, e EndpointInterface) {
+func (g *Gateway) upstreamHeaders(h http.Header, c Caller, e EndpointInterface) {
 	cleanHeaders(h)
 	h.Set("X-Gateway-Caller-ID", c.ID)
 	if e.CredentialRef != "" {
-		h.Set("Authorization", "Bearer "+os.Getenv(e.CredentialRef))
+		h.Set("Authorization", "Bearer "+g.opts.Credentials[e.CredentialRef])
 	}
 }
 
@@ -246,7 +235,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, c Caller, l *lea
 			pr.Out.URL.Path = "/"
 		}
 		pr.SetURL(target)
-		upstreamHeaders(pr.Out.Header, c, l.iface)
+		g.upstreamHeaders(pr.Out.Header, c, l.iface)
 		pr.Out.Header.Del("Idempotency-Key")
 		pr.Out.Header.Del("X-Idempotency-Key")
 	}, ModifyResponse: func(res *http.Response) error {

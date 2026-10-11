@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -55,6 +54,7 @@ type Route struct {
 	Session        SessionPolicy   `json:"session_policy"`
 	Timeout        Timeout         `json:"timeout"`
 	Endpoints      []Endpoint      `json:"endpoints"`
+	Consumers      []Consumer      `json:"consumers,omitempty"`
 	AllowedMethods []string        `json:"allowed_methods,omitempty"`
 	Card           json.RawMessage `json:"agent_card,omitempty"`
 	Version        uint64          `json:"version"`
@@ -84,15 +84,21 @@ type snapshot struct {
 	Routes map[string]*Route
 }
 type Caller struct {
-	ID     string   `json:"id"`
-	Token  string   `json:"token"`
-	Routes []string `json:"routes"`
+	ID        string
+	reconcile bool
+}
+
+// Consumer is the persisted form. Plaintext tokens exist only in management
+// input, never in snapshots, receipts, or management responses.
+type Consumer struct {
+	ID        string `json:"id"`
+	TokenHash string `json:"token_hash"`
 }
 type Options struct {
 	dialContext                                          func(context.Context, string, string) (net.Conn, error)
 	StateSocket, WorkerID                                string
 	DataDir, AdminToken, PublicURL                       string
-	Callers                                              []Caller
+	Credentials                                          map[string]string
 	Initialize                                           bool
 	DeferBackground                                      bool
 	MaxSessions, MaxTasks, MaxInflight                   int
@@ -144,7 +150,7 @@ func validURL(s string) bool {
 	u, e := url.Parse(s)
 	return e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.Fragment == ""
 }
-func validate(c *Config) error {
+func validate(c *Config, credentials map[string]string) error {
 	if c.Schema != 2 {
 		return fmt.Errorf("unsupported schema_version")
 	}
@@ -157,6 +163,9 @@ func validate(c *Config) error {
 		}
 		ids[r.ID] = true
 		keys[r.Key] = true
+		if err := validateConsumers(r.Consumers); err != nil {
+			return err
+		}
 		if r.AgentType != "generic" && r.AgentType != "hermes" {
 			return fmt.Errorf("agent_type must be generic or hermes")
 		}
@@ -196,8 +205,8 @@ func validate(c *Config) error {
 				if iface.HealthURL != "" && !validURL(iface.HealthURL) {
 					return fmt.Errorf("invalid health_url")
 				}
-				if iface.CredentialRef != "" && os.Getenv(iface.CredentialRef) == "" {
-					return fmt.Errorf("missing credential environment variable")
+				if iface.CredentialRef != "" && credentials[iface.CredentialRef] == "" {
+					return fmt.Errorf("missing credential in YAML credentials")
 				}
 				if entry == "proxy" && (iface.ProtocolVersion != "" || iface.Tenant != "") {
 					return fmt.Errorf("proxy interface must not specify protocol_version or tenant")
@@ -267,14 +276,6 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 func problem(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
-}
-func allowed(c Caller, key string) bool {
-	for _, v := range c.Routes {
-		if v == key || v == "*" {
-			return true
-		}
-	}
-	return false
 }
 func sessionID(r *http.Request, route *Route) (string, error) {
 	s := r.Header.Get(route.Session.Header)

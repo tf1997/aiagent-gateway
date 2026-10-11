@@ -15,7 +15,7 @@ import (
 // still emits a conforming 1.0 stream and does not accept the 0.3 wire format.
 func (g *Gateway) hermesSubscriptionSeed(ctx context.Context, q rpc, c Caller, l *lease) ([]byte, error) {
 	get := rpc{JSONRPC: "2.0", ID: q.ID, Method: "GetTask", Params: map[string]any{"id": q.Params["id"], "historyLength": 0}}
-	req, err := a2aUpstreamRequest(ctx, get, c, l.iface)
+	req, err := g.a2aUpstreamRequest(ctx, get, c, l.iface)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +56,7 @@ func (g *Gateway) hermesImmediate(w http.ResponseWriter, r *http.Request, c Call
 	}
 	cancelOnDisconnect := context.AfterFunc(r.Context(), cancel)
 	q.Method = "SendStreamingMessage"
-	req, err := a2aUpstreamRequest(ctx, q, c, l.iface)
+	req, err := g.a2aUpstreamRequest(ctx, q, c, l.iface)
 	if err != nil {
 		cancelOnDisconnect()
 		cancel()

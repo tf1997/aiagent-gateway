@@ -50,16 +50,9 @@ func (g *Gateway) reconcileResource(ctx context.Context, ref resource) {
 	if rt == nil || !rt.Enabled {
 		return
 	}
-	var caller Caller
-	for _, c := range g.opts.Callers {
-		if c.ID == ref.Owner {
-			caller = c
-			break
-		}
-	}
-	if caller.ID == "" {
-		return
-	}
+	// Revoking access does not cancel upstream work; continue observing known
+	// resources using the stored owner, without re-enabling consumer access.
+	caller := Caller{ID: ref.Owner, reconcile: true}
 	if ref.Kind == a2aTask {
 		value, err := g.fetchA2ATask(ctx, caller, rt, ref, map[string]any{})
 		if err != nil || value == nil {
@@ -71,7 +64,7 @@ func (g *Gateway) reconcileResource(ctx context.Context, ref resource) {
 		return
 	}
 	g.discoverHermes(ctx, rt)
-	l, current, err := g.acquireResource(caller.ID, rt, ref.Kind, ref.ID)
+	l, current, err := g.acquireOwnedResource(caller.ID, rt, ref.Kind, ref.ID, true)
 	if err != nil {
 		return
 	}
@@ -99,7 +92,7 @@ func (g *Gateway) reconcileResource(ctx context.Context, ref resource) {
 	if err != nil {
 		return
 	}
-	upstreamHeaders(req.Header, caller, l.iface)
+	g.upstreamHeaders(req.Header, caller, l.iface)
 	client := &http.Client{Transport: g.transport(3000), CheckRedirect: noRedirect}
 	res, err := client.Do(req)
 	if err != nil {

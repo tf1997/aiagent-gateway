@@ -141,7 +141,7 @@ func (g *Gateway) readHermesSession(r *http.Request, l *lease, c Caller, ref res
 	if err != nil {
 		return nil, 0, err
 	}
-	upstreamHeaders(req.Header, c, l.iface)
+	g.upstreamHeaders(req.Header, c, l.iface)
 	client := &http.Client{Transport: g.transport(l.route.Timeout.ResponseHeaderMS), Timeout: 5 * time.Second, CheckRedirect: noRedirect}
 	res, err := client.Do(req)
 	if err != nil {

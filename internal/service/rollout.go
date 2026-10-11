@@ -1,6 +1,7 @@
 package service
 
 import (
+	"aiagent-gateway/internal/appconfig"
 	"aiagent-gateway/internal/gateway"
 	p "aiagent-gateway/internal/releaseprotocol"
 	"aiagent-gateway/internal/rollout"
@@ -38,7 +39,7 @@ func LoadDeployment(path string) (Deployment, error) {
 	if e == nil {
 		e = json.Unmarshal(b, &d)
 	}
-	if e == nil && (d.Version != 1 || d.Infrastructure == "" || d.InitialRelease == "") {
+	if e == nil && ((d.Version != 1 && d.Version != 2) || d.Infrastructure == "" || d.InitialRelease == "") {
 		e = fmt.Errorf("invalid deployment manifest")
 	}
 	if e == nil {
@@ -47,23 +48,24 @@ func LoadDeployment(path string) (Deployment, error) {
 	return d, e
 }
 func adminToken(path string) (string, error) {
-	raw, err := os.ReadFile(path)
+	c, err := appconfig.Load(path)
 	if err != nil {
 		return "", err
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if ok && key == "GATEWAY_ADMIN_TOKEN" {
-			value = strings.TrimSpace(value)
-			if len(value) > 1 && ((value[0] == '\'' && value[len(value)-1] == '\'') || (value[0] == '"' && value[len(value)-1] == '"')) {
-				value = value[1 : len(value)-1]
-			}
-			if value != "" {
-				return value, nil
-			}
-		}
+	return c.AdminToken, nil
+}
+
+// The packaged units and driver have fixed state paths. Reject incompatible
+// overrides before stopping services instead of initializing a different store.
+func validateSystemConfig(path string) error {
+	c, err := appconfig.Load(path)
+	if err != nil {
+		return err
 	}
-	return "", fmt.Errorf("missing GATEWAY_ADMIN_TOKEN")
+	if c.DataDir != filepath.Dir(dataPath) || c.StateSocket != StateSocket || c.EntrySocket != EntrySocket || c.ControlSocket != ControllerSocket || c.Deployment != DeploymentPath || c.RolloutData != RolloutData {
+		return fmt.Errorf("systemd installation requires the default absolute data, socket, deployment and rollout paths; see docs/CONFIGURATION.md")
+	}
+	return nil
 }
 func (m *manager) stageRelease() (string, error) {
 	b, err := os.ReadFile(m.executable)
@@ -85,12 +87,23 @@ func (m *manager) stageRelease() (string, error) {
 	return filepath.Join(ReleasesDir, id, "gateway"), nil
 }
 func (m *manager) installRollout(ctx context.Context, migrate bool) error {
+	if _, err := os.Stat(m.path("/etc/aiagent-gateway/gateway.env")); err == nil {
+		if _, err := os.Stat(m.path(configPath)); err != nil {
+			return fmt.Errorf("environment configuration is no longer supported; migrate gateway.env to gateway.yaml before installation (see docs/CONFIGURATION.md)")
+		}
+	}
+	if raw, err := os.ReadFile(m.path("/etc/systemd/system/aiagent-gateway-state.service")); err == nil && strings.Contains(string(raw), "EnvironmentFile=") {
+		return fmt.Errorf("environment-based infrastructure requires a maintenance migration to YAML; ordinary worker rollout cannot upgrade it (see docs/CONFIGURATION.md)")
+	}
 	artifact, err := m.stageRelease()
 	if err != nil {
 		return err
 	}
 	if _, err = os.Stat(m.path(DeploymentPath)); err == nil {
-		token, err := adminToken(m.path(envPath))
+		if err := validateSystemConfig(m.path(configPath)); err != nil {
+			return err
+		}
+		token, err := adminToken(m.path(configPath))
 		if err != nil {
 			return err
 		}
@@ -99,6 +112,9 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 		d, err := LoadDeployment(m.path(DeploymentPath))
 		if err != nil {
 			return err
+		}
+		if d.Version != 2 {
+			return fmt.Errorf("deployment requires a maintenance migration to YAML-aware infrastructure; see docs/CONFIGURATION.md")
 		}
 		if _, err := os.Stat(m.path(dataPath)); err != nil {
 			return fmt.Errorf("existing configuration missing; restore it before upgrading")
@@ -131,7 +147,7 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	envExists, err := exists(m.path(envPath))
+	configExists, err := exists(m.path(configPath))
 	if err != nil {
 		return err
 	}
@@ -139,19 +155,30 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 	if err != nil {
 		return err
 	}
-	if envExists && !migrate {
+	if configExists && dataExists && !migrate {
 		return fmt.Errorf("legacy installation requires a maintenance migration: install --migrate; existing in-memory resources cannot be transferred")
 	}
-	if envExists && !dataExists {
-		return fmt.Errorf("existing configuration is missing; restore it before migration")
+	if configExists {
+		if err := validateSystemConfig(m.path(configPath)); err != nil {
+			return err
+		}
 	}
-	if !envExists && dataExists {
+	if !dataExists {
+		for _, path := range []string{binaryPath, unitPath} {
+			if found, err := exists(m.path(path)); err != nil {
+				return err
+			} else if found {
+				return fmt.Errorf("existing configuration is missing; restore it before migration")
+			}
+		}
+	}
+	if !configExists && dataExists {
 		return fmt.Errorf("existing credentials are missing; restore them before installation")
 	}
 	if err = m.account(ctx); err != nil {
 		return err
 	}
-	if !envExists {
+	if !configExists {
 		raw, err := credentials()
 		if err != nil {
 			return err
@@ -159,11 +186,11 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 		if err = os.MkdirAll(m.path("/etc/aiagent-gateway"), 0700); err != nil {
 			return err
 		}
-		if err = atomicWrite(m.path(envPath), raw, 0600); err != nil {
+		if err = atomicWrite(m.path(configPath), raw, 0600); err != nil {
 			return err
 		}
 	}
-	if envExists {
+	if configExists && dataExists {
 		if err = m.run(ctx, "systemctl", "stop", Name+".service"); err != nil {
 			return err
 		}
@@ -197,7 +224,7 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 			return err
 		}
 	}
-	d := Deployment{Version: 1, Infrastructure: infra, InitialRelease: artifact, Policy: p.DefaultPolicy()}
+	d := Deployment{Version: 2, Infrastructure: infra, InitialRelease: artifact, Policy: p.DefaultPolicy()}
 	raw, _ := json.MarshalIndent(d, "", "  ")
 	if err = atomicWrite(m.path(DeploymentPath), raw, 0600); err != nil {
 		return err
@@ -213,7 +240,7 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 	if err = m.run(ctx, "systemctl", "enable", "--now", Name+".service"); err != nil {
 		return err
 	}
-	token, err := adminToken(m.path(envPath))
+	token, err := adminToken(m.path(configPath))
 	if err != nil {
 		return err
 	}
@@ -396,7 +423,7 @@ func (d *SystemdDriver) Freeze(ctx context.Context, value bool) error {
 	return err
 }
 func RolloutCommand(action string, out io.Writer) error {
-	token, err := adminToken(envPath)
+	token, err := adminToken(configPath)
 	if err != nil {
 		return err
 	}

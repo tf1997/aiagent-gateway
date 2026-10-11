@@ -502,7 +502,7 @@ func (h *hermesRequest) forward(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header = h.headers.Clone()
 	req.Header.Set("Content-Type", "application/json")
-	upstreamHeaders(req.Header, h.caller, h.lease.iface)
+	h.g.upstreamHeaders(req.Header, h.caller, h.lease.iface)
 	if h.execution.ID != "" && r.Method == "POST" {
 		if err := h.g.resources.update(h.execution, resourceUnknown); err != nil {
 			hermesError(w, err)

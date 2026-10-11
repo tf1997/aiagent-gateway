@@ -168,7 +168,7 @@ func writeA2APage(w http.ResponseWriter, id json.RawMessage, key string, s a2aLi
 	writeJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"tasks": s.tasks[offset:end], "nextPageToken": next, "pageSize": s.size, "totalSize": len(s.tasks)}})
 }
 func (g *Gateway) fetchA2ATask(ctx context.Context, c Caller, rt *Route, ref resource, p map[string]any) (map[string]any, error) {
-	l, res, err := g.acquireResource(c.ID, rt, a2aTask, ref.ID)
+	l, res, err := g.acquireOwnedResource(c.ID, rt, a2aTask, ref.ID, c.reconcile)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +180,7 @@ func (g *Gateway) fetchA2ATask(ctx context.Context, c Caller, rt *Route, ref res
 	q := rpc{JSONRPC: "2.0", ID: json.RawMessage(`"list"`), Method: "GetTask", Params: params}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	req, err := a2aUpstreamRequest(ctx, q, c, l.iface)
+	req, err := g.a2aUpstreamRequest(ctx, q, c, l.iface)
 	if err != nil {
 		return nil, err
 	}

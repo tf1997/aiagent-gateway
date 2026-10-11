@@ -1,6 +1,7 @@
 package service
 
 import (
+	"aiagent-gateway/internal/appconfig"
 	"bytes"
 	"context"
 	"errors"
@@ -103,12 +104,12 @@ func TestInstallUpgradeRollback(t *testing.T) {
 	if !f.active || !f.enabled {
 		t.Fatal("service not enabled and active")
 	}
-	originalEnv := read(t, m.path(envPath))
+	originalEnv := read(t, m.path(configPath))
 	originalState := read(t, m.path(dataPath))
 	if bytes.Contains(originalEnv, []byte("GATEWAY_INIT=")) {
 		t.Fatal("persistent initialization enabled")
 	}
-	info, _ := os.Stat(m.path(envPath))
+	info, _ := os.Stat(m.path(configPath))
 	if info.Mode().Perm() != 0600 {
 		t.Fatal("insecure credential permissions")
 	}
@@ -122,7 +123,7 @@ func TestInstallUpgradeRollback(t *testing.T) {
 	if string(read(t, m.path(binaryPath))) != "binary-v2" {
 		t.Fatal("binary not upgraded")
 	}
-	if !bytes.Equal(originalEnv, read(t, m.path(envPath))) || !bytes.Equal(originalState, read(t, m.path(dataPath))) {
+	if !bytes.Equal(originalEnv, read(t, m.path(configPath))) || !bytes.Equal(originalState, read(t, m.path(dataPath))) {
 		t.Fatal("upgrade changed credentials or data")
 	}
 	os.WriteFile(m.executable, []byte("binary-v3"), 0755)
@@ -133,7 +134,7 @@ func TestInstallUpgradeRollback(t *testing.T) {
 	if string(read(t, m.path(binaryPath))) != "binary-v2" || !f.active || !f.enabled {
 		t.Fatal("rollback did not restore service")
 	}
-	if !bytes.Equal(originalEnv, read(t, m.path(envPath))) || !bytes.Equal(originalState, read(t, m.path(dataPath))) {
+	if !bytes.Equal(originalEnv, read(t, m.path(configPath))) || !bytes.Equal(originalState, read(t, m.path(dataPath))) {
 		t.Fatal("rollback changed state")
 	}
 }
@@ -171,7 +172,7 @@ func TestUninstallRetainsData(t *testing.T) {
 	if !bytes.Equal(original, read(t, m.path(dataPath))) {
 		t.Fatal("data lost")
 	}
-	read(t, m.path(envPath))
+	read(t, m.path(configPath))
 	// Reinstall after uninstall reuses the retained data and credentials.
 	if err := m.install(ctx); err != nil {
 		t.Fatal(err)
@@ -202,8 +203,25 @@ func TestCredentialTokensDistinct(t *testing.T) {
 	if bytes.Equal(a, b) {
 		t.Fatal("credentials reused")
 	}
-	if !bytes.Contains(a, []byte("GATEWAY_CALLERS='[{")) {
-		t.Fatal("invalid systemd EnvironmentFile quoting")
+	c, err := appconfig.Parse(a)
+	if err != nil || c.AdminToken == "" || bytes.Contains(a, []byte("callers:")) {
+		t.Fatal("invalid YAML credentials", err)
+	}
+}
+
+func TestUnitsUsePrivateYAMLConfig(t *testing.T) {
+	files, err := units.ReadDir("units")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		raw, err := units.ReadFile("units/" + file.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte("EnvironmentFile=")) || !bytes.Contains(raw, []byte("LoadCredential=gateway.yaml:"+configPath)) || !bytes.Contains(raw, []byte("--config=%d/gateway.yaml")) {
+			t.Fatal("unit does not use private YAML configuration", file.Name())
+		}
 	}
 }
 func TestSymlinkRejected(t *testing.T) {

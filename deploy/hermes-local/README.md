@@ -62,7 +62,7 @@ python3 deploy/hermes-local/gateway.py up
 python3 deploy/hermes-local/check_gateway.py
 ```
 
-`gateway.py up` 编译并在后台启动独立本机网关，读取 `.runtime/gateway.env` 中的上游凭据，生成随机管理 Token 和两个仅能访问 `hermes-local` 的调用方 Token。它将 `.runtime/gateway-route.json` 注册到管理接口，读取 Hermes Card 后配置 A2A 1.0 JSONRPC 和 streaming 能力，并把模型请求响应头超时设为 180 秒、流空闲超时设为 120 秒、总时长设为 300 秒。
+`gateway.py up` 编译并在后台启动独立本机网关，读取本机部署保存的 `.runtime/gateway.env` 上游凭据，写入 `.runtime/gateway/gateway.yaml` 的 credentials 并通过 --config 启动，生成随机管理 Token 和两个消费者 Token。YAML 只保存管理 Token 和上游 credentials；消费者通过 POST /admin/v1/routes 写入 hermes-local 的 consumers，动态生效。它将 `.runtime/gateway-route.json` 注册到管理接口，读取 Hermes Card 后配置 A2A 1.0 JSONRPC 和 streaming 能力，并把模型请求响应头超时设为 180 秒、流空闲超时设为 120 秒、总时长设为 300 秒。
 
 | 项目 | 地址或文件 |
 | --- | --- |
@@ -70,6 +70,7 @@ python3 deploy/hermes-local/check_gateway.py
 | 网关 A2A | `http://127.0.0.1:18080/agents/hermes-local/a2a` |
 | 网关 Card | `http://127.0.0.1:18080/agents/hermes-local/.well-known/agent-card.json` |
 | 管理接口 | `http://127.0.0.1:19090/admin/v1` |
+| 网关启动配置 | `.runtime/gateway/gateway.yaml`，使用 YAML 兼容的 JSON 表示，权限 0600 |
 | 本机调用凭据 | `.runtime/gateway/client.env`，包含管理 Token 和主调用方 Token |
 | 二进制、日志、路由数据 | `.runtime/gateway/gateway`、`gateway.log`、`data/` |
 | 联调结果 | `.runtime/gateway/integration-all.json` |
@@ -99,7 +100,7 @@ curl --noproxy '*' -fsS \
 
 HTTP 路由使用 `agent_type: "hermes"`。先 POST `/api/sessions` 创建会话，再保存响应中的 `session.id`；它是公开 ID，不等于创建时的客户端别名。原生资源按路径/正文中的公开 ID 续接，Chat Completions 需显式传已创建会话的 `X-Hermes-Session-Id`。多个引用同时出现时必须一致。A2A 仍要求 `A2A-Version: 1.0`。不同智能体/profile 分别配置独立 route 和上游端点；同一路由的多个端点应是同一智能体的副本。详见 [HTTP 契约](../../docs/HERMES_HTTP_API.md)。
 
-如需接入自行运行的网关，在该进程启动时加载 `.runtime/gateway.env`，通过管理 API 提交 `.runtime/gateway-route.json`；再依据上游 Card 配置路由的 `agent_card.capabilities.streaming` 和模型调用超时。上述 `gateway.py` 管理的是自己的独立网关。
+如需接入自行运行的网关，将 `.runtime/gateway.env` 的凭据复制到该进程 YAML 的 `credentials` 字典中（保留键名），启动时传入 `--config`，通过管理 API 提交 `.runtime/gateway-route.json`；再依据上游 Card 配置路由的 `agent_card.capabilities.streaming` 和模型调用超时。上述 `gateway.py` 管理的是自己的独立网关。
 
 这里的端点用于网关在宿主机运行的情况。若网关也在容器内运行，应使用容器网络服务地址，不能将容器内的 `127.0.0.1` 当成宿主机。
 

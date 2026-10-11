@@ -142,13 +142,13 @@ func (c *sharedClient) release(id string) func() {
 	var once sync.Once
 	return func() { once.Do(func() { _ = c.call("release", sharedRequest{Lease: id}, nil); c.active.Add(-1) }) }
 }
-func (g *Gateway) sharedAcquire(owner, key, sid, forced, entry string, expected *Route) (*lease, error) {
+func (g *Gateway) sharedAcquire(owner, key, sid, forced, entry string, expected *Route, background bool) (*lease, error) {
 	var out sharedResponse
 	rev := uint64(0)
 	if expected != nil {
 		rev = expected.Version
 	}
-	err := g.remote.call("acquire", sharedRequest{Owner: owner, Route: key, Session: sid, Endpoint: forced, Entry: entry, Revision: rev}, &out)
+	err := g.remote.call("acquire", sharedRequest{Owner: owner, Route: key, Session: sid, Endpoint: forced, Entry: entry, Revision: rev, Flag: background}, &out)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (g *Gateway) refreshShared() error {
 	}
 	current := g.current.Load()
 	if current == nil || current.Config.Revision != out.Config.Revision {
-		if err := validate(out.Config); err != nil {
+		if err := validate(out.Config, g.opts.Credentials); err != nil {
 			return err
 		}
 		g.current.Store(build(*out.Config))
@@ -326,7 +326,9 @@ func (s *SharedServer) execute(q sharedRequest) (out sharedResponse) {
 			break
 		}
 		var l *lease
-		l, err = g.acquire(q.Owner, q.Route, q.Session, q.Endpoint, q.Entry, rt)
+		g.lifecycle.RLock()
+		l, err = g.acquireLocked(q.Owner, q.Route, q.Session, q.Endpoint, q.Entry, rt, q.Flag)
+		g.lifecycle.RUnlock()
 		if err == nil {
 			if q.Session != "" {
 				sh := g.shard(sessionKey{q.Owner, rt.ID, q.Session, q.Entry})

@@ -58,7 +58,7 @@ func (g *Gateway) discoverHermes(ctx context.Context, rt *Route) {
 			if err != nil {
 				return
 			}
-			upstreamHeaders(req.Header, Caller{}, iface)
+			g.upstreamHeaders(req.Header, Caller{}, iface)
 			client := &http.Client{Transport: g.transport(3000), CheckRedirect: noRedirect}
 			res, err := client.Do(req)
 			if err != nil {
@@ -129,7 +129,7 @@ func (g *Gateway) discoverA2A(ctx context.Context, rt *Route) {
 			if err != nil {
 				return
 			}
-			upstreamHeaders(req.Header, Caller{}, iface)
+			g.upstreamHeaders(req.Header, Caller{}, iface)
 			client := &http.Client{Transport: g.transport(3000), CheckRedirect: noRedirect}
 			res, err := client.Do(req)
 			if err != nil {

@@ -4,7 +4,7 @@
 
 ## 1. 范围和约束
 
-以 DESIGN.md 为架构依据，用 Go 1.24+ 标准库实现单节点网关。Route 直接内嵌 Endpoint，不引入独立服务池、数据库或 Redis。配置从 HTTP API 更新并原子落盘；会话、A2A context 和任务映射仅在内存，重启失效。
+以 DESIGN.md 为架构依据，用 Go 1.24+ 实现（YAML 解析使用 go.yaml.in/yaml/v3）单节点网关。Route 直接内嵌 Endpoint，不引入独立服务池、数据库或 Redis。配置从 HTTP API 更新并原子落盘；会话、A2A context 和任务映射仅在内存，重启失效。
 
 交付可运行的首版：独立管理/数据监听、Bearer 认证、路由和实例 CRUD、配置版本/ETag、创建幂等、原子文件恢复、HTTP/SSE 代理、加权调度、会话绑定、健康检查、排空和优雅停机。A2A 仅支持 1.0 JSON-RPC HTTP/SSE，方法为 SendMessage、SendStreamingMessage、GetTask、ListTasks、CancelTask、SubscribeToTask；不支持推送通知。规范固定到 https://github.com/a2aproject/A2A/tree/v1.0.1 。
 
@@ -12,7 +12,7 @@
 
 | 文件 | 职责 |
 | --- | --- |
-| cmd/gateway/main.go | 环境变量、双端口启动、信号和停机 |
+| cmd/gateway/main.go、internal/appconfig | YAML 配置、双端口启动、信号和停机 |
 | internal/gateway/model.go | 配置、校验、错误与响应结构 |
 | internal/gateway/store.go | 目录锁、原子落盘、不可变快照、幂等/审计 |
 | internal/gateway/admin.go | 管理 CRUD、版本条件、分页与状态 |
@@ -29,11 +29,11 @@
 
 新绑定先持生命周期读锁，再加载快照、获取会话分片锁和路由调度锁，所有路径保持相同顺序。网络请求期间不持这些锁。运行状态由稳定的 routeID/endpointID 索引，配置更新不迁移有效绑定。A2A 标识映射须先完成再向客户端输出。
 
-创建路由可一次提交多个实例；后续通过实例接口增删改。PATCH 采用 JSON merge patch 语义，路由 PATCH 不接受 endpoints；ID、版本不可改。更新和删除需 If-Match；创建支持 Idempotency-Key，同一身份/键对应不同请求返回冲突。审计与幂等记录有界。
+`POST /admin/v1/routes` 按正文 key 创建或更新：创建返回 201，更新返回 200。更新采用 JSON merge patch 语义保留未提供的路由字段；提供 endpoints 时整体替换列表，同名实例保留 ID，未命名实例仅按完全相同的 interfaces 匹配，歧义拒绝。所有被移除或改址的实例仍检查引用。GET/DELETE 路径支持 key，优先于兼容内部 ID；POST 更新和按 key 删除可选 If-Match。原 PATCH、实例 DELETE、按内部 ID 删除路由仍要求 If-Match；路由 PATCH 不接受 endpoints。ID、版本不可改。POST 支持 Idempotency-Key，同键不同原始请求返回冲突；重放返回原状态码和响应，不重复更新。审计与幂等记录有界。
 
 ## 4. 认证与运行配置
 
-环境变量提供监听地址、数据目录、管理 Token 和调用方凭据，密钥不落入路由文件。调用方配置包含 ID、Token、可访问的 route key；身份隔离由服务器配置决定。上游凭据通过环境变量引用，代理移除客户端 Authorization、Cookie 和不可信身份头后注入可信身份/上游凭据。
+YAML 文件提供监听地址、数据目录、管理 Token 和上游凭据；消费者通过路由 consumers 动态登记，只持久化 Token 哈希。消费者 ID 是资源隔离键，每条路由独立授权。上游凭据通过 YAML credentials 字典引用，代理移除客户端 Authorization、Cookie 和不可信身份头后注入可信身份/上游凭据。
 
 首次运行必须显式初始化；已有文件不存在或损坏时不能隐式清空。ready 要求有效快照及持久化健康。管理和诊断端口默认仅绑定本机。
 
@@ -63,11 +63,11 @@
 
 `internal/service` 管理系统安装与服务生命周期；unit 通过 `go:embed` 编译进二进制。入口提供 install/uninstall/start/stop/restart/status 子命令，无参数仍以前台方式运行。仅 Linux 支持服务管理；除 status 外需要 root。命令通过 os/exec 直接传递参数，不调用 shell 或执行凭据文件。
 
-安装使用文件锁避免并发变更。先读入候选二进制和备份，再停止旧服务、原子替换二进制及 unit；启动失败恢复旧文件并尝试恢复原来的运行状态。首次创建独立管理及调用方凭据，升级不修改凭据和数据。普通 systemd 服务不设置 GATEWAY_INIT；安装时才调用一次性初始化 unit。启动检查通过 ExecStartPost 调用 --check-ready；主进程监听失败返回非零退出码，使 Restart=on-failure 生效。
+安装使用文件锁避免并发变更。先读入候选二进制和备份，再停止旧服务、原子替换二进制及 unit；启动失败恢复旧文件并尝试恢复原来的运行状态。首次创建独立管理凭据，升级不修改凭据和数据。普通 systemd 服务不设置初始化选项；安装时才调用一次性初始化 unit。启动检查通过 ExecStartPost 调用 --check-ready；主进程监听失败返回非零退出码，使 Restart=on-failure 生效。
 
 `--init-only` 完成配置创建或验证后退出，不监听端口；`--check-ready` 根据配置的数据监听地址访问本机 /readyz，最长等待 15 秒，不打开配置存储锁。服务默认预留 30 秒停止时间，覆盖网关 20 秒优雅停机窗口。
 
-控制流程测试使用临时文件系统和替代的命令执行器，验证首次安装、升级、回滚、状态丢失保护、卸载保留数据和嵌入资源；不调用真实 systemctl 或修改系统账户。真实 Linux 集成需验证 service 用户权限、EnvironmentFile 解析、重启/开机启动、端口冲突及进程异常后的重启行为。
+控制流程测试使用临时文件系统和替代的命令执行器，验证首次安装、升级、回滚、状态丢失保护、卸载保留数据和嵌入资源；不调用真实 systemctl 或修改系统账户。真实 Linux 集成需验证 service 用户权限、LoadCredential 读取 YAML、重启/开机启动、端口冲突及进程异常后的重启行为。
 
 ## 9. P1：配置模型与统一入口（2026-09-30）
 
@@ -133,3 +133,15 @@ P4 的本地协议实现已完成；后续已补齐第 12 节所列单实例 Her
 单进程前台模式继续使用原内存绑定；灰度 worker 通过本机 RPC 共享路由/资源/幂等/并发额度。资源与会话日志由单写者提交，公共 ID 在持久提交后输出。普通业务升级不重启状态服务；状态代次变化会拒绝旧 worker 写入。短期列表快照跨 worker 共享，但不跨状态服务重启。
 
 通用状态机和入口不依赖 Agent 包；systemd driver 及 Agent 适配位于本项目。安装与迁移仍需 Linux 实机验收，不以本机控制流程模拟或交叉构建作为已部署证明。
+
+## 15. YAML 进程配置（2026-10-11）
+
+启动配置统一由 internal/appconfig 严格读取 YAML，默认 gateway.yaml，显式 --config 指定路径。所有前台角色、init-only 和 check-ready 共用该入口；不再读取 GATEWAY_* 或上游凭据环境变量。相对路径基于配置文件目录，credentials 以独立字典传递，路由配置仍由管理 API 维护。
+
+安装器仅生成 root 专属管理和上游配置 gateway.yaml，systemd 使用 LoadCredential 提供私有副本；新部署清单 version 为 2，拒绝将 YAML worker 直接发到旧环境变量基础组件。配置文件、unit 和旧部署维护迁移见 [配置说明](docs/CONFIGURATION.md)。
+
+## 16. 动态路由消费者（2026-10-11）
+
+YAML callers 和 Options.Callers 已移除。POST 创建/upsert 及兼容 PATCH 接受 consumers；省略保留、数组整体替换、空数组撤销。每项 id 为稳定 owner，token 仅为写入字段；保存 SHA-256 哈希，管理响应和幂等回执只包含 ID。新建无消费者路由默认拒绝业务访问。
+
+数据面与共享状态入口基于目标路由快照认证，worker 每次请求刷新配置；配置成功提交后新 Token 立即生效。轮换保持 owner，不迁移会话/任务；动态并发计数保留活跃请求并在归零时回收。撤销不取消既有执行，后台核查可继续使用持久资源的 owner，但不会恢复其公开访问权限。

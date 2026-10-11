@@ -1,5 +1,37 @@
 # 验证记录
 
+## 路由动态消费者（2026-10-11）
+
+YAML callers 和静态 Options.Callers 已完全移除；消费者由路由管理 POST/upsert/PATCH 的 consumers 字段动态管理。配置仅持久化 Token 哈希，管理响应及幂等回执不返回 Token/哈希；消费者 ID 作为稳定资源归属。
+
+新增测试覆盖轮换/撤销即时生效、无消费者拒绝访问、同 Token 的路由隔离、保持原会话身份、重启恢复及幂等重放不复活旧凭据、错误输入/容量/持久化失败原子性、灰度入口和 worker 刷新、撤销后后台核查、并发轮换和在途额度不重置。YAML 严格校验测试确认 callers 字段被拒绝。
+
+`go test ./...`、`go test -race ./...`、`go vet ./...` 全部通过。真实 state/entry/双 worker 联调已验证动态 Token 轮换后旧 Token 返回 401、新 Token 续接原 Agent、全部撤销后拒绝访问，并保留 5% 分配、全量切流及回退检查。文档 Shell/JSON 示例、链接、OpenAPI 引用和 Python 语法检查通过。本轮未改动运行中服务或实际凭据。
+
+## YAML 运行配置（2026-10-11）
+
+网关前台、init-only/check-ready 和四个角色统一读取 --config 指定的 YAML；默认 gateway.yaml。GATEWAY_* 启动变量与上游凭据环境变量已移除。上游凭据通过 YAML credentials 字典校验和注入，路由 config.json 不保存 Token。
+
+- `go test ./...`、`go test -race ./...`、`go vet ./...` 全部通过。
+- 配置回归覆盖相对路径、默认值、未知/重复字段、多文档、null、非法容量/监听、凭据错误脱敏、环境变量不覆盖/不回退，以及 --init-only 不覆盖损坏路由存储。
+- 凭据回归覆盖普通 HTTP、A2A 和主动健康检查；仅在环境中存在的 credential_ref 在管理写入和重启加载时均被拒绝，Open 后凭据字典保持独立快照。
+- systemd unit 改为 LoadCredential + --config，生成 YAML 权限保持 0600；模拟安装测试覆盖保留凭据、旧环境配置拒绝升级、固定内部路径校验。需要 systemd 247+，尚未进行 Linux 实机安装。
+- `python3 deploy/rollout-local/check.py /tmp/aiagent-gateway-yaml-check` 通过：实际 state、entry、两个 worker 均从文件启动，验证 5% 分配、全量切换、会话归属、失败 POST 不重放及回退。
+- Linux amd64 / arm64 静态交叉构建通过；Python 脚本语法、文档 Shell/JSON 和链接、OpenAPI 引用、git diff --check 通过。
+
+未修改本机运行中的 Hermes、其凭据或系统服务，也未执行远程发布。环境变量版灰度基础组件需要维护迁移，步骤见 [YAML 配置说明](docs/CONFIGURATION.md)。
+
+## 路由按 key 管理（2026-10-11）
+
+本次支持 `POST /admin/v1/routes` 以正文 key 创建或更新，以及按 key GET/DELETE。更新保留未提供字段，完整实例列表按名称保持身份，实例移除/改址仍检查引用。旧内部 ID 和 PATCH 入口继续兼容。
+
+- `go test ./...`、`go test -race ./...`、`go vet ./...` 全部通过。
+- 新增回归覆盖：201/200 区分、部分更新、可选 ETag、删除、重启后幂等重放状态码、旧 schema 1 回执兼容、实例排序/权重/排空保持绑定、共享资源引用保护、失败原子性、发布冻结及并发首次创建。
+- HTTP/A2A 集成验证：给已有普通聊天路由通过 POST 增加 A2A 接口，原聊天请求与新 A2A 任务请求均成功，实例 ID 保持不变，有任务时拒绝移除接口。
+- 使用说明与 README 的 JSON 示例、bash/zsh 语法、本地链接检查通过；管理 OpenAPI JSON、路径参数和 operationId 唯一性检查通过。
+
+以上为本机自动测试，未执行 Linux 安装或远程发布。灰度部署的公共管理接口由 state-server 承载；已部署环境启用本次管理功能需要更新该基础组件，不能仅灰度替换 worker。
+
 
 ## 自动灰度升级实现（2026-10-06）
 

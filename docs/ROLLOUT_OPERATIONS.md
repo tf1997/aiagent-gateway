@@ -74,13 +74,15 @@ uname -m
 
 安装前确认：
 
-- 服务器运行 systemd，具备 `systemctl`、`getent`、`groupadd`、`useradd`，操作账号可使用 sudo。
+- 服务器运行 systemd 247+（支持 LoadCredential），具备 `systemctl`、`getent`、`groupadd`、`useradd`，操作账号可使用 sudo。
 - 首次安装时外部端口及内部 A/B 端口可用；已有部署升级时，稳定槽位已占用自己的端口属正常情况，候选槽位端口不能被其他程序占用。端口表见下文，可用 `sudo ss -ltnp` 核对监听进程。
 - 已有灰度部署的 `rollout status --json` 可读取，当前没有未结束发布；处于 `RECOVERY_REQUIRED` 时先处理该任务。
 - 新版兼容当前基础组件的控制/状态协议，且灰度中新建资源仍可被旧版读取。需要升级基础组件或变更不兼容状态格式时，安排独立维护迁移。
 - 灰度窗口内有足够的新会话和相应 HTTP/SSE/A2A 请求。只有存量会话或没有流量，可能无法取得候选成功样本；先确定发布策略，不在验证中修改配置。
 
 ## 首次安装或维护迁移
+
+新版只读取 gateway.yaml，YAML 不再配置 callers；消费者随路由 POST 的 consumers 动态写入。旧环境变量版本的基础组件和 worker 必须一起维护迁移，普通 install 会拒绝旧部署清单；先按 [YAML 配置迁移](CONFIGURATION.md#从环境变量版本迁移) 准备文件和基线。
 
 ### 全新服务器
 
@@ -94,16 +96,16 @@ sudo systemctl list-units --all 'aiagent-gateway*'
 curl --fail --silent --show-error http://127.0.0.1:8080/readyz
 ```
 
-安装器创建系统用户、凭据、配置及服务，启动基础组件和初始 worker，并启用服务组开机启动。凭据保存在 `/etc/aiagent-gateway/gateway.env`，不输出到终端。首次没有旧版本，就绪后直接开放服务，不执行双版本真实流量验证。
+安装器创建系统用户、凭据、配置及服务，启动基础组件和初始 worker，并启用服务组开机启动。凭据保存在 `/etc/aiagent-gateway/gateway.yaml`，不输出到终端。首次没有旧版本，就绪后直接开放服务，不执行双版本真实流量验证。
 
-确认 `phase` 为 `COMPLETED`，再按 [README](../README.md) 配置路由和 Agent 凭据，验证实际代理与会话续接。`/readyz` 只提供入口就绪信号，不能证明业务调用成功；使用非默认监听地址时替换命令中的地址。首次部署如果还需要修改环境文件和监听配置，应在正式接入流量前完成并验证。
+确认 `phase` 为 `COMPLETED`，再按 [README](../README.md) 配置路由、路由消费者和 Agent 凭据，验证实际代理与会话续接。`/readyz` 只提供入口就绪信号，不能证明业务调用成功；使用非默认监听地址时替换命令中的地址。首次部署如果还需要修改环境文件和监听配置，应在正式接入流量前完成并验证。
 
 ### 旧单进程部署首次迁移
 
 没有灰度部署文件、仍使用原单进程服务的机器，需要维护窗口：
 
 1. 暂停新业务请求，等待原请求及网关本地后台工作结束；另行安排仍需旧内存映射访问的 Agent 任务。
-2. 保存原二进制、`gateway.env`、`config.json` 和原 systemd unit 的备份，保留其文件权限。备份配置不能恢复进程内会话。
+2. 保存原二进制、旧 `gateway.env`、新 `gateway.yaml`、`config.json` 和原 systemd unit 的备份，保留其文件权限。备份配置不能恢复进程内会话。
 3. 在新产物目录执行迁移命令。
 4. 确认发布完成和各组件状态，使用新的会话验证代理后恢复业务流量。
 
@@ -269,7 +271,7 @@ generic SSE 需要可识别的结束信号，例如 `[DONE]`；没有结束定�
 | 发布控制器 | aiagent-gateway-rollout.service | 受保护的 Unix Socket |
 | A/B 业务实例 | aiagent-gateway-worker-a.service / worker-b.service | 18080/18081；内部管理 19090/19091，均为 loopback |
 
-公共地址继续通过 `GATEWAY_LISTEN`、`GATEWAY_ADMIN_LISTEN`、`GATEWAY_PUBLIC_URL` 配置。内置 systemd driver 的 A/B 端口目前固定，部署前须确保空闲，端口冲突会拒绝候选启动。前台 worker 模式允许使用 `--listen`、`--admin` 指定其他内部端口。
+公共地址通过 YAML 的 `listen`、`admin_listen`、`public_url` 配置。内置 systemd driver 的 A/B 端口目前固定，部署前须确保空闲，端口冲突会拒绝候选启动。前台 worker 模式允许使用 `--listen`、`--admin` 指定其他内部端口。
 
 ```sh
 sudo journalctl -u aiagent-gateway-rollout -f

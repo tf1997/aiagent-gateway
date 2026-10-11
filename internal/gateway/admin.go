@@ -97,7 +97,14 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			w.Header().Set("ETag", receipt.ETag)
-			writeJSON(w, 201, receipt.Body)
+			status := http.StatusCreated
+			// An upsert update returns an existing route at version >= 2.
+			// Derive the status from the saved ETag to keep the on-disk
+			// receipt format readable by older workers during a rollout.
+			if len(p) == 3 && receipt.ETag != tag(1) {
+				status = http.StatusOK
+			}
+			writeJSON(w, status, receipt.Body)
 			return
 		}
 	}
@@ -106,12 +113,7 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 	status := 200
 	ri := -1
 	if len(p) >= 4 {
-		for i := range c.Routes {
-			if c.Routes[i].ID == p[3] {
-				ri = i
-				break
-			}
-		}
+		ri = adminRouteIndex(c.Routes, p[3])
 		if ri < 0 {
 			problem(w, 404, "ROUTE_NOT_FOUND")
 			return
@@ -127,11 +129,55 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case len(p) == 3 && r.Method == "POST":
-		rt := Route{Enabled: true, Session: SessionPolicy{Enabled: true, AcceptA2AContext: true}, Endpoints: []Endpoint{}}
-		if err := decodeRouteInput(raw, &rt); err != nil {
+		fields, err := object(raw)
+		if err != nil {
 			rejectInput(err)
 			return
 		}
+		var key string
+		if json.Unmarshal(fields["key"], &key) != nil || !validKey.MatchString(key) {
+			reject(400, "INVALID_ROUTE_KEY")
+			return
+		}
+		if has(fields, "id", "version") {
+			reject(400, "ID_AND_VERSION_READ_ONLY")
+			return
+		}
+		for i := range c.Routes {
+			if c.Routes[i].Key == key {
+				ri = i
+				break
+			}
+		}
+		if ri >= 0 {
+			if r.Header.Get("If-Match") != "" && !match(w, r, c.Routes[ri].Version) {
+				return
+			}
+			rt, err := g.upsertRoute(c.Routes[ri], fields)
+			if err != nil {
+				rejectInput(err)
+				return
+			}
+			c.Routes[ri] = rt
+			result, version = rt, rt.Version
+			break
+		}
+		if r.Header.Get("If-Match") != "" {
+			reject(412, "VERSION_CONFLICT")
+			return
+		}
+		rt := Route{Enabled: true, Session: SessionPolicy{Enabled: true, AcceptA2AContext: true}, Endpoints: []Endpoint{}}
+		consumers, _, err := g.consumerInput(fields, nil)
+		if err != nil {
+			rejectInput(err)
+			return
+		}
+		input, _ := json.Marshal(fields)
+		if err := decodeRouteInput(input, &rt); err != nil {
+			rejectInput(err)
+			return
+		}
+		rt.Consumers = consumers
 		if rt.ID != "" || rt.Version != 0 {
 			reject(400, "ID_AND_VERSION_READ_ONLY")
 			return
@@ -150,7 +196,8 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 		status = 201
 	case len(p) == 4 && (r.Method == "PATCH" || r.Method == "DELETE"):
 		rt := &c.Routes[ri]
-		if !match(w, r, rt.Version) {
+		// Key-based deletion is unconditional unless the caller supplies an ETag.
+		if (r.Method == "PATCH" || p[3] != rt.Key || r.Header.Get("If-Match") != "") && !match(w, r, rt.Version) {
 			return
 		}
 		version = rt.Version + 1
@@ -174,7 +221,13 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			old := *rt
-			patch, err := routePatchInput(raw, rt)
+			consumers, supplied, err := g.consumerInput(fields, old.Consumers)
+			if err != nil {
+				rejectInput(err)
+				return
+			}
+			input, _ := json.Marshal(fields)
+			patch, err := routePatchInput(input, rt)
 			if err != nil {
 				rejectInput(err)
 				return
@@ -182,6 +235,9 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 			if err := merge(patch, rt); err != nil {
 				rejectInput(err)
 				return
+			}
+			if supplied {
+				rt.Consumers = consumers
 			}
 			changed := old.Key != rt.Key || old.AgentType != rt.AgentType
 			for _, entry := range old.Expose {
@@ -279,9 +335,12 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 		reject(405, "METHOD_NOT_ALLOWED")
 		return
 	}
-	if err := validate(&c); err != nil {
+	if err := validate(&c, g.opts.Credentials); err != nil {
 		reject(400, err.Error())
 		return
+	}
+	if rt, ok := result.(Route); ok {
+		result = publicRoute(&rt)
 	}
 	c.Revision++
 	c.Audit = append(c.Audit, Audit{At: time.Now().UTC(), Actor: "admin", Action: r.Method, Path: r.URL.Path, Revision: c.Revision})
@@ -411,22 +470,22 @@ func page[T any](items []T, r *http.Request) map[string]any {
 func (g *Gateway) readAdmin(w http.ResponseWriter, r *http.Request, p []string) {
 	s := g.current.Load()
 	if len(p) == 3 {
-		writeJSON(w, 200, page(s.Config.Routes, r))
+		routes := make([]routeView, 0, len(s.Config.Routes))
+		for i := range s.Config.Routes {
+			routes = append(routes, publicRoute(&s.Config.Routes[i]))
+		}
+		writeJSON(w, 200, page(routes, r))
 		return
 	}
-	var rt *Route
-	for i := range s.Config.Routes {
-		if s.Config.Routes[i].ID == p[3] {
-			rt = &s.Config.Routes[i]
-		}
-	}
-	if rt == nil {
+	ri := adminRouteIndex(s.Config.Routes, p[3])
+	if ri < 0 {
 		problem(w, 404, "ROUTE_NOT_FOUND")
 		return
 	}
+	rt := &s.Config.Routes[ri]
 	if len(p) == 4 {
 		w.Header().Set("ETag", tag(rt.Version))
-		writeJSON(w, 200, rt)
+		writeJSON(w, 200, publicRoute(rt))
 		return
 	}
 	if len(p) == 5 && p[4] == "endpoints" {

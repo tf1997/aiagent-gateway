@@ -2,12 +2,14 @@
 package service
 
 import (
+	"aiagent-gateway/internal/appconfig"
 	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go.yaml.in/yaml/v3"
 	"io"
 	"os"
 	"os/exec"
@@ -24,7 +26,7 @@ var units embed.FS
 
 const Name = "aiagent-gateway"
 const binaryPath = "/usr/local/bin/aiagent-gateway"
-const envPath = "/etc/aiagent-gateway/gateway.env"
+const configPath = appconfig.SystemPath
 const dataPath = "/var/lib/aiagent-gateway/config.json"
 const unitPath = "/etc/systemd/system/aiagent-gateway.service"
 const initPath = "/etc/systemd/system/aiagent-gateway-init.service"
@@ -53,7 +55,7 @@ func (m *manager) run(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 
-// Manage never executes shell snippets or sources an environment file.
+// Manage never executes shell snippets or sources configuration as shell code.
 func Manage(action string, output io.Writer) error {
 	if runtime.GOOS != "linux" {
 		return fmt.Errorf("systemd service management requires Linux")
@@ -205,14 +207,18 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	return dir.Sync()
 }
 func credentials() ([]byte, error) {
-	var b [64]byte
+	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return nil, err
 	}
-	return []byte(fmt.Sprintf("GATEWAY_DATA_DIR=/var/lib/aiagent-gateway\nGATEWAY_LISTEN=:8080\nGATEWAY_ADMIN_LISTEN=127.0.0.1:9090\nGATEWAY_PUBLIC_URL=http://localhost:8080\nGATEWAY_ADMIN_TOKEN=%s\nGATEWAY_CALLERS='[{\"id\":\"default\",\"token\":\"%s\",\"routes\":[\"*\"]}]'\n", hex.EncodeToString(b[:32]), hex.EncodeToString(b[32:]))), nil
+	c := appconfig.Defaults()
+	c.DataDir = "/var/lib/aiagent-gateway"
+	c.PublicURL = "http://localhost:8080"
+	c.AdminToken = hex.EncodeToString(b[:])
+	return yaml.Marshal(c)
 }
 func (m *manager) install(ctx context.Context) (result error) {
-	envExists, err := exists(m.path(envPath))
+	configExists, err := exists(m.path(configPath))
 	if err != nil {
 		return err
 	}
@@ -224,15 +230,15 @@ func (m *manager) install(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
-	fresh := !envExists
+	fresh := !configExists
 	if fresh && (dataExists || binExists) {
-		return fmt.Errorf("existing installation has no %s; restore it before upgrading", envPath)
+		return fmt.Errorf("existing installation has no %s; restore it before upgrading", configPath)
 	}
 	if !fresh && !dataExists {
 		return fmt.Errorf("existing installation has no %s; restore it before upgrading", dataPath)
 	}
-	if envExists {
-		if _, err := snapshot(m.path(envPath)); err != nil {
+	if configExists {
+		if _, err := snapshot(m.path(configPath)); err != nil {
 			return err
 		}
 	}
@@ -298,7 +304,7 @@ func (m *manager) install(ctx context.Context) (result error) {
 		}
 		if fresh {
 			if present, err := exists(m.path(dataPath)); err == nil && !present {
-				if err := os.Remove(m.path(envPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				if err := os.Remove(m.path(configPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 					rollbackErrors = append(rollbackErrors, err)
 				}
 			}
@@ -325,11 +331,11 @@ func (m *manager) install(ctx context.Context) (result error) {
 		if err != nil {
 			return err
 		}
-		if err = os.MkdirAll(filepath.Dir(m.path(envPath)), 0700); err != nil {
+		if err = os.MkdirAll(filepath.Dir(m.path(configPath)), 0700); err != nil {
 			return err
 		}
 		changed = true
-		if err = atomicWrite(m.path(envPath), raw, 0600); err != nil {
+		if err = atomicWrite(m.path(configPath), raw, 0600); err != nil {
 			return err
 		}
 	}
@@ -368,7 +374,7 @@ func (m *manager) install(ctx context.Context) (result error) {
 	if err = m.run(ctx, "systemctl", "enable", Name+".service"); err != nil {
 		return err
 	}
-	fmt.Fprintf(m.output, "Installed and enabled %s.service\nConfiguration and credentials: %s (root only)\nState: /var/lib/aiagent-gateway\nLogs: journalctl -u %s -f\n", Name, envPath, Name)
+	fmt.Fprintf(m.output, "Installed and enabled %s.service\nConfiguration and credentials: %s (root only)\nState: /var/lib/aiagent-gateway\nLogs: journalctl -u %s -f\n", Name, configPath, Name)
 	return nil
 }
 func (m *manager) uninstall(ctx context.Context) error {

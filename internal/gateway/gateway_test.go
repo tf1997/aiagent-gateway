@@ -18,8 +18,12 @@ import (
 )
 
 func testOptions(dir string) Options {
-	return Options{DataDir: dir, AdminToken: "admin-secret", Callers: []Caller{{ID: "alice", Token: "alice-secret", Routes: []string{"*"}}, {ID: "bob", Token: "bob-secret", Routes: []string{"*"}}}, Initialize: true, dialContext: testDial, PublicURL: "http://localhost:8080"}
+	return Options{DataDir: dir, AdminToken: "admin-secret", Credentials: map[string]string{"UPSTREAM_TEST_TOKEN": "upstream-secret", "TEST_PROXY_KEY": "proxy-key", "TEST_A2A_KEY": "a2a-key", "TEST_HEALTH_KEY": "health-key"}, Initialize: true, dialContext: testDial, PublicURL: "http://localhost:8080"}
 }
+func testConsumers() []map[string]string {
+	return []map[string]string{{"id": "alice", "token": "alice-secret"}, {"id": "bob", "token": "bob-secret"}}
+}
+
 func setup(t *testing.T) *Gateway {
 	t.Helper()
 	g, err := Open(testOptions(t.TempDir()))
@@ -45,7 +49,7 @@ func create(t *testing.T, g *Gateway, protocol string, urls ...string) Route {
 	for _, u := range urls {
 		eps = append(eps, map[string]any{"url": u, "weight": 100})
 	}
-	v := map[string]any{"key": "test", "protocol": protocol, "endpoints": eps}
+	v := map[string]any{"consumers": testConsumers(), "key": "test", "protocol": protocol, "endpoints": eps}
 	if protocol == "a2a" {
 		v["agent_card"] = map[string]any{"name": "test", "description": "test", "capabilities": map[string]any{"streaming": true}, "version": "1", "skills": []any{}, "defaultInputModes": []string{"text/plain"}, "defaultOutputModes": []string{"text/plain"}}
 	}
@@ -201,7 +205,6 @@ func TestProxyStreamingAndCancellation(t *testing.T) {
 	defer up.Close()
 	g := setup(t)
 	rt := create(t, g, "proxy", up.URL+"/base")
-	t.Setenv("UPSTREAM_TEST_TOKEN", "upstream-secret")
 	w := admin(t, g, "PATCH", "/admin/v1/routes/"+rt.ID+"/endpoints/"+rt.Endpoints[0].ID, `{"credential_ref":"UPSTREAM_TEST_TOKEN"}`, `"1"`, "")
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())
@@ -414,7 +417,7 @@ func TestCallerIsolationAndLimits(t *testing.T) {
 	}
 	a.release()
 	b.release()
-	if g.inflight.Load() != 0 || g.callerCounts["alice"].Load() != 0 {
+	if g.inflight.Load() != 0 || len(g.callerCounts) != 0 {
 		t.Fatal("concurrency slot leaked")
 	}
 }

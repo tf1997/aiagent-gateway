@@ -32,12 +32,12 @@ func rolloutManager(t *testing.T) (*manager, *fakeSystem) {
 }
 func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 	m, system := rolloutManager(t)
-	for path, body := range map[string]string{envPath: "GATEWAY_ADMIN_TOKEN=unchanged-secret\n", dataPath: `{"schema_version":2,"routes":[]}`, binaryPath: "old CLI"} {
+	for path, body := range map[string]string{configPath: "data_dir: /var/lib/aiagent-gateway\nadmin_token: unchanged-secret\n", dataPath: `{"schema_version":2,"routes":[]}`, binaryPath: "old CLI"} {
 		if err := atomicWrite(m.path(path), []byte(body), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	d := Deployment{Version: 1, Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
+	d := Deployment{Version: 2, Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
 	raw, _ := json.Marshal(d)
 	atomicWrite(m.path(DeploymentPath), raw, 0600)
 	if err := os.MkdirAll(filepath.Dir(m.path(ControllerSocket)), 0700); err != nil {
@@ -79,7 +79,7 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 	if filepath.Base(filepath.Dir(artifact)) != hex.EncodeToString(sum[:]) {
 		t.Fatal("release not immutable")
 	}
-	if string(read(t, m.path(envPath))) != "GATEWAY_ADMIN_TOKEN=unchanged-secret\n" || string(read(t, m.path(binaryPath))) != "old CLI" {
+	if string(read(t, m.path(configPath))) != "data_dir: /var/lib/aiagent-gateway\nadmin_token: unchanged-secret\n" || string(read(t, m.path(binaryPath))) != "old CLI" {
 		t.Fatal("upgrade replaced stable infrastructure or credentials")
 	}
 	for _, call := range system.calls {
@@ -93,7 +93,7 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 }
 func TestLegacyMigrationIsExplicit(t *testing.T) {
 	m, system := rolloutManager(t)
-	atomicWrite(m.path(envPath), []byte("GATEWAY_ADMIN_TOKEN=secret"), 0600)
+	atomicWrite(m.path(configPath), []byte("GATEWAY_ADMIN_TOKEN=secret"), 0600)
 	atomicWrite(m.path(dataPath), []byte(`{"schema_version":2}`), 0600)
 	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "--migrate") {
 		t.Fatal("legacy installation silently restarted", err)
@@ -111,6 +111,46 @@ func TestReleaseStagingRejectsHashMutation(t *testing.T) {
 	os.WriteFile(m.path(artifact), []byte("changed"), 0755)
 	if _, err = m.stageRelease(); err == nil {
 		t.Fatal("mutated release accepted")
+	}
+}
+
+func TestEnvironmentDeploymentRejectedBeforeMutation(t *testing.T) {
+	m, system := rolloutManager(t)
+	if err := atomicWrite(m.path("/etc/aiagent-gateway/gateway.env"), []byte("GATEWAY_ADMIN_TOKEN=old-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "gateway.yaml") {
+		t.Fatal("environment deployment accepted", err)
+	}
+	if len(system.calls) != 0 {
+		t.Fatal("existing services changed", system.calls)
+	}
+	if _, err := os.Stat(m.path(configPath)); !os.IsNotExist(err) {
+		t.Fatal("old credentials replaced")
+	}
+	if _, err := os.Stat(m.path(ReleasesDir)); !os.IsNotExist(err) {
+		t.Fatal("release staged before migration check")
+	}
+}
+
+func TestSystemYAMLRejectsUnsupportedPaths(t *testing.T) {
+	m, _ := rolloutManager(t)
+	raw, err := credentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(m.path(configPath), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSystemConfig(m.path(configPath)); err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.Replace(raw, []byte("data_dir: /var/lib/aiagent-gateway"), []byte("data_dir: ./different"), 1)
+	if err := atomicWrite(m.path(configPath), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSystemConfig(m.path(configPath)); err == nil {
+		t.Fatal("installer accepted a path inconsistent with units")
 	}
 }
 func TestRolloutUnitsBindImmutableRelease(t *testing.T) {
@@ -131,13 +171,13 @@ func TestRolloutUnitsBindImmutableRelease(t *testing.T) {
 }
 func TestUninstallKeepsRecoveryArtifacts(t *testing.T) {
 	m, _ := rolloutManager(t)
-	for path, body := range map[string]string{DeploymentPath: `{"version":1}`, envPath: "secret", dataPath: "config", binaryPath: "CLI", unitPath: masterUnit} {
+	for path, body := range map[string]string{DeploymentPath: `{"version":1}`, configPath: "secret", dataPath: "config", binaryPath: "CLI", unitPath: masterUnit} {
 		atomicWrite(m.path(path), []byte(body), 0600)
 	}
 	if err := m.uninstallRollout(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{DeploymentPath, envPath, dataPath} {
+	for _, path := range []string{DeploymentPath, configPath, dataPath} {
 		if _, err := os.Stat(m.path(path)); err != nil {
 			t.Fatal("recovery data removed", path)
 		}

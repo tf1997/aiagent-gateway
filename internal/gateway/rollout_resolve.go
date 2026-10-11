@@ -11,17 +11,6 @@ import (
 
 func (g *Gateway) resolveRollout(q releaseprotocol.Request) releaseprotocol.Resolution {
 	h := http.Header(q.Header)
-	var caller *Caller
-	for i := range g.opts.Callers {
-		c := &g.opts.Callers[i]
-		if tokenOK(h.Get("Authorization"), c.Token) {
-			caller = c
-			break
-		}
-	}
-	if caller == nil {
-		return releaseprotocol.Resolution{Status: 401, Error: "UNAUTHORIZED"}
-	}
 	parts := strings.SplitN(strings.TrimPrefix(q.Path, "/"), "/", 3)
 	if len(parts) < 2 || (parts[0] != "agents" && parts[0] != "proxy" && parts[0] != "a2a") {
 		return releaseprotocol.Resolution{Status: 404, Error: "NOT_FOUND"}
@@ -30,8 +19,9 @@ func (g *Gateway) resolveRollout(q releaseprotocol.Request) releaseprotocol.Reso
 	if rt == nil || !rt.Enabled {
 		return releaseprotocol.Resolution{Status: 404, Error: "ROUTE_NOT_FOUND"}
 	}
-	if !allowed(*caller, rt.Key) {
-		return releaseprotocol.Resolution{Status: 403, Error: "FORBIDDEN"}
+	caller := authenticateConsumer(rt, h.Get("Authorization"))
+	if caller == nil {
+		return releaseprotocol.Resolution{Status: 401, Error: "UNAUTHORIZED"}
 	}
 	suffix := ""
 	if len(parts) == 3 {

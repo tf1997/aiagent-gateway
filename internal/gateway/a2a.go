@@ -285,7 +285,7 @@ func (g *Gateway) a2a(w http.ResponseWriter, r *http.Request, c Caller, rt *Rout
 			return
 		}
 	}
-	req, err := a2aUpstreamRequest(ctx, q, c, l.iface)
+	req, err := g.a2aUpstreamRequest(ctx, q, c, l.iface)
 	if err != nil {
 		rpcError(w, q.ID, -32603, "Invalid upstream")
 		return
@@ -377,7 +377,7 @@ func (g *Gateway) a2a(w http.ResponseWriter, r *http.Request, c Caller, rt *Rout
 	_, _ = w.Write(out)
 }
 
-func a2aUpstreamRequest(ctx context.Context, q rpc, c Caller, iface EndpointInterface) (*http.Request, error) {
+func (g *Gateway) a2aUpstreamRequest(ctx context.Context, q rpc, c Caller, iface EndpointInterface) (*http.Request, error) {
 	// Public routes have no tenant. Upstream tenant is deployment configuration only.
 	params := make(map[string]any, len(q.Params)+1)
 	for k, v := range q.Params {
@@ -399,6 +399,6 @@ func a2aUpstreamRequest(ctx context.Context, q rpc, c Caller, iface EndpointInte
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("A2A-Version", "1.0")
-	upstreamHeaders(req.Header, c, iface)
+	g.upstreamHeaders(req.Header, c, iface)
 	return req, nil
 }

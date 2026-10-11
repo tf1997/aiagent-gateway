@@ -3,7 +3,7 @@
   "info": {
     "title": "AI Agent Gateway Administration",
     "version": "0.2.0",
-    "description": "Single-node schema 2 administration. Legacy schema 1 create/update input remains supported where unambiguous; GET returns schema 2. The file uses JSON syntax, which is valid YAML. A2A supports protocol 1.0 only (specification release v1.0.1); upgrade upstreams before changing old A2A configurations."
+    "description": "Single-node schema 2 administration. Legacy schema 1 create/update input remains supported where unambiguous; GET returns schema 2. The file uses JSON syntax, which is valid YAML. A2A supports protocol 1.0 only (specification release v1.0.1); upgrade upstreams before changing old A2A configurations. Consumer tokens are configured dynamically per route, not in process YAML; old consumers-less route configurations deny business access until consumers are registered."
   },
   "servers": [
     {
@@ -168,7 +168,7 @@
         "operationId": "get_admin_v1_routes"
       },
       "post": {
-        "summary": "Atomically create route and endpoints",
+        "summary": "Create or update a route by body key",
         "parameters": [
           {
             "name": "Idempotency-Key",
@@ -177,12 +177,21 @@
               "type": "string",
               "maxLength": 256
             },
-            "description": "Retained for the most recent 1000 creates; identical raw request required"
+            "description": "Retained for the most recent 1000 POST operations; replay requires identical URL and raw body and returns the original status and response."
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional exact route ETag. Requires the key to exist at that version; otherwise 412."
           }
         ],
         "responses": {
           "201": {
-            "description": "Success",
+            "description": "New route created",
             "content": {
               "application/json": {
                 "schema": {
@@ -288,6 +297,24 @@
                 }
               }
             }
+          },
+          "200": {
+            "description": "Existing route updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Route"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Resource version for detail/create/update responses"
+              }
+            }
           }
         },
         "requestBody": {
@@ -297,7 +324,7 @@
               "schema": {
                 "oneOf": [
                   {
-                    "$ref": "#/components/schemas/Route"
+                    "$ref": "#/components/schemas/RouteUpsert"
                   },
                   {
                     "$ref": "#/components/schemas/LegacyRoute"
@@ -307,20 +334,22 @@
             }
           }
         },
-        "operationId": "post_admin_v1_routes"
+        "operationId": "post_admin_v1_routes",
+        "description": "Required body key selects a route. New keys create (201); existing keys update (200) with JSON merge patch semantics for route fields: omitted fields are preserved. Supplied endpoints replace the entire list. Unique endpoint names preserve identity; unnamed endpoints match only identical interfaces, and ambiguous matches return 409. Endpoint objects are complete configurations with creation defaults, not patches. Removing or changing referenced endpoint identities returns 409. If-Match is optional for updates; a stale value or a precondition on an absent route returns 412. Internal id/version fields are read-only. Mutations persist atomically and are blocked during rollouts. Consumers can be created, rotated and revoked dynamically in the same atomic write. Access changes apply to new HTTP/A2A requests and shared workers without restarting. Preserve consumers by omitting the field; consumers:[] revokes all access. GET and mutation responses contain only consumer IDs."
       }
     },
-    "/admin/v1/routes/{id}": {
+    "/admin/v1/routes/{key}": {
       "get": {
-        "summary": "Get route and ETag",
+        "summary": "Get route by key and its ETag",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           }
         ],
         "responses": {
@@ -433,18 +462,19 @@
             }
           }
         },
-        "operationId": "get_admin_v1_routes_id"
+        "operationId": "get_admin_v1_routes_key"
       },
       "patch": {
         "summary": "Update route policy, excluding endpoints",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "If-Match",
@@ -583,27 +613,29 @@
             }
           }
         },
-        "operationId": "patch_admin_v1_routes_id"
+        "operationId": "patch_admin_v1_routes_key",
+        "description": "Compatibility update for route policies only; If-Match remains required. Prefer POST /admin/v1/routes with key in the body."
       },
       "delete": {
-        "summary": "Delete unreferenced route and its endpoints",
+        "summary": "Delete an unreferenced route by key",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "If-Match",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             },
-            "description": "Exact ETag from resource GET"
+            "description": "Optional for a route key; required for the legacy internal-ID form. Exact route ETag if supplied."
           }
         ],
         "responses": {
@@ -717,20 +749,22 @@
             }
           }
         },
-        "operationId": "delete_admin_v1_routes_id"
+        "operationId": "delete_admin_v1_routes_key",
+        "description": "Key-based deletion does not require If-Match. If supplied, it must match the current route ETag. The legacy internal-ID form still requires If-Match. Referenced routes return 409; unknown routes return 404."
       }
     },
-    "/admin/v1/routes/{id}/endpoints": {
+    "/admin/v1/routes/{key}/endpoints": {
       "get": {
         "summary": "List route endpoints",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "offset",
@@ -877,18 +911,19 @@
             }
           }
         },
-        "operationId": "get_admin_v1_routes_id_endpoints"
+        "operationId": "get_admin_v1_routes_key_endpoints"
       },
       "post": {
         "summary": "Add endpoint",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "Idempotency-Key",
@@ -897,7 +932,7 @@
               "type": "string",
               "maxLength": 256
             },
-            "description": "Retained for the most recent 1000 creates; identical raw request required"
+            "description": "Retained for the most recent 1000 POST operations; replay requires identical URL and raw body and returns the original status and response."
           }
         ],
         "responses": {
@@ -1027,20 +1062,21 @@
             }
           }
         },
-        "operationId": "post_admin_v1_routes_id_endpoints"
+        "operationId": "post_admin_v1_routes_key_endpoints"
       }
     },
-    "/admin/v1/routes/{id}/endpoints/{endpointID}": {
+    "/admin/v1/routes/{key}/endpoints/{endpointID}": {
       "get": {
         "summary": "Get endpoint and ETag",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "endpointID",
@@ -1161,18 +1197,19 @@
             }
           }
         },
-        "operationId": "get_admin_v1_routes_id_endpoints_endpointID"
+        "operationId": "get_admin_v1_routes_key_endpoints_endpointID"
       },
       "patch": {
         "summary": "Update endpoint, enforcing binding constraints",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "endpointID",
@@ -1319,18 +1356,19 @@
             }
           }
         },
-        "operationId": "patch_admin_v1_routes_id_endpoints_endpointID"
+        "operationId": "patch_admin_v1_routes_key_endpoints_endpointID"
       },
       "delete": {
         "summary": "Delete unreferenced endpoint",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "endpointID",
@@ -1461,20 +1499,21 @@
             }
           }
         },
-        "operationId": "delete_admin_v1_routes_id_endpoints_endpointID"
+        "operationId": "delete_admin_v1_routes_key_endpoints_endpointID"
       }
     },
-    "/admin/v1/routes/{id}/sessions": {
+    "/admin/v1/routes/{key}/sessions": {
       "get": {
         "summary": "List in-memory sessions",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "offset",
@@ -1629,20 +1668,21 @@
             }
           }
         },
-        "operationId": "get_admin_v1_routes_id_sessions"
+        "operationId": "get_admin_v1_routes_key_sessions"
       }
     },
-    "/admin/v1/routes/{id}/tasks": {
+    "/admin/v1/routes/{key}/tasks": {
       "get": {
         "summary": "List A2A tasks from the resource directory",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "offset",
@@ -1814,7 +1854,7 @@
             }
           }
         },
-        "operationId": "get_admin_v1_routes_id_tasks"
+        "operationId": "get_admin_v1_routes_key_tasks"
       }
     },
     "/admin/v1/config/status": {
@@ -2106,17 +2146,18 @@
         "operationId": "get_metrics"
       }
     },
-    "/admin/v1/routes/{id}/runs": {
+    "/admin/v1/routes/{key}/runs": {
       "get": {
         "summary": "List registered Hermes run resources",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "offset",
@@ -2288,20 +2329,21 @@
             }
           }
         },
-        "operationId": "get_admin_v1_routes_id_runs"
+        "operationId": "get_admin_v1_routes_key_runs"
       }
     },
-    "/admin/v1/routes/{id}/resources": {
+    "/admin/v1/routes/{key}/resources": {
       "get": {
         "summary": "List resource ownership, lifecycle and references",
         "parameters": [
           {
-            "name": "id",
+            "name": "key",
             "in": "path",
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Route key. Internal route IDs remain accepted for compatibility; a matching key takes precedence."
           },
           {
             "name": "offset",
@@ -2487,7 +2529,7 @@
             }
           }
         },
-        "operationId": "get_admin_v1_routes_id_resources"
+        "operationId": "get_admin_v1_routes_key_resources"
       }
     }
   },
@@ -2634,6 +2676,14 @@
               ]
             },
             "description": "Enabled entries beneath /agents/{key}; does not infer upstream capabilities."
+          },
+          "consumers": {
+            "type": "array",
+            "readOnly": true,
+            "items": {
+              "$ref": "#/components/schemas/Consumer"
+            },
+            "description": "Consumer IDs only. Tokens and token hashes are never exposed in administrative responses."
           }
         },
         "required": [
@@ -2698,6 +2748,14 @@
               ]
             },
             "description": "Enabled entries beneath /agents/{key}; does not infer upstream capabilities."
+          },
+          "consumers": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/ConsumerInput"
+            },
+            "description": "Dynamic route-scoped consumers. Omitted on update: preserve. Supplied: replace the entire list. Empty array revokes all access. New routes without consumers reject all business requests. Tokens are hashed before persistence."
           }
         },
         "additionalProperties": false
@@ -2801,7 +2859,7 @@
           },
           "credential_ref": {
             "type": "string",
-            "description": "Environment variable containing an upstream Bearer token"
+            "description": "Key in gateway YAML credentials containing an upstream Bearer token"
           },
           "health_url": {
             "type": "string",
@@ -2873,6 +2931,14 @@
           "version": {
             "type": "integer",
             "readOnly": true
+          },
+          "consumers": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/ConsumerInput"
+            },
+            "description": "Dynamic route-scoped consumers. Omitted on update: preserve. Supplied: replace the entire list. Empty array revokes all access. New routes without consumers reject all business requests. Tokens are hashed before persistence."
           }
         },
         "required": [
@@ -2897,7 +2963,7 @@
           },
           "credential_ref": {
             "type": "string",
-            "description": "Environment variable holding this interface’s upstream Bearer token."
+            "description": "Key in gateway YAML credentials holding this interface’s upstream Bearer token. Environment variables are not read."
           },
           "health_url": {
             "type": "string",
@@ -2928,7 +2994,7 @@
           },
           "credential_ref": {
             "type": "string",
-            "description": "Environment variable holding this interface’s upstream Bearer token.",
+            "description": "Key in gateway YAML credentials holding this interface’s upstream Bearer token. Environment variables are not read.",
             "nullable": true
           },
           "health_url": {
@@ -3027,6 +3093,14 @@
             "type": "object",
             "additionalProperties": true,
             "description": "Required for A2A: name, description, version, skills, defaultInputModes, defaultOutputModes; capabilities.streaming controls streaming support"
+          },
+          "consumers": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/ConsumerInput"
+            },
+            "description": "Dynamic route-scoped consumers. Omitted on update: preserve. Supplied: replace the entire list. Empty array revokes all access. New routes without consumers reject all business requests. Tokens are hashed before persistence."
           }
         },
         "additionalProperties": false,
@@ -3063,7 +3137,7 @@
           },
           "credential_ref": {
             "type": "string",
-            "description": "Environment variable containing an upstream Bearer token"
+            "description": "Key in gateway YAML credentials containing an upstream Bearer token"
           },
           "health_url": {
             "type": "string",
@@ -3401,6 +3475,117 @@
           "upstream_task_id",
           "terminal"
         ]
+      },
+      "RouteUpsert": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "balance_policy": {
+            "type": "string",
+            "enum": [
+              "weighted_round_robin"
+            ]
+          },
+          "session_policy": {
+            "$ref": "#/components/schemas/SessionPolicy"
+          },
+          "timeout": {
+            "$ref": "#/components/schemas/Timeout"
+          },
+          "allowed_methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agent_card": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional descriptive Card fields. When provided requires name, description, version, skills, defaultInputModes and defaultOutputModes. Omitted Card uses route key and empty skills; streaming defaults false. Public URL, security and supported protocol are generated by the gateway."
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Endpoint"
+            }
+          },
+          "agent_type": {
+            "type": "string",
+            "enum": [
+              "generic",
+              "hermes"
+            ],
+            "default": "generic",
+            "description": "Hermes adapter supports Sessions, Runs, Chat Completions and Responses with caller-scoped resource ownership. Unsupported paths return HTTP 501."
+          },
+          "expose": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "proxy",
+                "a2a"
+              ]
+            },
+            "description": "Enabled entries beneath /agents/{key}; does not infer upstream capabilities."
+          },
+          "consumers": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/ConsumerInput"
+            },
+            "description": "Dynamic route-scoped consumers. Omitted on update: preserve. Supplied: replace the entire list. Empty array revokes all access. New routes without consumers reject all business requests. Tokens are hashed before persistence."
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false,
+        "description": "Create requires key and expose (or use LegacyRoute). Existing key updates only supplied route fields. Optional endpoints is a complete replacement array; use stable, unique names to retain endpoint IDs and bindings."
+      },
+      "ConsumerInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$",
+            "description": "Stable owner identity; keep it unchanged when rotating tokens to retain sessions and resources."
+          },
+          "token": {
+            "type": "string",
+            "writeOnly": true,
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "Required for a new consumer; omit to retain an existing consumer token. Never returned. Must differ from admin_token."
+          }
+        }
+      },
+      "Consumer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
       }
     }
   }

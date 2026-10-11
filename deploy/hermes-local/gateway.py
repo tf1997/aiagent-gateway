@@ -79,16 +79,15 @@ def upstream_keys():
     return result
 
 
-def environment(creds):
-    env = os.environ.copy()
-    env.pop("GATEWAY_INIT", None)
-    env.update(upstream_keys())
-    env.update({"GATEWAY_ADMIN_TOKEN": creds["admin_token"],
-                "GATEWAY_CALLERS": json.dumps(creds["callers"]),
-                "GATEWAY_DATA_DIR": str(STATE / "data"),
-                "GATEWAY_LISTEN": "127.0.0.1:18080", "GATEWAY_ADMIN_LISTEN": "127.0.0.1:19090",
-                "GATEWAY_PUBLIC_URL": DATA_URL})
-    return env
+def write_config(creds):
+    # JSON is a YAML subset; avoid a Python YAML dependency in the helper.
+    config = {"admin_token": creds["admin_token"],
+              "credentials": upstream_keys(), "data_dir": str(STATE / "data"),
+              "listen": "127.0.0.1:18080", "admin_listen": "127.0.0.1:19090",
+              "public_url": DATA_URL}
+    path = STATE / "gateway.yaml"
+    write_private(path, json.dumps(config, indent=2) + "\n")
+    return str(path)
 
 
 def saved_pid():
@@ -112,6 +111,7 @@ def register():
     creds = credentials()
     requested = load(RUNTIME / "gateway-route.json")
     requested["agent_type"] = "hermes"
+    requested["consumers"] = [{"id": c["id"], "token": c["token"]} for c in creds["callers"]]
     if requested["key"] != "hermes-local":
         raise RuntimeError("This isolated runner expects route key hermes-local")
     a2a = requested["endpoints"][0]["interfaces"]["a2a"]
@@ -143,6 +143,9 @@ def register():
         if patch:
             route = require(ADMIN_URL + "/admin/v1/routes/" + route["id"], creds["admin_token"],
                             patch, "PATCH", {"If-Match": '"' + str(route["version"]) + '"'})
+    # Register/rotate access dynamically; plaintext tokens are never in the response.
+    route = require(ADMIN_URL + "/admin/v1/routes", creds["admin_token"],
+                    {"key": requested["key"], "consumers": requested["consumers"]})
     write_private(STATE / "registered-route.json", json.dumps(route, indent=2) + "\n")
     print(f"Route ready: {DATA_URL}/agents/hermes-local (HTTP + A2A)", flush=True)
 
@@ -169,14 +172,14 @@ def start():
             for name in ("local-client", "isolation-check")]}
         write_private(path, json.dumps(c, indent=2) + "\n")
         write_private(STATE / "client.env", f"GATEWAY_ADMIN_TOKEN={c['admin_token']}\nGATEWAY_CALLER_TOKEN={c['callers'][0]['token']}\n")
-    env = environment(credentials())
+    config_path = write_config(credentials())
     build_env = os.environ.copy()
     build_env["GOCACHE"] = "/private/tmp/aiagent-gateway-go-cache" if sys.platform == "darwin" else "/tmp/aiagent-gateway-go-cache"
     subprocess.run(["go", "build", "-o", str(BINARY), "./cmd/gateway"], cwd=REPO, env=build_env, check=True)
-    subprocess.run([str(BINARY), "--init-only"], cwd=REPO, env=env, check=True)
+    subprocess.run([str(BINARY), "--config", config_path, "--init-only"], cwd=REPO, check=True)
     fd = os.open(STATE / "gateway.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "ab", buffering=0) as log:
-        process = subprocess.Popen([str(BINARY)], cwd=REPO, env=env, stdin=subprocess.DEVNULL,
+        process = subprocess.Popen([str(BINARY), "--config", config_path], cwd=REPO, stdin=subprocess.DEVNULL,
                                    stdout=log, stderr=log, start_new_session=True)
     write_private(STATE / "process.json", json.dumps({"pid": process.pid, "binary": str(BINARY)}) + "\n")
     for _ in range(40):

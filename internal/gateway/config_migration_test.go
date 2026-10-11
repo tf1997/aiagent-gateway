@@ -160,7 +160,7 @@ func TestConfigSchemasAndLegacyA2A(t *testing.T) {
 	card := `,"agent_card":{"name":"test","description":"test","version":"1","skills":[],"defaultInputModes":[],"defaultOutputModes":[]}`
 	a2a := bytes.Replace(raw, []byte(`"protocol": "proxy"`), []byte(`"protocol": "a2a"`+card), 1)
 	c, migrated, err := loadConfig(a2a)
-	if err != nil || !migrated || validate(&c) != nil || c.Routes[0].Endpoints[0].Interfaces["a2a"].ProtocolVersion != "1.0" {
+	if err != nil || !migrated || validate(&c, nil) != nil || c.Routes[0].Endpoints[0].Interfaces["a2a"].ProtocolVersion != "1.0" {
 		t.Fatal("legacy A2A migration", err)
 	}
 	for _, raw := range [][]byte{

@@ -204,7 +204,7 @@ func createHermesRoute(t *testing.T, g *Gateway, urls ...string) Route {
 	for _, u := range urls {
 		endpoints = append(endpoints, map[string]any{"interfaces": map[string]any{"proxy": map[string]any{"url": u}}})
 	}
-	body, _ := json.Marshal(map[string]any{"key": "test", "agent_type": "hermes", "expose": []string{"proxy"}, "endpoints": endpoints})
+	body, _ := json.Marshal(map[string]any{"consumers": testConsumers(), "key": "test", "agent_type": "hermes", "expose": []string{"proxy"}, "endpoints": endpoints})
 	w := admin(t, g, "POST", "/admin/v1/routes", string(body), "", "")
 	if w.Code != 201 {
 		t.Fatal(w.Body.String())

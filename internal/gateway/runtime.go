@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"net/http"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -80,13 +79,13 @@ func (g *Gateway) state(route, id string) *endpointState {
 func (g *Gateway) acquire(owner, key, sid, forced, entry string, expected *Route) (*lease, error) {
 	g.lifecycle.RLock()
 	defer g.lifecycle.RUnlock()
-	return g.acquireLocked(owner, key, sid, forced, entry, expected)
+	return g.acquireLocked(owner, key, sid, forced, entry, expected, false)
 }
 
 // Caller holds lifecycle.RLock. Never call with the resource directory locked.
-func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected *Route) (*lease, error) {
+func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected *Route, background bool) (*lease, error) {
 	if g.remote != nil {
-		return g.sharedAcquire(owner, key, sid, forced, entry, expected)
+		return g.sharedAcquire(owner, key, sid, forced, entry, expected, background)
 	}
 	if !g.healthy.Load() {
 		return nil, fmt.Errorf("GATEWAY_NOT_READY")
@@ -102,20 +101,20 @@ func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected 
 		g.inflight.Add(-1)
 		return nil, fmt.Errorf("CONCURRENCY_LIMIT")
 	}
-	callerCount := g.callerCounts[owner]
-	if callerCount == nil {
+	if !background && !routeConsumer(rt, owner) {
 		g.inflight.Add(-1)
 		return nil, fmt.Errorf("UNKNOWN_CALLER")
 	}
-	if callerCount.Add(1) > int64(g.opts.MaxPerCaller) {
-		callerCount.Add(-1)
+	callerCount, count := g.beginCaller(owner)
+	if count > int64(g.opts.MaxPerCaller) {
+		g.endCaller(owner, callerCount)
 		g.inflight.Add(-1)
 		return nil, fmt.Errorf("CALLER_CONCURRENCY_LIMIT")
 	}
 	success := false
 	defer func() {
 		if !success {
-			callerCount.Add(-1)
+			g.endCaller(owner, callerCount)
 			g.inflight.Add(-1)
 		}
 	}()
@@ -181,7 +180,7 @@ func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected 
 		once.Do(func() {
 			ist.active.Add(-1)
 			st.active.Add(-1)
-			callerCount.Add(-1)
+			g.endCaller(owner, callerCount)
 			g.inflight.Add(-1)
 			if sh != nil {
 				sh.mu.Lock()
@@ -316,7 +315,7 @@ func (g *Gateway) checkHealth(ctx context.Context) {
 					continue
 				}
 				if iface.CredentialRef != "" {
-					req.Header.Set("Authorization", "Bearer "+os.Getenv(iface.CredentialRef))
+					req.Header.Set("Authorization", "Bearer "+g.opts.Credentials[iface.CredentialRef])
 				}
 				res, err := client.Do(req)
 				ok := err == nil
@@ -417,14 +416,7 @@ func (g *Gateway) reserveResource(owner string, rt *Route, spec resourceCreation
 	if !g.healthy.Load() || g.current.Load().Routes[rt.Key] != rt || !rt.Enabled || !exposes(rt, resourceInterface(spec.Kind)) {
 		return creationReservation{}, fmt.Errorf("ROUTE_UNAVAILABLE")
 	}
-	permitted := false
-	for _, c := range g.opts.Callers {
-		if c.ID == owner && allowed(c, rt.Key) {
-			permitted = true
-			break
-		}
-	}
-	if !permitted {
+	if !routeConsumer(rt, owner) {
 		return creationReservation{}, errResourceNotFound
 	}
 	return g.resources.reserve(owner, rt.ID, spec, func(parent *resource) (string, error) {
@@ -445,23 +437,19 @@ func (g *Gateway) reserveResource(owner string, rt *Route, spec resourceCreation
 	})
 }
 func (g *Gateway) acquireResource(owner string, rt *Route, kind resourceKind, id string) (*lease, resource, error) {
+	return g.acquireOwnedResource(owner, rt, kind, id, false)
+}
+func (g *Gateway) acquireOwnedResource(owner string, rt *Route, kind resourceKind, id string, background bool) (*lease, resource, error) {
 	g.lifecycle.RLock()
 	defer g.lifecycle.RUnlock()
-	permitted := false
-	for _, c := range g.opts.Callers {
-		if c.ID == owner && allowed(c, rt.Key) {
-			permitted = true
-			break
-		}
-	}
-	if !permitted {
+	if !background && !routeConsumer(rt, owner) {
 		return nil, resource{}, errResourceNotFound
 	}
 	res, unpin, err := g.resources.pin(resourceKey{owner, rt.ID, kind, id})
 	if err != nil {
 		return nil, resource{}, err
 	}
-	l, err := g.acquireLocked(owner, rt.Key, "", res.EndpointID, res.Interface, rt)
+	l, err := g.acquireLocked(owner, rt.Key, "", res.EndpointID, res.Interface, rt, background)
 	if err != nil {
 		unpin()
 		return nil, resource{}, err
