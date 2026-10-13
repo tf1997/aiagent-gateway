@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -64,11 +63,6 @@ func ValidateOptions(o Options) error {
 	if strings.ContainsAny(o.AdminToken, "\r\n\x00") {
 		return fmt.Errorf("admin_token must be a single-line token")
 	}
-	for key, token := range o.Credentials {
-		if key == "" || token == "" || strings.ContainsAny(token, "\r\n\x00") {
-			return fmt.Errorf("credentials require nonempty keys and single-line tokens")
-		}
-	}
 	return nil
 }
 
@@ -76,7 +70,6 @@ func Open(o Options) (*Gateway, error) {
 	if err := ValidateOptions(o); err != nil {
 		return nil, err
 	}
-	o.Credentials = maps.Clone(o.Credentials)
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = 100000
 	}
@@ -166,7 +159,7 @@ func Open(o Options) (*Gateway, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err = validate(&c, o.Credentials); err != nil {
+	if err = validate(&c); err != nil {
 		return fail(err)
 	}
 	if c.Receipts == nil {

@@ -9,12 +9,12 @@ StartLimitBurst=5
 Type=simple
 User=aiagent-gateway
 Group=aiagent-gateway
-LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml
+LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml
 WorkingDirectory=/var/lib/aiagent-gateway
 StateDirectory=aiagent-gateway
 StateDirectoryMode=0700
-ExecStart=/usr/local/bin/aiagent-gateway --config=%d/gateway.yaml
-ExecStartPost=/usr/local/bin/aiagent-gateway --check-ready --config=%d/gateway.yaml
+ExecStart=/usr/local/bin/aiagent-gateway --config=%d/config.yaml
+ExecStartPost=/usr/local/bin/aiagent-gateway --check-ready --config=%d/config.yaml
 TimeoutStartSec=20
 Restart=on-failure
 RestartSec=3

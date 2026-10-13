@@ -33,7 +33,7 @@
 
 ## 4. 认证与运行配置
 
-YAML 文件提供监听地址、数据目录、管理 Token 和上游凭据；消费者通过路由 consumers 动态登记，只持久化 Token 哈希。消费者 ID 是资源隔离键，每条路由独立授权。上游凭据通过 YAML credentials 字典引用，代理移除客户端 Authorization、Cookie 和不可信身份头后注入可信身份/上游凭据。
+YAML 文件提供监听地址、数据目录和管理 Token；消费者通过路由 consumers 动态登记，只持久化 Token 哈希。消费者 ID 是资源隔离键，每条路由独立授权。上游 Token 直接保存在路由接口的 token 中，代理移除客户端 Authorization、Cookie 和不可信身份头后注入可信身份/上游凭据。
 
 首次运行必须显式初始化；已有文件不存在或损坏时不能隐式清空。ready 要求有效快照及持久化健康。管理和诊断端口默认仅绑定本机。
 
@@ -136,9 +136,9 @@ P4 的本地协议实现已完成；后续已补齐第 12 节所列单实例 Her
 
 ## 15. YAML 进程配置（2026-10-11）
 
-启动配置统一由 internal/appconfig 严格读取 YAML，默认 gateway.yaml，显式 --config 指定路径。所有前台角色、init-only 和 check-ready 共用该入口；不再读取 GATEWAY_* 或上游凭据环境变量。相对路径基于配置文件目录，credentials 以独立字典传递，路由配置仍由管理 API 维护。
+启动配置统一由 internal/appconfig 严格读取 YAML，默认 config.yaml，显式 --config 指定路径。所有前台角色、init-only 和 check-ready 共用该入口；不再读取 GATEWAY_* 或上游凭据环境变量。相对路径基于配置文件目录，路由与上游 Token 由管理 API 维护；YAML 不接受 credentials。
 
-安装器仅生成 root 专属管理和上游配置 gateway.yaml，systemd 使用 LoadCredential 提供私有副本；新部署清单 version 为 2，拒绝将 YAML worker 直接发到旧环境变量基础组件。配置文件、unit 和旧部署维护迁移见 [配置说明](docs/CONFIGURATION.md)。
+安装器仅生成 root 专属管理配置 config.yaml，systemd 使用 LoadCredential 提供私有副本；新部署清单 version 为 2，拒绝将 YAML worker 直接发到旧环境变量基础组件。配置文件、unit 和旧部署维护迁移见 [配置说明](docs/CONFIGURATION.md)。
 
 ## 16. 动态路由消费者（2026-10-11）
 

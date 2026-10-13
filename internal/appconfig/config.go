@@ -1,5 +1,5 @@
 // Package appconfig loads process settings from a YAML file. It never reads
-// environment variables or expands placeholders in credentials.
+// environment variables or expands placeholders.
 package appconfig
 
 import (
@@ -16,34 +16,33 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-const DefaultPath = "gateway.yaml"
-const SystemPath = "/etc/aiagent-gateway/gateway.yaml"
+const DefaultPath = "config.yaml"
+const SystemPath = "/etc/aiagent-gateway/config.yaml"
 
 type Config struct {
-	AdminToken         string            `yaml:"admin_token"`
-	Credentials        map[string]string `yaml:"credentials"`
-	DataDir            string            `yaml:"data_dir"`
-	Listen             string            `yaml:"listen"`
-	AdminListen        string            `yaml:"admin_listen"`
-	PublicURL          string            `yaml:"public_url"`
-	MaxInflight        int               `yaml:"max_inflight"`
-	MaxPerCaller       int               `yaml:"max_per_caller"`
-	MaxPerEndpoint     int               `yaml:"max_per_endpoint"`
-	MaxSessions        int               `yaml:"max_sessions"`
-	MaxTasks           int               `yaml:"max_tasks"`
-	MaxResources       int               `yaml:"max_resources"`
-	MaxResourceAliases int               `yaml:"max_resource_aliases"`
-	MaxDataIdempotency int               `yaml:"max_data_idempotency"`
-	StateSocket        string            `yaml:"state_socket"`
-	EntrySocket        string            `yaml:"entry_socket"`
-	ControlSocket      string            `yaml:"control_socket"`
-	Deployment         string            `yaml:"deployment"`
-	RolloutData        string            `yaml:"rollout_data"`
+	AdminToken         string `yaml:"admin_token"`
+	DataDir            string `yaml:"data_dir"`
+	Port               string `yaml:"port"`
+	AdminPort          string `yaml:"admin_port"`
+	PublicURL          string `yaml:"public_url"`
+	MaxInflight        int    `yaml:"max_inflight"`
+	MaxPerCaller       int    `yaml:"max_per_caller"`
+	MaxPerEndpoint     int    `yaml:"max_per_endpoint"`
+	MaxSessions        int    `yaml:"max_sessions"`
+	MaxTasks           int    `yaml:"max_tasks"`
+	MaxResources       int    `yaml:"max_resources"`
+	MaxResourceAliases int    `yaml:"max_resource_aliases"`
+	MaxDataIdempotency int    `yaml:"max_data_idempotency"`
+	StateSocket        string `yaml:"state_socket"`
+	EntrySocket        string `yaml:"entry_socket"`
+	ControlSocket      string `yaml:"control_socket"`
+	Deployment         string `yaml:"deployment"`
+	RolloutData        string `yaml:"rollout_data"`
 }
 
 func Defaults() Config {
 	return Config{
-		DataDir: "./data", Listen: ":8080", AdminListen: "127.0.0.1:9090",
+		DataDir: "./data", Port: "8080", AdminPort: "9090",
 		MaxInflight: 4096, MaxPerCaller: 1024, MaxPerEndpoint: 256,
 		MaxSessions: 100000, MaxTasks: 100000, MaxResources: 200000,
 		MaxResourceAliases: 200000, MaxDataIdempotency: 100000,
@@ -124,11 +123,10 @@ func (c Config) Validate() error {
 	if err := gateway.ValidateOptions(c.Options()); err != nil {
 		return err
 	}
-	for name, address := range map[string]string{"listen": c.Listen, "admin_listen": c.AdminListen} {
-		_, port, err := net.SplitHostPort(address)
-		n, e := strconv.Atoi(port)
-		if err != nil || e != nil || n < 1 || n > 65535 {
-			return fmt.Errorf("%s must be a host:port with port 1-65535", name)
+	for name, port := range map[string]string{"port": c.Port, "admin_port": c.AdminPort} {
+		n, err := strconv.Atoi(port)
+		if err != nil || strings.Trim(port, "0123456789") != "" || n < 1 || n > 65535 {
+			return fmt.Errorf("%s must be a port number from 1 to 65535", name)
 		}
 	}
 	for name, n := range map[string]int{
@@ -148,10 +146,17 @@ func (c Config) Validate() error {
 	return nil
 }
 
+func (c Config) ListenAddress() string {
+	return net.JoinHostPort("", c.Port)
+}
+
+func (c Config) AdminListenAddress() string {
+	return net.JoinHostPort("127.0.0.1", c.AdminPort)
+}
+
 func (c Config) Options() gateway.Options {
 	return gateway.Options{
 		DataDir: c.DataDir, AdminToken: c.AdminToken, PublicURL: c.PublicURL,
-		Credentials: c.Credentials,
 		MaxInflight: c.MaxInflight, MaxPerCaller: c.MaxPerCaller, MaxPerEndpoint: c.MaxPerEndpoint,
 		MaxSessions: c.MaxSessions, MaxTasks: c.MaxTasks, MaxResources: c.MaxResources,
 		MaxResourceAliases: c.MaxResourceAliases, MaxDataIdempotency: c.MaxDataIdempotency,

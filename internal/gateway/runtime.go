@@ -314,8 +314,8 @@ func (g *Gateway) checkHealth(ctx context.Context) {
 				if err != nil {
 					continue
 				}
-				if iface.CredentialRef != "" {
-					req.Header.Set("Authorization", "Bearer "+g.opts.Credentials[iface.CredentialRef])
+				if iface.Token != "" {
+					req.Header.Set("Authorization", "Bearer "+iface.Token)
 				}
 				res, err := client.Do(req)
 				ok := err == nil

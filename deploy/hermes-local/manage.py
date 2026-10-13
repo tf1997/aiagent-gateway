@@ -154,16 +154,15 @@ def configure(args):
         f"HERMES_LOCAL_UID={os.getuid()}\nHERMES_LOCAL_GID={os.getgid()}\n"
         f"HERMES_HTTP_PORT={args.http_port}\nHERMES_A2A_PORT={args.a2a_port}\n"))
     # Dedicated gateway credentials: distinct from the model provider credential.
-    write_private(RUNTIME / "gateway.env", f"HERMES_LOCAL_HTTP_KEY={api_key}\nHERMES_LOCAL_A2A_KEY={a2a_key}\n")
     settings = {"model_base": MODEL_BASE, "model": model,
                 "http_port": args.http_port, "a2a_port": args.a2a_port}
     route = {
         "key": "hermes-local", "agent_type": "hermes", "expose": ["proxy", "a2a"],
         "endpoints": [{"name": "local-default-profile", "interfaces": {
-            "proxy": {"url": f"http://127.0.0.1:{args.http_port}", "credential_ref": "HERMES_LOCAL_HTTP_KEY",
+            "proxy": {"url": f"http://127.0.0.1:{args.http_port}", "token": api_key,
                       "health_url": f"http://127.0.0.1:{args.http_port}/health"},
             "a2a": {"url": f"http://127.0.0.1:{args.a2a_port}/", "protocol_version": "1.0",
-                    "credential_ref": "HERMES_LOCAL_A2A_KEY", "health_url": f"http://127.0.0.1:{args.a2a_port}/health"},
+                    "token": a2a_key, "health_url": f"http://127.0.0.1:{args.a2a_port}/health"},
         }}],
     }
     write_private(RUNTIME / "gateway-route.json", json.dumps(route, indent=2) + "\n")
@@ -201,7 +200,7 @@ def smoke(settings):
     print("通过：HTTP health、认证 capabilities/sessions、Hermes 模型调用、A2A 1.0 Card/GetTask。")
     print(f"HTTP endpoint: {base}")
     print(f"A2A endpoint:  {a2a_url}/")
-    print("网关凭据文件：deploy/hermes-local/.runtime/gateway.env（请勿提交 Git）。")
+    print("网关路由配置：deploy/hermes-local/.runtime/gateway-route.json（请勿提交 Git）。")
     write_private(RUNTIME / "smoke-result.json", json.dumps({
         "passed": True, "model": settings["model"], "http_endpoint": base, "a2a_endpoint": a2a_url + "/",
         "checks": ["health", "capabilities", "sessions_list", "chat_completion", "a2a_card", "a2a_get_task"],

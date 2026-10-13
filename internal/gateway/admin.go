@@ -335,12 +335,14 @@ func (g *Gateway) admin(w http.ResponseWriter, r *http.Request) {
 		reject(405, "METHOD_NOT_ALLOWED")
 		return
 	}
-	if err := validate(&c, g.opts.Credentials); err != nil {
+	if err := validate(&c); err != nil {
 		reject(400, err.Error())
 		return
 	}
 	if rt, ok := result.(Route); ok {
 		result = publicRoute(&rt)
+	} else if ep, ok := result.(Endpoint); ok {
+		result = publicEndpoint(&ep)
 	}
 	c.Revision++
 	c.Audit = append(c.Audit, Audit{At: time.Now().UTC(), Actor: "admin", Action: r.Method, Path: r.URL.Path, Revision: c.Revision})
@@ -408,6 +410,10 @@ func decode(b []byte, v any) error {
 	d := json.NewDecoder(strings.NewReader(string(b)))
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
+		var typeError *json.UnmarshalTypeError
+		if errors.As(err, &typeError) && (typeError.Field == "token" || strings.HasSuffix(typeError.Field, ".token")) {
+			return fmt.Errorf("invalid upstream token: expected a string")
+		}
 		return err
 	}
 	if d.Decode(new(any)) != io.EOF {
@@ -489,7 +495,11 @@ func (g *Gateway) readAdmin(w http.ResponseWriter, r *http.Request, p []string) 
 		return
 	}
 	if len(p) == 5 && p[4] == "endpoints" {
-		writeJSON(w, 200, page(rt.Endpoints, r))
+		endpoints := make([]Endpoint, len(rt.Endpoints))
+		for i := range rt.Endpoints {
+			endpoints[i] = publicEndpoint(&rt.Endpoints[i])
+		}
+		writeJSON(w, 200, page(endpoints, r))
 		return
 	}
 	if len(p) == 6 && p[4] == "endpoints" {
@@ -575,8 +585,9 @@ func (g *Gateway) endpointDetail(rt *Route, ep *Endpoint) any {
 			counts["reserved_resources"]++
 		}
 	}
+	redacted := publicEndpoint(ep)
 	return struct {
 		*Endpoint
 		Runtime map[string]any `json:"runtime"`
-	}{ep, map[string]any{"http_inflight": st.active.Load(), "resource_references": g.references(rt.ID, ep.ID), "interfaces": interfaces, "resources": counts}}
+	}{&redacted, map[string]any{"http_inflight": st.active.Load(), "resource_references": g.references(rt.ID, ep.ID), "interfaces": interfaces, "resources": counts}}
 }

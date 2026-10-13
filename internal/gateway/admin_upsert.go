@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 )
 
@@ -72,8 +73,16 @@ func (g *Gateway) upsertRoute(old Route, fields map[string]json.RawMessage) (Rou
 			for i, previous := range old.Endpoints {
 				// Legacy unnamed endpoints can be reconciled only by identical
 				// interfaces. Never infer identity from array position.
-				if previous.Name != ep.Name || (ep.Name == "" && !reflect.DeepEqual(previous.Interfaces, ep.Interfaces)) {
+				if previous.Name != ep.Name {
 					continue
+				}
+				if ep.Name == "" {
+					candidate := ep
+					candidate.Interfaces = maps.Clone(ep.Interfaces)
+					inheritEndpointTokens(&candidate, previous, input)
+					if !reflect.DeepEqual(previous.Interfaces, candidate.Interfaces) {
+						continue
+					}
 				}
 				if match >= 0 {
 					return Route{}, fmt.Errorf("%w: ambiguous endpoint identity", errConfigConflict)
@@ -82,6 +91,7 @@ func (g *Gateway) upsertRoute(old Route, fields map[string]json.RawMessage) (Rou
 			}
 			if match >= 0 {
 				previous := old.Endpoints[match]
+				inheritEndpointTokens(&ep, previous, input)
 				if used[previous.ID] {
 					return Route{}, fmt.Errorf("%w: duplicate endpoint identity", errConfigConflict)
 				}
@@ -122,6 +132,26 @@ func (g *Gateway) upsertRoute(old Route, fields map[string]json.RawMessage) (Rou
 	}
 	next.Version = old.Version + 1
 	return next, nil
+}
+
+// An upsert may reuse an endpoint returned by GET, where tokens are redacted.
+// Omitted tokens retain the prior value; explicit null removes authentication.
+func inheritEndpointTokens(ep *Endpoint, previous Endpoint, input []byte) {
+	var provided struct {
+		Interfaces map[string]map[string]json.RawMessage `json:"interfaces"`
+	}
+	if json.Unmarshal(input, &provided) != nil {
+		return
+	}
+	for entry, iface := range ep.Interfaces {
+		if _, ok := provided.Interfaces[entry]["token"]; ok {
+			continue
+		}
+		if prior, ok := previous.Interfaces[entry]; ok {
+			iface.Token = prior.Token
+			ep.Interfaces[entry] = iface
+		}
+	}
 }
 
 // These errors retain the existing API error bodies while classifying as 409.

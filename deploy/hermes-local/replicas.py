@@ -27,15 +27,11 @@ def main():
             write_private(marker, json.dumps({"http_port": 18643, "a2a_port": 19901,
                                              "http_key": http_key, "a2a_key": a2a_key}, indent=2) + "\n")
         settings = json.loads(marker.read_text())
-        gateway_env = RUNTIME / "gateway.env"
-        existing = [line for line in gateway_env.read_text().splitlines() if not line.startswith("HERMES_REPLICA_")]
-        existing.extend(["HERMES_REPLICA_HTTP_KEY=" + settings["http_key"], "HERMES_REPLICA_A2A_KEY=" + settings["a2a_key"]])
-        write_private(gateway_env, "\n".join(existing) + "\n")
         route_path = RUNTIME / "gateway-route.json"
         route = json.loads(route_path.read_text())
         replica = {"name": "local-replica-profile", "interfaces": {
-            "proxy": {"url": "http://127.0.0.1:18643", "credential_ref": "HERMES_REPLICA_HTTP_KEY", "health_url": "http://127.0.0.1:18643/health"},
-            "a2a": {"url": "http://127.0.0.1:19901/", "protocol_version": "1.0", "credential_ref": "HERMES_REPLICA_A2A_KEY", "health_url": "http://127.0.0.1:19901/health"}}}
+            "proxy": {"url": "http://127.0.0.1:18643", "token": settings["http_key"], "health_url": "http://127.0.0.1:18643/health"},
+            "a2a": {"url": "http://127.0.0.1:19901/", "protocol_version": "1.0", "token": settings["a2a_key"], "health_url": "http://127.0.0.1:19901/health"}}}
         matches = [e for e in route["endpoints"] if e.get("name") == replica["name"]]
         if matches and matches != [replica]:
             raise RuntimeError("Replica endpoint configuration differs; reconcile explicitly")
@@ -45,7 +41,7 @@ def main():
         write_private(route_path, json.dumps(route, indent=2) + "\n")
         subprocess.run(command + ["config", "--quiet"], check=True)
         subprocess.run(command + ["up", "-d", "--wait", "--wait-timeout", "240", "hermes2"], check=True)
-        print("Replica ready: HTTP 18643; A2A 19901. Run gateway.py restart to load its credentials and route.")
+        print("Replica ready: HTTP 18643; A2A 19901. Run gateway.py restart to register its route.")
     else:
         subprocess.run(command + (["ps"] if args.action == "status" else ["stop", "hermes2"]), check=True)
 

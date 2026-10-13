@@ -2857,9 +2857,11 @@
             ],
             "default": "active"
           },
-          "credential_ref": {
+          "token": {
             "type": "string",
-            "description": "Key in gateway YAML credentials containing an upstream Bearer token"
+            "writeOnly": true,
+            "maxLength": 4096,
+            "description": "Upstream Bearer token stored with the route; omit the Bearer prefix. Never returned in management responses. PATCH/upsert omission preserves an existing token; empty string or null clears it. YAML credentials and environment references are unsupported."
           },
           "health_url": {
             "type": "string",
@@ -2961,9 +2963,11 @@
             "format": "uri",
             "description": "Proxy base URL or exact A2A JSON-RPC URL, including its path/query."
           },
-          "credential_ref": {
+          "token": {
             "type": "string",
-            "description": "Key in gateway YAML credentials holding this interface’s upstream Bearer token. Environment variables are not read."
+            "writeOnly": true,
+            "maxLength": 4096,
+            "description": "Upstream Bearer token stored with the route; omit the Bearer prefix. Never returned in management responses. PATCH/upsert omission preserves an existing token; empty string or null clears it. YAML credentials and environment references are unsupported."
           },
           "health_url": {
             "type": "string",
@@ -2992,9 +2996,11 @@
             "format": "uri",
             "description": "Proxy base URL or exact A2A JSON-RPC URL, including its path/query."
           },
-          "credential_ref": {
+          "token": {
             "type": "string",
-            "description": "Key in gateway YAML credentials holding this interface’s upstream Bearer token. Environment variables are not read.",
+            "writeOnly": true,
+            "maxLength": 4096,
+            "description": "Upstream Bearer token stored with the route; omit the Bearer prefix. Never returned in management responses. PATCH/upsert omission preserves an existing token; empty string or null clears it. YAML credentials and environment references are unsupported.",
             "nullable": true
           },
           "health_url": {
@@ -3135,9 +3141,11 @@
             ],
             "default": "active"
           },
-          "credential_ref": {
+          "token": {
             "type": "string",
-            "description": "Key in gateway YAML credentials containing an upstream Bearer token"
+            "writeOnly": true,
+            "maxLength": 4096,
+            "description": "Upstream Bearer token stored with the route; omit the Bearer prefix. Never returned in management responses. PATCH/upsert omission preserves an existing token; empty string or null clears it. YAML credentials and environment references are unsupported."
           },
           "health_url": {
             "type": "string",
@@ -3154,7 +3162,7 @@
           },
           {
             "required": [
-              "credential_ref"
+              "token"
             ]
           },
           {

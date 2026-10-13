@@ -6,8 +6,8 @@ After=aiagent-gateway-state.service aiagent-gateway-entry.service
 RuntimeDirectory=aiagent-gateway-control
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
-LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml
-ExecStart=@BINARY@ rollout-controller --config=%d/gateway.yaml
+LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml
+ExecStart=@BINARY@ rollout-controller --config=%d/config.yaml
 Restart=on-failure
 RestartSec=2
 UMask=0077

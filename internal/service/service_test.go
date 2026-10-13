@@ -219,7 +219,7 @@ func TestUnitsUsePrivateYAMLConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(raw, []byte("EnvironmentFile=")) || !bytes.Contains(raw, []byte("LoadCredential=gateway.yaml:"+configPath)) || !bytes.Contains(raw, []byte("--config=%d/gateway.yaml")) {
+		if bytes.Contains(raw, []byte("EnvironmentFile=")) || !bytes.Contains(raw, []byte("LoadCredential=config.yaml:"+configPath)) || !bytes.Contains(raw, []byte("--config=%d/config.yaml")) {
 			t.Fatal("unit does not use private YAML configuration", file.Name())
 		}
 	}

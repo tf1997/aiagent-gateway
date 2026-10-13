@@ -5,8 +5,8 @@ After=network-online.target
 [Service]
 User=aiagent-gateway
 Group=aiagent-gateway
-LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml
-ExecStart=@BINARY@ state-server --config=%d/gateway.yaml
+LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml
+ExecStart=@BINARY@ state-server --config=%d/config.yaml
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=aiagent-gateway

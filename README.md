@@ -19,13 +19,13 @@ Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原
 需要 Go 1.24+，支持 Linux/macOS。先启动自己的 Agent 服务，再执行：
 
 ```sh
-cp gateway.example.yaml gateway.yaml
-chmod 600 gateway.yaml
-# 编辑 gateway.yaml，替换示例 Token 和地址。
-go run ./cmd/gateway --config ./gateway.yaml --init
+cp config.example.yaml config.yaml
+chmod 600 config.yaml
+# 编辑 config.yaml，替换示例 Token 和地址。
+go run ./cmd/gateway --config ./config.yaml --init
 ```
 
-后续启动省略 `--init`；已有路由文件损坏时始终拒绝启动。省略 `--config` 默认读取当前目录的 `gateway.yaml`，相对数据路径以 YAML 所在目录为准。旧 `GATEWAY_*` 启动变量及上游凭据环境变量均不再读取；完整字段、上游凭据和旧部署迁移见 [YAML 配置说明](docs/CONFIGURATION.md)。部署时持久化数据目录，TLS 由入口代理终止。
+后续启动省略 `--init`；已有路由文件损坏时始终拒绝启动。省略 `--config` 默认读取当前目录的 `config.yaml`，相对数据路径以 YAML 所在目录为准。旧 `GATEWAY_*` 启动变量及上游凭据环境变量均不再读取；完整字段、上游凭据和旧部署迁移见 [YAML 配置说明](docs/CONFIGURATION.md)。部署时持久化数据目录，TLS 由入口代理终止。
 
 以下仅为 curl 客户端设置 shell 变量，值须与 YAML 中的 Token 一致；网关不会读取这些变量：
 
@@ -63,7 +63,7 @@ curl -N http://localhost:8080/agents/research/chat \
   -d '{"message":"hello"}'
 ```
 
-若上游无需会话粘性，创建路由时传 `"session_policy":{"enabled":false}`。上游 URL 的路径作为前缀，查询参数合并保留。凭据通过 Endpoint 的 `interfaces.proxy.credential_ref` 引用 YAML `credentials` 字典键，启动或修改路由时校验凭据存在；客户端 Authorization、Cookie 和身份转发头会被清理。
+若上游无需会话粘性，创建路由时传 `"session_policy":{"enabled":false}`。上游 URL 的路径作为前缀，查询参数合并保留。上游 Token 直接配置在 Endpoint 的 `interfaces.proxy.token` 中，随路由管理更新即时生效，管理响应不回显；客户端 Authorization、Cookie 和身份转发头会被清理。
 
 ## 同一 Agent 的聊天与 A2A
 
@@ -121,13 +121,13 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 安装命令完成以下工作：
 
 - 首次安装或维护迁移将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
-- 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/gateway.yaml`，权限 0600；Token 不输出到终端。
+- 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/config.yaml`，权限 0600；Token 不输出到终端。
 - 首次通过一次性初始化服务创建 `/var/lib/aiagent-gateway/config.json`；常规启动不自动创建缺失的配置文件。
 - 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
 - 已迁入灰度架构后，重复执行新二进制的 `install` 会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；配置、资源归属和并发额度由共享状态服务统一管理。
 - 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
-默认数据面为 `:8080`，管理面为 `127.0.0.1:9090`。消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token、`credentials` 和 `public_url`；后者应改为客户端实际可访问的地址。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。环境变量版本需按 [迁移说明](docs/CONFIGURATION.md#从环境变量版本迁移) 做维护迁移。
+默认数据面为 `:8080`，管理面为 `127.0.0.1:9090`。消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token 和 `public_url`；后者应改为客户端实际可访问的地址。上游 Token 在路由各接口的 `token` 中动态配置。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。旧版需按 [迁移说明](docs/CONFIGURATION.md) 做维护迁移。
 
 ```sh
 sudo aiagent-gateway status
@@ -194,7 +194,7 @@ curl -fsS -X DELETE http://127.0.0.1:9090/admin/v1/routes/research \
 
 首次成功管理写入前，将原始 schema 1 文件保存为数据目录中的 `config.schema-1.backup.json`（0600），再原子提交 schema 2。备份或替换失败时保留原文件及内存快照；替换后的目录同步失败会使网关退出 ready 状态。已有同名备份内容不同或为符号链接时拒绝迁移，需先保留并移走冲突备份。
 
-管理 API 接受纯旧形态创建，返回新形态；`protocol` 与新字段混用返回 409。旧 Endpoint 的 `url/credential_ref/health_url` 创建或 PATCH，以及旧 `protocol` PATCH，只适用于 `generic` 且 `expose` 为单项的路由；双入口使用新字段更新。旧幂等回执继续重放原响应，新回执使用新形态。
+管理 API 接受纯旧形态创建，返回新形态；`protocol` 与新字段混用返回 409。旧 Endpoint 的 `url/token/health_url` 创建或 PATCH，以及旧 `protocol` PATCH，只适用于 `generic` 且 `expose` 为单项的路由；双入口使用新字段更新。旧幂等回执继续重放原响应，新回执使用新形态。
 
 回滚需先停止网关、导出保存升级后的 `config.json`，再同时恢复旧二进制和 `config.schema-1.backup.json` 对应的配置。旧二进制无法读取 schema 2；备份不包含升级后的配置修改。迁移不修改凭据，前台模式的运行时绑定仍不跨重启恢复；灰度模式使用独立共享状态日志，不应通过恢复旧配置文件回滚业务版本。
 

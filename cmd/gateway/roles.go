@@ -75,10 +75,10 @@ func serveRole(role string, args []string) error {
 	}
 	opts := cfg.Options()
 	if *listen == "" {
-		*listen = cfg.Listen
+		*listen = cfg.ListenAddress()
 	}
 	if *admin == "" {
-		*admin = cfg.AdminListen
+		*admin = cfg.AdminListenAddress()
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

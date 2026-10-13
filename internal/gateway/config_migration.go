@@ -17,6 +17,7 @@ type legacyEndpoint struct {
 	URL           string `json:"url"`
 	Weight        int    `json:"weight"`
 	State         string `json:"state"`
+	Token         string `json:"token,omitempty"`
 	CredentialRef string `json:"credential_ref,omitempty"`
 	HealthURL     string `json:"health_url,omitempty"`
 	Version       uint64 `json:"version"`
@@ -44,7 +45,7 @@ type legacyConfig struct {
 }
 
 func (e legacyEndpoint) current(entry string) Endpoint {
-	i := EndpointInterface{URL: e.URL, CredentialRef: e.CredentialRef, HealthURL: e.HealthURL}
+	i := EndpointInterface{URL: e.URL, Token: e.Token, HealthURL: e.HealthURL}
 	if entry == "a2a" {
 		i.ProtocolVersion = "1.0"
 	}
@@ -59,6 +60,9 @@ func (r legacyRoute) current() (Route, error) {
 	}
 	out := Route{ID: r.ID, Key: r.Key, AgentType: "generic", Expose: []string{r.Protocol}, Enabled: r.Enabled, BalancePolicy: r.BalancePolicy, Session: r.Session, Timeout: r.Timeout, Endpoints: []Endpoint{}, AllowedMethods: r.AllowedMethods, Card: r.Card, Version: r.Version}
 	for _, e := range r.Endpoints {
+		if e.CredentialRef != "" {
+			return Route{}, fmt.Errorf("legacy credential_ref requires migration to interface token")
+		}
 		out.Endpoints = append(out.Endpoints, e.current(r.Protocol))
 	}
 	return out, nil
@@ -126,7 +130,7 @@ func decodeRouteInput(raw []byte, rt *Route) error {
 	var eps []map[string]json.RawMessage
 	if json.Unmarshal(fields["endpoints"], &eps) == nil {
 		for _, ep := range eps {
-			if (legacy && has(ep, "interfaces")) || (!legacy && has(ep, "url", "credential_ref", "health_url")) {
+			if (legacy && has(ep, "interfaces")) || (!legacy && has(ep, "url", "token", "credential_ref", "health_url")) {
 				return errConfigConflict
 			}
 		}
@@ -154,7 +158,10 @@ func endpointInput(raw []byte, rt *Route, patch bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !has(fields, "url", "health_url", "credential_ref") {
+	if has(fields, "credential_ref") {
+		return nil, fmt.Errorf("credential_ref is unsupported; use token")
+	}
+	if !has(fields, "url", "health_url", "token") {
 		return raw, nil
 	}
 	if has(fields, "interfaces") {
@@ -165,7 +172,7 @@ func endpointInput(raw []byte, rt *Route, patch bool) ([]byte, error) {
 		return nil, err
 	}
 	i := map[string]json.RawMessage{}
-	for _, k := range []string{"url", "health_url", "credential_ref"} {
+	for _, k := range []string{"url", "health_url", "token"} {
 		if v, ok := fields[k]; ok {
 			i[k] = v
 			delete(fields, k)

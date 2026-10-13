@@ -30,30 +30,31 @@
 在终端 A 中复制示例并填写配置：
 
 ```sh
-cp gateway.example.yaml gateway.yaml
-chmod 600 gateway.yaml
+cp config.example.yaml config.yaml
+chmod 600 config.yaml
 ```
 
-编辑 `gateway.yaml`，例如：
+编辑 `config.yaml`，例如：
 
 ```yaml
-listen: "127.0.0.1:8080"
-admin_listen: "127.0.0.1:9090"
+port: 8080
+admin_port: 9090
 data_dir: "./data"
 public_url: "http://127.0.0.1:8080"
 admin_token: "replace-with-admin-secret"
-credentials: {}
 ```
+
+`port` 和 `admin_port` 只填端口号；数据面监听所有网卡，管理面仅监听本机 `127.0.0.1`。
 
 编译、初始化路由存储并启动：
 
 ```sh
 go build -o bin/aiagent-gateway ./cmd/gateway
-./bin/aiagent-gateway --config ./gateway.yaml --init-only
-./bin/aiagent-gateway --config ./gateway.yaml
+./bin/aiagent-gateway --config ./config.yaml --init-only
+./bin/aiagent-gateway --config ./config.yaml
 ```
 
-进程在前台运行，日志输出到终端，按 `Ctrl+C` 停止。常规重启只需最后一行；首次也可使用 `--init` 初始化后直接监听。已有路由文件损坏时不会覆盖。省略 `--config` 默认读取当前目录的 `gateway.yaml`；相对路径以配置文件所在目录为准。
+进程在前台运行，日志输出到终端，按 `Ctrl+C` 停止。常规重启只需最后一行；首次也可使用 `--init` 初始化后直接监听。已有路由文件损坏时不会覆盖。省略 `--config` 默认读取当前目录的 `config.yaml`；相对路径以配置文件所在目录为准。
 
 旧 `GATEWAY_*` 启动环境变量和上游凭据环境变量不再读取。完整字段和迁移步骤见 [YAML 配置说明](CONFIGURATION.md)。
 
@@ -140,20 +141,13 @@ curl -fsS -N "$GATEWAY_URL/agents/research/chat" \
 
 ### 上游需要认证时
 
-在 `gateway.yaml` 的凭据字典中设置独立上游 Token，再启动进程：
-
-```yaml
-credentials:
-  RESEARCH_UPSTREAM_TOKEN: "replace-with-upstream-secret"
-```
-
-在对应实例的接口配置中引用凭据键：
+在对应实例的接口配置中填写独立的上游 Token，通过路由管理 API 提交：
 
 ```json
 {
   "proxy": {
     "url": "http://127.0.0.1:8001",
-    "credential_ref": "RESEARCH_UPSTREAM_TOKEN",
+    "token": "replace-with-upstream-secret",
     "health_url": "http://127.0.0.1:8001/health"
   }
 }
@@ -161,13 +155,13 @@ credentials:
 
 该对象是 `interfaces` 的值。`health_url` 可省略；配置后约每 10 秒检查一次，携带该接口凭据，仅 2xx 视为健康，不跟随重定向。只填写上游实际存在的探活路径。
 
-`credential_ref` 保存 YAML `credentials` 的键，网关向上游注入 `Authorization: Bearer <凭据值>`。内容不要包含 `Bearer ` 前缀；引用必须在字典中存在，启动和管理写入时都会校验。修改 YAML 需重启加载，环境变量不提供凭据。
+`token` 保存该接口的上游 Token，网关注入 `Authorization: Bearer <token>`；不要包含 `Bearer ` 前缀。路由更新即时生效，省略保留原值，`null` 或空字符串清除认证。Token 随路由持久化，管理响应不回显；YAML 和环境变量不提供上游凭据。
 
 网关清理客户端的 Authorization、Cookie 和不可信身份转发头，并注入 `X-Gateway-Caller-ID`。普通 `generic` 代理还会移除 `Idempotency-Key` / `X-Idempotency-Key`，不提供业务请求去重保证。
 
 ## 4. 接入 Hermes
 
-Hermes 路由使用 `agent_type:"hermes"`，网关管理 session/run/response 的归属和公开 ID。以下示例使用 HTTP 地址 `http://127.0.0.1:18642`；如上游有认证，请先按上一节将 `HERMES_HTTP_TOKEN` 加入 YAML `credentials` 字典。
+Hermes 路由使用 `agent_type:"hermes"`，网关管理 session/run/response 的归属和公开 ID。以下示例使用 HTTP 地址 `http://127.0.0.1:18642`；如上游有认证，请将下例 `token` 替换为实际的 Hermes Token。
 
 ```sh
 curl -fsS "$GATEWAY_ADMIN_URL/admin/v1/routes" \
@@ -182,12 +176,12 @@ curl -fsS "$GATEWAY_ADMIN_URL/admin/v1/routes" \
     "timeout":{"response_header_ms":180000,"stream_idle_ms":120000,"max_duration_ms":1800000},
     "endpoints":[{
       "name":"hermes-1",
-      "interfaces":{"proxy":{"url":"http://127.0.0.1:18642","credential_ref":"HERMES_HTTP_TOKEN"}}
+      "interfaces":{"proxy":{"url":"http://127.0.0.1:18642","token":"replace-with-hermes-http-secret"}}
     }]
   }'
 ```
 
-上游无认证时删除 `credential_ref`。Hermes 调度还会检查 `/v1/capabilities`，实例必须满足适配器所需能力。
+上游无认证时删除 `token`。Hermes 调度还会检查 `/v1/capabilities`，实例必须满足适配器所需能力。
 
 ### 先创建会话，再发送消息
 
@@ -275,7 +269,7 @@ Run 提交支持 `Idempotency-Key`：同键同请求固定原实例，由上游�
 }
 ```
 
-`interfaces.a2a.url` 是上游准确的 JSON-RPC 地址，包含其路径。需要上游认证时增加 `credential_ref`。只有上游支持流式时才声明 `streaming:true`；省略整个 `agent_card` 会生成默认 Card，但默认不声明 streaming。
+`interfaces.a2a.url` 是上游准确的 JSON-RPC 地址，包含其路径。需要上游认证时增加 `token`。只有上游支持流式时才声明 `streaming:true`；省略整个 `agent_card` 会生成默认 Card，但默认不声明 streaming。
 
 同一 Agent 同时提供 HTTP 和 A2A 时，将 `expose` 设为 `["proxy","a2a"]`，并在**每个** Endpoint 的 `interfaces` 中同时配置两项，两个接口须属于同一个 Agent 副本。Hermes 上游设为 `agent_type:"hermes"`；网关不会把普通 HTTP 服务自动转成 A2A。
 
@@ -479,7 +473,7 @@ curl -fsS -X DELETE "$GATEWAY_ADMIN_URL/admin/v1/routes/research" \
 
 ### YAML 进程配置
 
-监听、数据目录、认证、上游凭据和容量统一写入 `gateway.yaml`；字段默认值见 [完整配置表](CONFIGURATION.md#字段与默认值)，可直接复制 [gateway.example.yaml](../gateway.example.yaml)。原环境变量已弃用且不会回退读取。
+监听、数据目录、管理认证和容量统一写入 `config.yaml`；消费者和上游 Token 通过路由管理 API 配置；字段默认值见 [完整配置表](CONFIGURATION.md#字段与默认值)，可直接复制 [config.example.yaml](../config.example.yaml)。原环境变量已弃用且不会回退读取。
 
 容量值须为正整数。YAML 修改后重启加载；路由和实例继续通过管理 API 修改，成功保存后生效。
 
@@ -513,7 +507,7 @@ sudo aiagent-gateway status
 sudo aiagent-gateway rollout status --json
 ```
 
-首次安装创建专用系统用户、随机管理 Token、数据目录和 systemd 服务，并设置开机启动。消费者在创建/更新路由时动态登记；没有默认的全路由消费者。由 root 编辑 `/etc/aiagent-gateway/gateway.yaml` 调整管理 Token、上游凭据和公开 URL，再按维护安排重启生效。
+首次安装创建专用系统用户、随机管理 Token、数据目录和 systemd 服务，并设置开机启动。消费者在创建/更新路由时动态登记；没有默认的全路由消费者。由 root 编辑 `/etc/aiagent-gateway/config.yaml` 调整管理 Token 和公开 URL，再按维护安排重启生效。
 
 该文件使用 YAML，权限 0600，由 systemd LoadCredential 提供给服务进程读取，不作为 shell 脚本 source。运行 curl 的终端可设置自己的客户端变量。旧环境变量部署需按 [迁移说明](CONFIGURATION.md#从环境变量版本迁移) 在维护窗口切换，普通 worker 灰度不能升级旧基础组件。
 

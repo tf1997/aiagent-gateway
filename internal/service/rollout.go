@@ -89,11 +89,16 @@ func (m *manager) stageRelease() (string, error) {
 func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 	if _, err := os.Stat(m.path("/etc/aiagent-gateway/gateway.env")); err == nil {
 		if _, err := os.Stat(m.path(configPath)); err != nil {
-			return fmt.Errorf("environment configuration is no longer supported; migrate gateway.env to gateway.yaml before installation (see docs/CONFIGURATION.md)")
+			return fmt.Errorf("environment configuration is no longer supported; migrate gateway.env to config.yaml before installation (see docs/CONFIGURATION.md)")
 		}
 	}
-	if raw, err := os.ReadFile(m.path("/etc/systemd/system/aiagent-gateway-state.service")); err == nil && strings.Contains(string(raw), "EnvironmentFile=") {
-		return fmt.Errorf("environment-based infrastructure requires a maintenance migration to YAML; ordinary worker rollout cannot upgrade it (see docs/CONFIGURATION.md)")
+	if raw, err := os.ReadFile(m.path("/etc/systemd/system/aiagent-gateway-state.service")); err == nil {
+		if strings.Contains(string(raw), "EnvironmentFile=") {
+			return fmt.Errorf("environment-based infrastructure requires a maintenance migration to YAML; ordinary worker rollout cannot upgrade it (see docs/CONFIGURATION.md)")
+		}
+		if strings.Contains(string(raw), "gateway.yaml") {
+			return fmt.Errorf("gateway.yaml infrastructure requires a maintenance migration to config.yaml and route tokens; ordinary worker rollout cannot upgrade it (see docs/CONFIGURATION.md)")
+		}
 	}
 	artifact, err := m.stageRelease()
 	if err != nil {

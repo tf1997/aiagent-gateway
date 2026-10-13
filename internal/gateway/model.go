@@ -38,7 +38,7 @@ type Endpoint struct {
 }
 type EndpointInterface struct {
 	URL             string `json:"url"`
-	CredentialRef   string `json:"credential_ref,omitempty"`
+	Token           string `json:"token,omitempty"`
 	HealthURL       string `json:"health_url,omitempty"`
 	ProtocolVersion string `json:"protocol_version,omitempty"`
 	Tenant          string `json:"tenant,omitempty"`
@@ -98,7 +98,6 @@ type Options struct {
 	dialContext                                          func(context.Context, string, string) (net.Conn, error)
 	StateSocket, WorkerID                                string
 	DataDir, AdminToken, PublicURL                       string
-	Credentials                                          map[string]string
 	Initialize                                           bool
 	DeferBackground                                      bool
 	MaxSessions, MaxTasks, MaxInflight                   int
@@ -150,7 +149,7 @@ func validURL(s string) bool {
 	u, e := url.Parse(s)
 	return e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.Fragment == ""
 }
-func validate(c *Config, credentials map[string]string) error {
+func validate(c *Config) error {
 	if c.Schema != 2 {
 		return fmt.Errorf("unsupported schema_version")
 	}
@@ -205,8 +204,8 @@ func validate(c *Config, credentials map[string]string) error {
 				if iface.HealthURL != "" && !validURL(iface.HealthURL) {
 					return fmt.Errorf("invalid health_url")
 				}
-				if iface.CredentialRef != "" && credentials[iface.CredentialRef] == "" {
-					return fmt.Errorf("missing credential in YAML credentials")
+				if iface.Token != "" && (len(iface.Token) > 4096 || strings.ContainsAny(iface.Token, "\r\n\x00")) {
+					return fmt.Errorf("invalid upstream token")
 				}
 				if entry == "proxy" && (iface.ProtocolVersion != "" || iface.Tenant != "") {
 					return fmt.Errorf("proxy interface must not specify protocol_version or tenant")

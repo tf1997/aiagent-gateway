@@ -9,7 +9,7 @@ import (
 
 func TestYAMLCLIInitializationAndEnvironmentRemoval(t *testing.T) {
 	dir := t.TempDir()
-	config := filepath.Join(dir, "gateway.yaml")
+	config := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(config, []byte("admin_token: admin-yaml\ndata_dir: data\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -30,6 +30,10 @@ func TestYAMLCLIInitializationAndEnvironmentRemoval(t *testing.T) {
 	}
 	if code := runForeground([]string{"--config", config, "--init-only"}); code != 0 {
 		t.Fatal("revalidation failed", code)
+	}
+	t.Chdir(dir)
+	if code := runForeground([]string{"--init-only"}); code != 0 {
+		t.Fatal("default config.yaml was not loaded", code)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "data/config.json"), []byte("broken"), 0600); err != nil {
 		t.Fatal(err)

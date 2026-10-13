@@ -6,11 +6,11 @@ ConditionPathExists=!/var/lib/aiagent-gateway/config.json
 Type=oneshot
 User=aiagent-gateway
 Group=aiagent-gateway
-LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml
+LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml
 WorkingDirectory=/var/lib/aiagent-gateway
 StateDirectory=aiagent-gateway
 StateDirectoryMode=0700
-ExecStart=/usr/local/bin/aiagent-gateway --init-only --config=%d/gateway.yaml
+ExecStart=/usr/local/bin/aiagent-gateway --init-only --config=%d/config.yaml
 TimeoutStartSec=30
 UMask=0077
 NoNewPrivileges=true

@@ -48,7 +48,7 @@ flowchart LR
 | 资源 | 职责 | 主要字段 |
 | --- | --- | --- |
 | Route | 逻辑智能体的访问入口 | ID、key、protocol、endpoints、balance_policy、health_policy、enabled、session_policy、timeout、version |
-| Endpoint | 实际 Agent 服务 | ID、route_id、url、weight、state、credential_ref、version |
+| Endpoint | 实际 Agent 服务 | ID、route_id、url、weight、state、interfaces（含 token）、version |
 | SessionBinding | 会话与实例的绑定 | route_id、tenant_id、owner_id、session_id、endpoint_id、generation、last_seen_at、expires_at |
 | TaskBinding | A2A 任务归属和路由 | route_id、tenant_id、owner_id、gateway_task_id、upstream_task_id、endpoint_id、session_id、status、expires_at |
 | Credential | 上游认证凭据 | ID、type、加密后的凭据或外部密钥引用 |
@@ -384,7 +384,7 @@ Idempotency-Key: add-research-instance-003
 
 | 数据 | 内存 | 本地文件 | 重启行为 |
 | --- | --- | --- | --- |
-| 路由及其内嵌实例、凭据引用 | 是 | 是 | 从文件恢复 |
+| 路由及其内嵌实例、上游 Token | 是 | 是 | 从文件恢复 |
 | 配置版本、管理幂等记录、有界审计 | 是 | 是 | 从文件恢复 |
 | 会话绑定、context 别名 | 是 | 否 | 清空 |
 | A2A 任务路由映射 | 是 | 否 | 清空，旧任务操作返回明确错误 |
@@ -397,7 +397,7 @@ data/
   .config-*.tmp      同目录临时文件，不作为已提交配置加载
 ```
 
-`config.json` 包含 schema_version、config_revision、路由（内嵌实例）、凭据引用、管理 API 幂等记录和有界审计记录。配置修改全部通过 HTTP API，不直接编辑运行中的文件。
+`config.json` 包含 schema_version、config_revision、路由（内嵌实例及接口 Token）、管理 API 幂等记录和有界审计记录。配置修改全部通过 HTTP API，不直接编辑运行中的文件。
 
 ### 8.2 配置更新流程
 

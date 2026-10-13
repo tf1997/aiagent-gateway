@@ -18,7 +18,7 @@ import (
 )
 
 func testOptions(dir string) Options {
-	return Options{DataDir: dir, AdminToken: "admin-secret", Credentials: map[string]string{"UPSTREAM_TEST_TOKEN": "upstream-secret", "TEST_PROXY_KEY": "proxy-key", "TEST_A2A_KEY": "a2a-key", "TEST_HEALTH_KEY": "health-key"}, Initialize: true, dialContext: testDial, PublicURL: "http://localhost:8080"}
+	return Options{DataDir: dir, AdminToken: "admin-secret", Initialize: true, dialContext: testDial, PublicURL: "http://localhost:8080"}
 }
 func testConsumers() []map[string]string {
 	return []map[string]string{{"id": "alice", "token": "alice-secret"}, {"id": "bob", "token": "bob-secret"}}
@@ -205,7 +205,7 @@ func TestProxyStreamingAndCancellation(t *testing.T) {
 	defer up.Close()
 	g := setup(t)
 	rt := create(t, g, "proxy", up.URL+"/base")
-	w := admin(t, g, "PATCH", "/admin/v1/routes/"+rt.ID+"/endpoints/"+rt.Endpoints[0].ID, `{"credential_ref":"UPSTREAM_TEST_TOKEN"}`, `"1"`, "")
+	w := admin(t, g, "PATCH", "/admin/v1/routes/"+rt.ID+"/endpoints/"+rt.Endpoints[0].ID, `{"token":"upstream-secret"}`, `"1"`, "")
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}

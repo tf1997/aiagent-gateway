@@ -70,7 +70,7 @@ curl --fail-with-body http://127.0.0.1:8642/v1/capabilities \
 
 优先核对 `features` 下的 `session_resources`、`session_chat`、`session_chat_streaming`、`session_fork`、`run_submission`、`run_status`、`run_events_sse`、`run_stop`，以及对应的 `endpoints`。需要审批/steer 时再检查相应能力。[H2] [H9]
 
-跨容器或跨机器接入时，`127.0.0.1` 只对 Hermes 自己所在的网络命名空间有效，需将监听改为网关可达的地址。上游凭据应配置在本框架进程环境中，通过 `credential_ref` 引用。
+跨容器或跨机器接入时，`127.0.0.1` 只对 Hermes 自己所在的网络命名空间有效，需将监听改为网关可达的地址。上游凭据应直接配置在路由接口的 `token` 中。
 
 多 profile 有两种部署方式：独立端口，或启用 `gateway.multiplex_profiles` 后使用 `/p/<profile>/...`。后者必须携带目标 profile 自己的 `API_SERVER_KEY`；默认 profile 的 Key 不自动授权其他 profile。可以将 Endpoint URL 配为 `http://hermes-host:8642/p/alice`，由本框架拼接剩余路径。[H1]
 
@@ -201,7 +201,7 @@ Hermes 重启后，会话历史、响应链、幂等执行记录是不同存储�
 
 ### 7.1 路由配置示例
 
-以下是提交到本框架 `POST /admin/v1/routes` 的 JSON。先在网关进程环境中设置 `HERMES_API_KEY`，其值为对应 Hermes profile 的 `API_SERVER_KEY`。`credential_ref` 填的是环境变量名，不能填密钥本身。
+以下是提交到本框架 `POST /admin/v1/routes` 的 JSON。`token` 填写对应 Hermes profile 的 `API_SERVER_KEY` 原值，不包含 `Bearer ` 前缀。
 
 ```json
 {
@@ -223,7 +223,7 @@ Hermes 重启后，会话历史、响应链、幂等执行记录是不同存储�
       "name": "hermes-1",
       "url": "http://127.0.0.1:8642",
       "health_url": "http://127.0.0.1:8642/health",
-      "credential_ref": "HERMES_API_KEY",
+      "token": "replace-with-hermes-http-secret",
       "weight": 100
     }
   ]
@@ -271,7 +271,7 @@ curl --fail-with-body \
 | 项目 | 当前行为 | 接入要求 |
 | --- | --- | --- |
 | HTTP/SSE 路径 | 去掉 `/proxy/{routeKey}`，拼接 Endpoint URL；流式复制 | Endpoint 指向基础地址，避免重复 `/api`、`/v1`；保持 SSE 事件原样 |
-| 上游认证 | 清除客户端 Authorization、Cookie，再注入 `Bearer <credential_ref 对应值>` | 网关 Token 与 Hermes Key 分开配置 |
+| 上游认证 | 清除客户端 Authorization、Cookie，再注入 `Bearer <token>` | 网关 Token 与 Hermes Key 分开配置 |
 | 会话绑定 | 仅内存；键为 caller ID、route ID、请求头 ID；默认空闲 24h | 重启/过期后多实例可能漂移；需要固定实例入口或可恢复的归属目录 |
 | 未知资源 ID | 普通代理不会验证其原实例 | 对旧会话、response、run 不应随机重选；资源恢复失败由业务明确处理 |
 | 幂等 | **删除 `Idempotency-Key` 和 `X-Idempotency-Key`** | Hermes Runs 的持久去重不会生效；须修改转发策略并联调后才能承诺安全重试 |

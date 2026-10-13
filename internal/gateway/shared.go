@@ -170,7 +170,7 @@ func (g *Gateway) refreshShared() error {
 	}
 	current := g.current.Load()
 	if current == nil || current.Config.Revision != out.Config.Revision {
-		if err := validate(out.Config, g.opts.Credentials); err != nil {
+		if err := validate(out.Config); err != nil {
 			return err
 		}
 		g.current.Store(build(*out.Config))

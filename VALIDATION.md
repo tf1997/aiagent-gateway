@@ -1,8 +1,14 @@
 # 验证记录
 
+## config.yaml 与路由上游 Token（2026-10-13）
+
+默认配置名和 systemd 凭据路径统一为 config.yaml，示例改为 config.example.yaml。YAML credentials 与 Options.Credentials 已移除，上游 Bearer Token 通过路由接口 token 持久化和动态更新；管理响应与幂等回执脱敏。旧 credential_ref 需迁移，旧 gateway.yaml 基础组件不能直接灰度更新 worker。
+
+验证覆盖默认配置加载、YAML 拒绝 credentials、HTTP/A2A/健康检查鉴权、Token 轮换和清除、共享 worker 使用新 Token、重启恢复、管理接口与幂等回执脱敏，以及 upsert 省略 Token 时保留原值和实例身份。`go test -race ./...`、`go vet ./...`、Python 语法、OpenAPI 引用及 `git diff --check` 检查通过。systemd 仍未进行 Linux 实机安装验证。
+
 ## 路由动态消费者（2026-10-11）
 
-YAML callers 和静态 Options.Callers 已完全移除；消费者由路由管理 POST/upsert/PATCH 的 consumers 字段动态管理。配置仅持久化 Token 哈希，管理响应及幂等回执不返回 Token/哈希；消费者 ID 作为稳定资源归属。
+YAML callers 和静态 Options.Callers 已完全移除；消费者由路由管理 POST/upsert/PATCH 的 consumers 字段动态管理。消费者配置仅持久化 Token 哈希，管理响应及幂等回执不返回 Token/哈希；消费者 ID 作为稳定资源归属。
 
 新增测试覆盖轮换/撤销即时生效、无消费者拒绝访问、同 Token 的路由隔离、保持原会话身份、重启恢复及幂等重放不复活旧凭据、错误输入/容量/持久化失败原子性、灰度入口和 worker 刷新、撤销后后台核查、并发轮换和在途额度不重置。YAML 严格校验测试确认 callers 字段被拒绝。
 
@@ -10,7 +16,7 @@ YAML callers 和静态 Options.Callers 已完全移除；消费者由路由管�
 
 ## YAML 运行配置（2026-10-11）
 
-网关前台、init-only/check-ready 和四个角色统一读取 --config 指定的 YAML；默认 gateway.yaml。GATEWAY_* 启动变量与上游凭据环境变量已移除。上游凭据通过 YAML credentials 字典校验和注入，路由 config.json 不保存 Token。
+网关前台、init-only/check-ready 和四个角色统一读取 --config 指定的 YAML；默认路径现为 config.yaml。GATEWAY_* 启动变量与上游凭据环境变量已移除。当时上游凭据通过 YAML credentials 字典校验和注入；此机制已由 2026-10-13 的路由接口 token 替代。
 
 - `go test ./...`、`go test -race ./...`、`go vet ./...` 全部通过。
 - 配置回归覆盖相对路径、默认值、未知/重复字段、多文档、null、非法容量/监听、凭据错误脱敏、环境变量不覆盖/不回退，以及 --init-only 不覆盖损坏路由存储。

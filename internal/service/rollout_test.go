@@ -119,7 +119,7 @@ func TestEnvironmentDeploymentRejectedBeforeMutation(t *testing.T) {
 	if err := atomicWrite(m.path("/etc/aiagent-gateway/gateway.env"), []byte("GATEWAY_ADMIN_TOKEN=old-secret\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "gateway.yaml") {
+	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "config.yaml") {
 		t.Fatal("environment deployment accepted", err)
 	}
 	if len(system.calls) != 0 {
@@ -151,6 +151,22 @@ func TestSystemYAMLRejectsUnsupportedPaths(t *testing.T) {
 	}
 	if err := validateSystemConfig(m.path(configPath)); err == nil {
 		t.Fatal("installer accepted a path inconsistent with units")
+	}
+}
+
+func TestOldYAMLInfrastructureRequiresMaintenance(t *testing.T) {
+	m, system := rolloutManager(t)
+	if err := atomicWrite(m.path("/etc/systemd/system/aiagent-gateway-state.service"), []byte("LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "route tokens") {
+		t.Fatal("accepted incompatible infrastructure", err)
+	}
+	if len(system.calls) != 0 {
+		t.Fatal("existing services changed", system.calls)
+	}
+	if _, err := os.Stat(m.path(ReleasesDir)); !os.IsNotExist(err) {
+		t.Fatal("staged a release before migration check")
 	}
 }
 func TestRolloutUnitsBindImmutableRelease(t *testing.T) {

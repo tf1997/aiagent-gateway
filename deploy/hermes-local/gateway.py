@@ -67,25 +67,12 @@ def credentials():
     return load(STATE / "credentials.json")
 
 
-def upstream_keys():
-    result = {}
-    for line in (RUNTIME / "gateway.env").read_text().splitlines():
-        if line and not line.startswith("#"):
-            k, v = line.split("=", 1)
-            if k in ("HERMES_LOCAL_HTTP_KEY", "HERMES_LOCAL_A2A_KEY", "HERMES_REPLICA_HTTP_KEY", "HERMES_REPLICA_A2A_KEY"):
-                result[k] = v
-    if not all(result.get(k) for k in ("HERMES_LOCAL_HTTP_KEY", "HERMES_LOCAL_A2A_KEY")):
-        raise RuntimeError("Missing Hermes gateway credentials; run manage.py up first")
-    return result
-
-
 def write_config(creds):
     # JSON is a YAML subset; avoid a Python YAML dependency in the helper.
-    config = {"admin_token": creds["admin_token"],
-              "credentials": upstream_keys(), "data_dir": str(STATE / "data"),
-              "listen": "127.0.0.1:18080", "admin_listen": "127.0.0.1:19090",
+    config = {"admin_token": creds["admin_token"], "data_dir": str(STATE / "data"),
+              "port": 18080, "admin_port": 19090,
               "public_url": DATA_URL}
-    path = STATE / "gateway.yaml"
+    path = STATE / "config.yaml"
     write_private(path, json.dumps(config, indent=2) + "\n")
     return str(path)
 
@@ -115,8 +102,7 @@ def register():
     if requested["key"] != "hermes-local":
         raise RuntimeError("This isolated runner expects route key hermes-local")
     a2a = requested["endpoints"][0]["interfaces"]["a2a"]
-    card = require(a2a["url"].rstrip("/") + "/.well-known/agent-card.json",
-                   upstream_keys()[a2a["credential_ref"]])
+    card = require(a2a["url"].rstrip("/") + "/.well-known/agent-card.json", a2a["token"])
     if not any(i.get("protocolVersion") == "1.0" and i.get("protocolBinding") == "JSONRPC"
                for i in card.get("supportedInterfaces", [])):
         raise RuntimeError("Hermes Card does not advertise A2A 1.0 JSONRPC")
@@ -134,7 +120,10 @@ def register():
                 or not route["enabled"]):
             raise RuntimeError("Existing route type/exposure/state differs; reconcile explicitly in the management API")
         current_interfaces = [e["interfaces"] for e in route["endpoints"]]
-        if current_interfaces != [e["interfaces"] for e in requested["endpoints"][:len(current_interfaces)]]:
+        expected_interfaces = [{name: {k: v for k, v in iface.items() if k != "token"}
+                                for name, iface in e["interfaces"].items()}
+                               for e in requested["endpoints"][:len(current_interfaces)]]
+        if current_interfaces != expected_interfaces:
             raise RuntimeError("Existing route endpoints differ; reconcile explicitly in the management API")
         for endpoint in requested["endpoints"][len(current_interfaces):]:
             require(ADMIN_URL + "/admin/v1/routes/" + route["id"] + "/endpoints", creds["admin_token"], endpoint)
@@ -143,15 +132,17 @@ def register():
         if patch:
             route = require(ADMIN_URL + "/admin/v1/routes/" + route["id"], creds["admin_token"],
                             patch, "PATCH", {"If-Match": '"' + str(route["version"]) + '"'})
-    # Register/rotate access dynamically; plaintext tokens are never in the response.
+    # Register/rotate both upstream and consumer tokens without a restart.
     route = require(ADMIN_URL + "/admin/v1/routes", creds["admin_token"],
-                    {"key": requested["key"], "consumers": requested["consumers"]})
+                    {"key": requested["key"], "consumers": requested["consumers"],
+                     "endpoints": requested["endpoints"]})
     write_private(STATE / "registered-route.json", json.dumps(route, indent=2) + "\n")
     print(f"Route ready: {DATA_URL}/agents/hermes-local (HTTP + A2A)", flush=True)
 
 
 def start():
-    upstream_keys()  # Fail before starting if the Hermes deployment has not been configured.
+    if not (RUNTIME / "gateway-route.json").exists():
+        raise RuntimeError("Missing Hermes gateway route; run manage.py up first")
     if saved_pid():
         require(ADMIN_URL + "/admin/v1/config/status", credentials()["admin_token"], timeout=5)
         register()

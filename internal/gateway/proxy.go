@@ -146,8 +146,8 @@ func cleanHeaders(h http.Header) {
 func (g *Gateway) upstreamHeaders(h http.Header, c Caller, e EndpointInterface) {
 	cleanHeaders(h)
 	h.Set("X-Gateway-Caller-ID", c.ID)
-	if e.CredentialRef != "" {
-		h.Set("Authorization", "Bearer "+g.opts.Credentials[e.CredentialRef])
+	if e.Token != "" {
+		h.Set("Authorization", "Bearer "+e.Token)
 	}
 }
 

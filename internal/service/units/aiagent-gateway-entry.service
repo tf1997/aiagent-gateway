@@ -5,8 +5,8 @@ After=aiagent-gateway-state.service
 [Service]
 User=aiagent-gateway
 Group=aiagent-gateway
-LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml
-ExecStart=@BINARY@ entry --config=%d/gateway.yaml
+LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml
+ExecStart=@BINARY@ entry --config=%d/config.yaml
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=aiagent-gateway

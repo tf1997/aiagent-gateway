@@ -5,38 +5,37 @@
 ## 快速启动
 
 ```sh
-cp gateway.example.yaml gateway.yaml
-chmod 600 gateway.yaml
-# 编辑 gateway.yaml，替换管理 Token 和上游凭据。
+cp config.example.yaml config.yaml
+chmod 600 config.yaml
+# 编辑 config.yaml，替换管理 Token。
 go build -o bin/aiagent-gateway ./cmd/gateway
-./bin/aiagent-gateway --config ./gateway.yaml --init-only
-./bin/aiagent-gateway --config ./gateway.yaml
+./bin/aiagent-gateway --config ./config.yaml --init-only
+./bin/aiagent-gateway --config ./config.yaml
 ```
 
-不传 `--config` 时读取当前工作目录的 `gateway.yaml`。配置文件不存在、字段未知/重复、类型不正确、显式 null、多个 YAML 文档或容量非正数都会拒绝启动；解析错误不回显配置值。文件最大 1 MiB。
+不传 `--config` 时读取当前工作目录的 `config.yaml`。配置文件不存在、字段未知/重复、类型不正确、显式 null、多个 YAML 文档或容量非正数都会拒绝启动；解析错误不回显配置值。文件最大 1 MiB。
 
 `--init-only` 只初始化或校验路由存储；`--init` 允许首次初始化后继续监听。两者都不会覆盖损坏的路由存储，常规启动省略这两个选项。`--check-ready` 从同一 YAML 读取监听地址执行就绪检查。
 
 最小实用配置：
 
 ```yaml
-listen: "127.0.0.1:8080"
-admin_listen: "127.0.0.1:9090"
+port: 8080
+admin_port: 9090
 data_dir: "./data"
 public_url: "http://127.0.0.1:8080"
 admin_token: "replace-with-admin-secret"
-credentials:
-  hermes_http: "replace-with-http-secret"
-  hermes_a2a: "replace-with-a2a-secret"
 ```
 
-YAML 只保存管理 Token 和上游凭据，**不再接受 callers 字段**。消费者通过路由管理 API 的 `consumers` 动态配置，见 [使用说明](USAGE.md#动态配置消费者)。Token 建议加引号；内容按字面读取，不展开 `$VAR` / `${VAR}`。没有上游认证时可省略 `credentials` 或设置 `{}`。
+`port` 和 `admin_port` 只填写 1–65535 的端口号，支持数字或带引号的数字，不填写 IP 或冒号。数据面监听所有网卡，管理面仅监听本机 `127.0.0.1`。
+
+YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials` 字段**。消费者通过路由管理 API 的 `consumers` 动态配置，上游 Token 放在路由各个接口的 `token` 中，见 [使用说明](USAGE.md#动态配置消费者)。Token 按字面读取，不展开 `$VAR` / `${VAR}`。
 
 相对数据目录、Socket 和其他文件路径都相对于 **YAML 文件所在目录**，不随进程工作目录变化。修改 YAML 后需重启相应进程；路由管理 API 的更新仍立即生效。
 
 ## 上游凭据
 
-Endpoint 接口中的 `credential_ref` 改为引用 YAML `credentials` 的键：
+上游 Agent 的 Bearer Token 直接配置在路由的 `endpoints[].interfaces.proxy.token` 或 `endpoints[].interfaces.a2a.token` 中：
 
 ```json
 {
@@ -47,25 +46,26 @@ Endpoint 接口中的 `credential_ref` 改为引用 YAML `credentials` 的键：
   "endpoints": [{
     "name": "hermes-1",
     "interfaces": {
-      "proxy": {"url":"http://127.0.0.1:18642","credential_ref":"hermes_http"},
-      "a2a": {"url":"http://127.0.0.1:19900/","protocol_version":"1.0","credential_ref":"hermes_a2a"}
+      "proxy": {"url":"http://127.0.0.1:18642","token":"replace-with-http-secret"},
+      "a2a": {"url":"http://127.0.0.1:19900/","protocol_version":"1.0","token":"replace-with-a2a-secret"}
     }
   }]
 }
 ```
 
-网关注入 `Authorization: Bearer <值>`，凭据值不要包含 `Bearer ` 前缀。HTTP、A2A、健康检查、能力探测和后台核查共用此字典。配置加载和管理写入都会校验引用存在；仅在环境变量中提供同名值不会通过校验。
+网关注入 `Authorization: Bearer <token>`，Token 不要包含 `Bearer ` 前缀。HTTP、A2A、健康检查、能力探测和后台核查都使用对应接口的 Token。管理写入和配置加载校验长度（最多 4096 字节）及换行/NUL；不读取 YAML 凭据字典或环境变量。
 
-已有路由无需重建：将旧 `credential_ref` 对应的环境变量名直接作为字典键，填入原 Token 即可。凭据不会进入路由 `config.json`、管理响应或共享状态日志。
+更新 Token 通过路由 POST/upsert 或 Endpoint PATCH 动态生效，无需重启。更新已有接口时省略 `token` 保留原值，显式 `null` 或空字符串移除认证；首次创建省略表示无需上游认证。管理响应及幂等回执不返回 Token。
+
+上游 Token 需要原文转发，随路由保存到权限 0600 的 `config.json`，并通过受认证的本机共享配置传给 worker；消费者 Token 仍仅保存哈希。已有 `credential_ref` 必须迁入接口的 `token`，不能将原引用名当成 Token。迁移步骤见下文。
 
 ## 字段与默认值
 
 | YAML 字段 | 默认值 | 用途 |
 | --- | --- | --- |
 | `admin_token` | 必填 | 管理及本机控制认证 |
-| `credentials` | 空字典 | 上游 Bearer Token 引用 |
-| `listen` | `:8080` | 数据监听 |
-| `admin_listen` | `127.0.0.1:9090` | 管理监听 |
+| `port` | `8080` | 数据端口，监听所有网卡 |
+| `admin_port` | `9090` | 管理端口，仅监听本机 127.0.0.1 |
 | `data_dir` | `./data` | 路由与共享状态目录 |
 | `public_url` | 空 | A2A Card 对外基础地址；使用 Card 时必须设置 |
 | `max_inflight` | 4096 | 全局并发上限 |
@@ -82,21 +82,27 @@ Endpoint 接口中的 `credential_ref` 改为引用 YAML `credentials` 的键：
 | `deployment` | `/etc/aiagent-gateway/deployment.json` | 部署清单与发布策略 |
 | `rollout_data` | `/var/lib/aiagent-gateway-rollout` | 发布日志目录 |
 
-`entry`、`state-server`、`worker`、`rollout-controller` 都接受角色名后的 `--config PATH`。worker 的 `--slot`、`--release`、`--listen` 和 `--admin` 是发布控制器传入的实例参数；显式监听参数覆盖该角色 YAML 的监听地址。
+`entry`、`state-server`、`worker`、`rollout-controller` 都接受角色名后的 `--config PATH`。worker 的 `--slot`、`--release`、`--listen` 和 `--admin` 是发布控制器传入的实例参数；显式监听参数仍使用 `host:port`，覆盖该角色由 YAML 端口生成的监听地址。
 
-旧环境变量到 YAML 的对应关系：去掉 `GATEWAY_` 前缀并改为小写，例如 `GATEWAY_ADMIN_TOKEN` → `admin_token`、`GATEWAY_MAX_INFLIGHT` → `max_inflight`。`GATEWAY_CALLERS` 不迁入 YAML，应为每个路由通过管理 API 登记 `consumers`；`GATEWAY_INIT` 改为一次性 CLI 选项；上游 Token 放进 `credentials`。
+旧环境变量到 YAML 的对应关系：去掉 `GATEWAY_` 前缀并改为小写，例如 `GATEWAY_ADMIN_TOKEN` → `admin_token`、`GATEWAY_MAX_INFLIGHT` → `max_inflight`。`GATEWAY_LISTEN` 和 `GATEWAY_ADMIN_LISTEN` 分别迁入 `port` 和 `admin_port`，只保留端口号。`GATEWAY_CALLERS` 不迁入 YAML，应为每个路由通过管理 API 登记 `consumers`；`GATEWAY_INIT` 改为一次性 CLI 选项；上游 Token 放进路由接口的 `token`。
 
 ## systemd 安装
 
-首次 `install` 生成 `/etc/aiagent-gateway/gateway.yaml`，使用独立随机 Token，文件权限 0600，目录权限 0700。也可在全新服务器预先放置有效 YAML；安装器保留已有内容。
+首次 `install` 生成 `/etc/aiagent-gateway/config.yaml`，使用独立随机 Token，文件权限 0600，目录权限 0700。也可在全新服务器预先放置有效 YAML；安装器保留已有内容。
 
-服务 unit 使用 `LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml` 和 `--config=%d/gateway.yaml`，由 systemd 将 root 文件提供给服务用户读取。需要支持该机制的 systemd（247+），详情见 [systemd 凭据文档](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#LoadCredential=)。不再使用 EnvironmentFile，也不需要放宽原文件权限。
+服务 unit 使用 `LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml` 和 `--config=%d/config.yaml`，由 systemd 将 root 文件提供给服务用户读取。需要支持该机制的 systemd（247+），详情见 [systemd 凭据文档](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#LoadCredential=)。不再使用 EnvironmentFile，也不需要放宽原文件权限。
 
-安装器生成的 `data_dir` 是 `/var/lib/aiagent-gateway`。内置 systemd unit/driver 使用固定的状态目录、Socket、部署清单及发布日志路径，预置 YAML 也必须使用上述绝对默认路径；不兼容的路径配置会在启动/升级前拒绝。监听地址、公开 URL、上游凭据和容量可调整。消费者凭据通过路由 API 动态调整，无需重启。需要自定义内部路径时，使用前台角色启动或自行维护 unit。
+安装器生成的 `data_dir` 是 `/var/lib/aiagent-gateway`。内置 systemd unit/driver 使用固定的状态目录、Socket、部署清单及发布日志路径，预置 YAML 也必须使用上述绝对默认路径；不兼容的路径配置会在启动/升级前拒绝。监听地址、公开 URL 和容量可调整。消费者及上游凭据通过路由 API 动态调整，无需重启。需要自定义内部路径时，使用前台角色启动或自行维护 unit。
+
+### 从 gateway.yaml / credentials 版本迁移
+
+在维护窗口停止网关并备份启动配置、路由文件和服务 unit。将原 `gateway.yaml` 改名为 `config.yaml`，将原 `listen`、`admin_listen` 分别改名为 `port`、`admin_port`，值仅保留端口号；对 `config.json` 的每个接口，将原 `credential_ref` 在旧 YAML `credentials` 中对应的值写入 `token`，删除 `credential_ref`，再删除 YAML 的整个 `credentials` 字段。保留管理 Token、路由 ID、Endpoint ID、版本及消费者数据。启动配置和路由文件均保持 0600。
+
+前台进程更新 `--config` 路径后启动。systemd 部署需同时替换所有基础组件及 worker 的二进制和 unit，将 `LoadCredential` 和 `--config` 改为本文的 `config.yaml` 路径；普通 worker 灰度升级会拒绝仍使用 `gateway.yaml` 的基础组件，避免混用两种上游认证配置。启动前可用 `--config ... --init-only` 校验现有路由文件。旧的 `credential_ref` 会被拒绝，不会静默丢弃认证。
 
 ### 从环境变量版本迁移
 
-这是进程配置格式变更，旧二进制不能读取新的 YAML；新版也不会 source 旧 `gateway.env`。先将原地址、管理 Token 和上游凭据转入 YAML，保留原文件及二进制备份。删除 YAML 中的 `callers`，新进程启动后按原 routes 权限为每条路由提交 `consumers:[{"id":"原调用方ID","token":"原调用方Token"}]`。迁移后续接资源必须保留原调用方 ID、路由文件、Endpoint ID 和上游凭据；没有消费者的旧路由会拒绝业务请求。此认证配置变更需基础组件与 worker 一起维护升级，不应混跑旧的静态认证进程。
+这是进程配置格式变更，旧二进制不能读取新的 YAML；新版也不会 source 旧 `gateway.env`。先将原地址和管理 Token 转入 YAML，将上游凭据填入路由接口的 `token` 并删除 `credential_ref`，保留原文件及二进制备份。删除 YAML 中的 `callers`，新进程启动后按原 routes 权限为每条路由提交 `consumers:[{"id":"原调用方ID","token":"原调用方Token"}]`。迁移后续接资源必须保留原调用方 ID、路由文件、Endpoint ID 和上游凭据；没有消费者的旧路由会拒绝业务请求。此认证配置变更需基础组件与 worker 一起维护升级，不应混跑旧的静态认证进程。
 
 - 前台单进程：停止旧进程，用新二进制和 `--config` 启动；原进程内资源映射仍会丢失。
 - 旧单进程 systemd：先保存 YAML，再在维护窗口执行新二进制的 `install --migrate`。
@@ -106,4 +112,4 @@ Endpoint 接口中的 `credential_ref` 改为引用 YAML `credentials` 的键：
 
 这一步会中断连接、重建发布基线，旧 release 仍保留用于维护恢复，但环境变量版本不能作为新版控制器的日常灰度候选。恢复旧部署需要停机并整体恢复先前备份，不能用旧配置覆盖新版已接收的资源数据。当前仍需 Linux/systemd 实机验收。
 
-本机 Hermes 工具将管理 Token 和上游凭据写入 `.runtime/gateway/gateway.yaml`，显式传 `--config` 启动，再通过路由 POST 登记保存的消费者。`client.env` 仅供 curl 客户端使用，不再是网关启动配置。
+本机 Hermes 工具将管理 Token 写入 `.runtime/gateway/config.yaml`，显式传 `--config` 启动，再通过路由 POST 登记上游 Token 和消费者。`client.env` 仅供 curl 客户端使用，不再是网关启动配置。

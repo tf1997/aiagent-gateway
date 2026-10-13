@@ -69,7 +69,7 @@ Endpoint 保留稳定的 `id`、名称、权重、管理状态和配置版本。
 | 字段 | 含义 |
 | --- | --- |
 | `url` | proxy 为基础地址，a2a 为准确的 JSON-RPC URL；不根据另一个接口的端口推导 |
-| `credential_ref` | 当前接口的上游 Bearer 凭据环境变量名 |
+| `token` | 当前接口的上游 Bearer Token（管理响应不回显） |
 | `health_url` | 可选探活 URL；探活策略由接口/适配器处理 |
 | `protocol_version` | A2A 仅使用 `1.0`；proxy 不填写 |
 
@@ -101,12 +101,12 @@ Endpoint 保留稳定的 `id`、名称、权重、管理状态和配置版本。
       "interfaces": {
         "proxy": {
           "url": "http://hermes-1:8642",
-          "credential_ref": "HERMES_API_KEY",
+          "token": "replace-with-hermes-http-secret",
           "health_url": "http://hermes-1:8642/health"
         },
         "a2a": {
           "url": "http://hermes-1:9900/",
-          "credential_ref": "HERMES_A2A_KEY",
+          "token": "replace-with-hermes-a2a-secret",
           "protocol_version": "1.0",
           "health_url": "http://hermes-1:9900/.well-known/agent-card.json"
         }
@@ -360,7 +360,7 @@ HTTP lease 与 Run/Task 的生命周期引用分开。返回 202、SSE 断开或
 | --- | --- |
 | `protocol: "proxy"` | `agent_type: "generic"`、`expose: ["proxy"]` |
 | `protocol: "a2a"` | `agent_type: "generic"`、`expose: ["a2a"]`、接口版本 `1.0`（上游必须同步升级） |
-| Endpoint `url/credential_ref/health_url` | 移入原协议对应的 `interfaces` 项 |
+| Endpoint `url/token/health_url` | 移入原协议对应的 `interfaces` 项 |
 | ID、配置版本、权重、管理状态、会话策略 | 保持不变，不重新生成资源身份 |
 
 加载时先识别文件 schema，再使用对应 DTO 解码和迁移；迁移后统一校验。启动读取旧文件时只在内存正规化，首次成功管理写入再原子提交 schema 2，写入前保留可恢复的旧版备份。未知 schema 和混杂冲突字段明确拒绝。

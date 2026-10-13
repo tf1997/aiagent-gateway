@@ -1,0 +1,19 @@
+# Copy to config.yaml and replace the example tokens.
+# Relative paths are resolved from this file's directory.
+# Ports only: data listens on all interfaces, administration on loopback.
+port: 8080
+admin_port: 9090
+data_dir: "./data"
+public_url: "http://127.0.0.1:8080"
+admin_token: "replace-with-admin-secret"
+# Consumer and upstream tokens are configured in POST /admin/v1/routes.
+# Upstream Bearer tokens belong in endpoints[].interfaces.<proxy|a2a>.token.
+
+max_inflight: 4096
+max_per_caller: 1024
+max_per_endpoint: 256
+max_sessions: 100000
+max_tasks: 100000
+max_resources: 200000
+max_resource_aliases: 200000
+max_data_idempotency: 100000

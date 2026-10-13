@@ -82,7 +82,7 @@ func TestUnifiedEntriesAndAliases(t *testing.T) {
 	}))
 	defer rpcUp.Close()
 	g := setup(t)
-	createDual(t, g, map[string]EndpointInterface{"proxy": {URL: proxy.URL + "/base?fixed=1", CredentialRef: "TEST_PROXY_KEY"}, "a2a": {URL: rpcUp.URL + "/rpc?fixed=1", CredentialRef: "TEST_A2A_KEY", ProtocolVersion: "1.0"}})
+	createDual(t, g, map[string]EndpointInterface{"proxy": {URL: proxy.URL + "/base?fixed=1", Token: "proxy-key"}, "a2a": {URL: rpcUp.URL + "/rpc?fixed=1", Token: "a2a-key", ProtocolVersion: "1.0"}})
 	for _, prefix := range []string{"/agents/test", "/proxy/test", "/agents/te%73t"} {
 		w := dataRequest(g, "GET", prefix+"/api/a%2Fb?q=2", "", "alice", "session")
 		if w.Code != 200 || w.Body.String() != "chat" {
@@ -185,7 +185,7 @@ func TestInterfaceHealthAndSharedCapacity(t *testing.T) {
 	}))
 	defer up.Close()
 	g := setup(t)
-	rt := createDual(t, g, map[string]EndpointInterface{"proxy": {URL: up.URL, HealthURL: up.URL + "/proxy-health", CredentialRef: "TEST_HEALTH_KEY"}, "a2a": {URL: up.URL + "/rpc", HealthURL: up.URL + "/a2a-health", CredentialRef: "TEST_HEALTH_KEY", ProtocolVersion: "1.0"}})
+	rt := createDual(t, g, map[string]EndpointInterface{"proxy": {URL: up.URL, HealthURL: up.URL + "/proxy-health", Token: "health-key"}, "a2a": {URL: up.URL + "/rpc", HealthURL: up.URL + "/a2a-health", Token: "health-key", ProtocolVersion: "1.0"}})
 	g.checkHealth(context.Background())
 	if l, err := g.acquire("alice", "test", "new", "", "proxy", nil); err == nil {
 		l.release()

@@ -87,7 +87,7 @@ func runForeground(args []string) int {
 		return 1
 	}
 	if *checkReady {
-		if err := waitReady(cfg.Listen, 15*time.Second); err != nil {
+		if err := waitReady(cfg.ListenAddress(), 15*time.Second); err != nil {
 			slog.Error("readiness check failed", "error", err)
 			return 1
 		}
@@ -105,8 +105,8 @@ func runForeground(args []string) int {
 		slog.Info("configuration initialized or validated")
 		return 0
 	}
-	data := &http.Server{Addr: cfg.Listen, Handler: g.DataHandler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
-	admin := &http.Server{Addr: cfg.AdminListen, Handler: g.AdminHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
+	data := &http.Server{Addr: cfg.ListenAddress(), Handler: g.DataHandler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
+	admin := &http.Server{Addr: cfg.AdminListenAddress(), Handler: g.AdminHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
 	errs := make(chan error, 2)
 	go func() { errs <- data.ListenAndServe() }()
 	go func() { errs <- admin.ListenAndServe() }()

@@ -47,15 +47,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix='gw-rollout-', dir='/tmp') as temp:
         root = pathlib.Path(temp)
         admin_port, public_port = port(), port()
-        config_path = root / 'gateway.yaml'
+        config_path = root / 'config.yaml'
         config_path.write_text(json.dumps({
             'admin_token': admin,
             'data_dir': str(root / 'data'),
             'state_socket': str(root / 'state.sock'),
             'entry_socket': str(root / 'entry.sock'),
             'public_url': f'http://127.0.0.1:{public_port}',
-            'admin_listen': f'127.0.0.1:{admin_port}',
-            'listen': f'127.0.0.1:{public_port}',
+            'admin_port': admin_port,
+            'port': public_port,
         }))
         config_path.chmod(0o600)
 

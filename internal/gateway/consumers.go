@@ -113,11 +113,26 @@ type routeView struct {
 }
 
 func publicRoute(rt *Route) routeView {
-	v := routeView{Route: rt, Consumers: make([]consumerView, 0, len(rt.Consumers))}
+	copy := *rt
+	copy.Endpoints = make([]Endpoint, len(rt.Endpoints))
+	for i := range rt.Endpoints {
+		copy.Endpoints[i] = publicEndpoint(&rt.Endpoints[i])
+	}
+	v := routeView{Route: &copy, Consumers: make([]consumerView, 0, len(rt.Consumers))}
 	for _, c := range rt.Consumers {
 		v.Consumers = append(v.Consumers, consumerView{ID: c.ID})
 	}
 	return v
+}
+
+func publicEndpoint(ep *Endpoint) Endpoint {
+	copy := *ep
+	copy.Interfaces = make(map[string]EndpointInterface, len(ep.Interfaces))
+	for entry, iface := range ep.Interfaces {
+		iface.Token = ""
+		copy.Interfaces[entry] = iface
+	}
+	return copy
 }
 
 // Counter entries exist only while requests are active. Token rotation keeps
