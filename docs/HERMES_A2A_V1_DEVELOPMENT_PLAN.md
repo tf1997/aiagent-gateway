@@ -73,7 +73,7 @@ Endpoint 保留稳定的 `id`、名称、权重、管理状态和配置版本。
 | `health_url` | 可选探活 URL；探活策略由接口/适配器处理 |
 | `protocol_version` | A2A 仅使用 `1.0`；proxy 不填写 |
 
-首期要求每个配置的 Endpoint 都具备 `expose` 中的接口；同一路由各 Endpoint 的 A2A 版本必须一致。不同实例若能力或版本不兼容，应拆为不同路由。API Server 和 A2A 接口必须属于同一个 Hermes 部署/profile；同主机名或相邻端口本身不能证明这一点。
+首期要求每个配置的 Endpoint 都具备 `expose` 中的接口；同一路由各 Endpoint 的 A2A 协议版本必须一致。实例能力差异保留为探测信息，不阻止健康接口代理。API Server 和 A2A 接口必须属于同一个 Hermes 部署/profile；同主机名或相邻端口本身不能证明这一点。
 
 新建路由请求示例，ID 和版本由服务端生成：
 
@@ -120,7 +120,7 @@ Endpoint 保留稳定的 `id`、名称、权重、管理状态和配置版本。
 
 ### 3.3 健康、能力与负载
 
-按 `(endpoint_id, interface)` 维护健康和能力缓存：proxy 接口失败不自动宣告 a2a 接口失败。新请求只选择目标接口健康、能力匹配且为 active 的实例；已有资源固定回原实例，该接口不可用时返回不可用。
+按 `(endpoint_id, interface)` 维护健康和能力缓存：proxy 接口失败不自动宣告 a2a 接口失败。新请求只选择目标接口健康且为 active 的实例；能力不足、探测失败或缓存过期不影响调度。已有资源固定回原实例，该接口不健康时返回不可用。
 
 Endpoint 级并发上限统计两个入口的 HTTP 请求总数，另提供各接口计数。后台 Run/Task 数独立统计。draining 实例不接新会话，允许已绑定会话的新轮次及查询、停止、审批；fork 属于新建会话，在 draining 时拒绝。disabled 实例或被 `expose` 关闭的入口不再服务请求，但保留归属记录。
 
@@ -316,7 +316,7 @@ Content-Type: application/json
 }
 ```
 
-描述和 skills 来自配置/探测；能力为路由承诺、已实现能力与符合要求的上游能力的交集。新增不兼容实例不应让能力静默缩水，而应标记其未就绪。若上游 Card 需要 `tenant`，保存为接口级配置/探测数据并在转发时使用正确值；不让客户端切换到未经授权的上游 tenant。
+描述和 skills 来自配置；对外 Card 声明网关已实现且路由配置允许的能力。上游能力差异保留为探测信息，不通过整体 ready 拒绝代理，具体方法是否支持由上游实际响应确定。若上游 Card 需要 `tenant`，保存为接口级配置/探测数据并在转发时使用正确值；不让客户端切换到未经授权的上游 tenant。
 
 ## 8. 幂等、流与后台生命周期
 
@@ -391,21 +391,21 @@ schema 2 文件不能直接交给旧二进制。回滚必须同时恢复旧二�
 
 ## 10. 文件改造清单
 
-以下新增文件名为实施建议；不要求机械拆分，职责和测试边界必须保留。
+以下路径已按 2026-10-13 的目录整理更新。包边界与依赖关系见 [Gateway 代码结构](../internal/gateway/README.md)。
 
 | 文件 | 主要改动 |
 | --- | --- |
-| `internal/gateway/model.go` | Route/Endpoint 新字段、接口版本、默认值及组合校验 |
-| `internal/gateway/config_migration.go`（新增） | schema 1 DTO、新旧管理输入正规化、备份和迁移 |
-| `internal/gateway/store.go` | 迁移接入、资源目录初始化、运行状态恢复边界 |
-| `internal/gateway/admin.go` | CRUD、ETag/引用保护、接口健康和 Runs 管理查询 |
-| `internal/gateway/runtime.go`、`resources.go`（新增） | 按接口调度、原子归属/别名、引用与生命周期 |
-| `internal/gateway/proxy.go`、`agent_adapter.go`（新增） | `/agents/{appId}` 分发、保留路径优先匹配、旧路径别名、expose 校验、适配器选择、连接与凭据处理 |
-| `internal/gateway/hermes_sessions.go`、`hermes_runs.go`（新增） | Hermes 路径表、ID 转换、能力发现、幂等和事件 |
-| `internal/gateway/a2a.go`、`a2a_v1.go`、`a2a_v03.go` | 公共转发与版本 codec 分离、Card、错误和资源映射 |
-| `internal/gateway/a2a_stream.go`（已新增） | 共享 SSE 解析、边界限制及逐事件观察 |
+| `internal/gateway/protocol/model.go`、`runtime/config/route.go` | Route/Endpoint 字段、接口版本、默认值及组合校验 |
+| `internal/gateway/runtime/config/migration.go`、`config/store.go` | schema 1 DTO、新旧管理输入正规化、备份和迁移 |
+| `internal/gateway/runtime/gateway.go` | 迁移接入、资源目录初始化、运行状态恢复边界 |
+| `internal/gateway/runtime/config/admin.go`、`config/views.go`、`runtime/admin.go` | CRUD、ETag/引用保护、接口健康和 Runs 管理查询，运行时负责配置事务 |
+| `internal/gateway/runtime/scheduler.go`、`runtime/resource/directory.go` | 按接口调度、原子归属/别名、引用与生命周期 |
+| `internal/gateway/runtime/proxy.go`、`runtime/protocols.go` | `/agents/{appId}` 分发、保留路径优先匹配、旧路径别名、expose 校验、适配器组装、连接与凭据处理 |
+| `internal/gateway/hermes/`、`runtime/health.go` | Hermes 路径表、ID 转换、能力发现、幂等和事件 |
+| `internal/gateway/a2a/` | A2A 1.0 转发、Card、错误、资源映射和任务分页 |
+| `internal/gateway/protocol/http.go`、`a2a/stream.go`、`hermes/stream.go` | 共享 SSE 解析、边界限制及逐事件观察 |
 | `api/openapi.yaml`、`cmd/gateway/main.go` | 管理契约及必要的资源容量/后台查询选项 |
-| 各模块测试、`tests/interop/`（新增） | 协议 fixtures、模拟上游、官方 SDK 与真实 Hermes 联调脚本 |
+| `internal/gateway/runtime/*_test.go`、`runtime/resource/*_test.go`、`tests/integration/`、`tests/integration/testdata/`、`deploy/hermes-local/` | 包内状态回归、公开接口集成、协议 fixtures、模拟上游、官方 SDK 与真实 Hermes 联调脚本；旧配置 fixture 保留在 `runtime/testdata/` |
 | `README.md`、`DEVELOPMENT.md`、`VALIDATION.md` | 实际能力、迁移/回滚方式、验证版本及结果 |
 
 ## 11. 实施顺序与完成标准
@@ -448,7 +448,7 @@ P2 是 P3/P4 的共同前置；P3/P4 完成后再进行 P5。开发阶段可按�
 - [A2A 规范 v1.0.1][A1]：重点为版本协商、JSON-RPC 绑定、流生命周期、Agent Card 与错误定义。
 - [A2A Python SDK v1.2.0][A2]：用于测试客户端；其版本号不是协议版本号。
 - [Hermes 会话调研](HERMES_SESSION_API_RESEARCH.md)：固定提交的 API Server、Runs、A2A 源码与接口依据。
-- [当前代理实现](../internal/gateway/proxy.go)、[当前 A2A 实现](../internal/gateway/a2a.go)、[配置存储](../internal/gateway/store.go)、[路由模型](../internal/gateway/model.go)。
+- [当前代理实现](../internal/gateway/runtime/proxy.go)、[当前 A2A 实现](../internal/gateway/a2a/handler.go)、[配置存储](../internal/gateway/runtime/config/store.go)、[路由模型](../internal/gateway/protocol/model.go)。
 
 [A1]: https://github.com/a2aproject/A2A/blob/v1.0.1/docs/specification.md
 [A2]: https://github.com/a2aproject/a2a-python/releases/tag/v1.2.0

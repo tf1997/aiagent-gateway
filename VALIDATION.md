@@ -1,5 +1,57 @@
 # 验证记录
 
+## 集成测试独立与 Options 清理（2026-10-13）
+
+将 53 个通过公开接口验证的用例移入 [tests/integration](tests/integration/README.md)，使用独立的 `integration_test` 包。覆盖路由管理、存储恢复、HTTP/A2A/Hermes、凭据、跨 worker 请求与列表快照；资源和并发状态通过管理 API、`/metrics` 或请求结果检查，A2A/Hermes 资源经过真实数据入口创建。
+
+`runtime` 根目录由 11 个实现文件、12 个测试文件减为 10 个实现文件、7 个测试文件。配置快照、故障注入、锁、调度额度、缓存时钟和资源内部不变量的测试保留在包内。`options.go` 中的共享模型中转别名已移除，唯一的 `Options` 结构定义合入 `runtime/gateway.go`，上层 `gateway.Options` 入口继续保留。
+
+原有 87 个测试/基准入口全部保留；原分页测试中的过期检查拆为 `TestA2AV1ListRejectsExpiredCursor`，合计 88 个入口。6 份配置/协议 fixture 与改动前逐字节一致，A2A fixtures 随集成测试迁移。没有为测试新增生产导出接口。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go test ./...`、`go test -race ./...` | 网关、集成测试及其余包通过；唯一失败仍为改动前已复现的 `internal/appconfig/TestListenerPorts` |
+| `GATEWAY_TEST_IN_MEMORY=true go test -race ./internal/gateway/...` | 通过，包内 HTTP 测试继续支持 net.Pipe，共享状态使用本地 Unix Socket |
+| `go vet ./...`、`go build ./...` | 通过 |
+| 用例清单、fixture 内容、Go 格式、`git diff --check`、本地文档链接 | 通过；集成测试不导入 runtime 或协议适配器实现包 |
+
+既有监听断言要求 `127.0.0.1:18080`，当前 `AdminListenAddress` 返回 `:18080`；本次改动前后的失败相同。集成测试使用临时数据目录、本地随机端口和模拟上游，后台核查经过实际维护循环。
+
+## Runtime 职责拆分（2026-10-13）
+
+继续整理 `internal/gateway/runtime`：配置管理、资源目录、共享通信和 worker 发布逻辑分别进入 `config`、`resource`、`shared`、`rollout` 子包。根目录实现文件由 18 个减少为 11 个，保留启动组装、调度、会话、健康检查和跨模块协调。文件导航见 [Runtime 代码结构](internal/gateway/runtime/README.md)。
+
+原有 87 个测试/基准入口全部保留，6 个独立资源测试随模块迁移；配置和协议 fixtures 逐字节一致。配置事务仍由运行时持生命周期锁，资源 Map 和目录锁封装在资源模块内；公开网关入口、HTTP/共享协议字段及存储格式沿用原有语义。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go test ./internal/gateway/...`、`go test -race ./internal/gateway/...` | 通过，覆盖管理/迁移/认证、资源生命周期、HTTP/SSE/A2A、跨 worker 归属与缓存 |
+| `go test -race ./...` | 网关及其他包通过；唯一失败仍为既有 `internal/appconfig/TestListenerPorts` 监听地址预期差异 |
+| `go vet ./...` | 通过 |
+| 本机构建、Linux amd64/arm64 静态交叉构建 | 通过，产物位于临时目录 |
+| `deploy/rollout-local/check.py`，使用本次构建 | state、entry、两个 worker 的真实进程/TCP 联调通过：存储自动初始化、5% 分配、全量切流、会话归属、失败 POST 不重放、回退及消费者轮换/撤销 |
+| 格式、`git diff --check`、文档路径 | 通过，164 个本地文档链接有效 |
+
+监听地址差异的原因见下一节；此次未修改监听配置。多进程检查使用临时目录、临时端口和模拟上游。
+
+## Gateway 目录整理（2026-10-13）
+
+`internal/gateway` 根目录保留 `gateway.go` 作为对外入口，实现按 `runtime`、`a2a`、`hermes`、`protocol` 分包。运行时组装适配器并持有配置、调度、资源和共享状态；协议适配器通过统一操作访问运行时。文件导航见 [Gateway 代码结构](internal/gateway/README.md)。
+
+对照整理前的备份，原有 87 个测试/基准入口均保留，配置和协议 fixtures 逐字节一致。回归覆盖此前的低版本 Hermes 代理兼容、存储自动初始化，以及 HTTP/SSE/A2A、资源归属、跨 worker 列表和后台生命周期。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go test ./...`、`go test -race ./...` | 网关及其他包通过；`internal/appconfig/TestListenerPorts` 仍有下述既有失败 |
+| `go vet ./...`、Go 格式、`git diff --check` | 通过；跨包资源和缓存结构改用显式字段初始化 |
+| 本机构建、Linux amd64/arm64 静态交叉构建 | 通过；产物保存在临时目录 |
+| `deploy/rollout-local/check.py`，使用本次构建 | state、entry、两个 worker 的真实进程/TCP 联调通过：自动创建存储、5% 分配、全量切换、会话归属、失败 POST 不重放、回退和消费者轮换/撤销 |
+| 文档链接及移动后的 fixtures | 本地链接检查通过，协议 proto 的 SHA-256 与固定记录一致 |
+
+全量测试的既有失败来自 [AdminListenAddress](internal/appconfig/config.go)：工作区此前已将管理监听改为所有地址（如 `:18080`），[TestListenerPorts](internal/appconfig/config_test.go) 仍要求 `127.0.0.1:18080`。该差异在本次目录整理前已复现。
+
+本轮多进程检查使用临时目录、临时端口和模拟 HTTP 上游。真实 Hermes/官方 SDK 联调与 Linux systemd 验收分别以对应阶段记录为准。
+
 ## config.yaml 与路由上游 Token（2026-10-13）
 
 默认配置名和 systemd 凭据路径统一为 config.yaml，示例改为 config.example.yaml。YAML credentials 与 Options.Credentials 已移除，上游 Bearer Token 通过路由接口 token 持久化和动态更新；管理响应与幂等回执脱敏。旧 credential_ref 需迁移，旧 gateway.yaml 基础组件不能直接灰度更新 worker。
@@ -141,7 +193,7 @@ A2A endpoint:  http://127.0.0.1:19900/
 
 ## A2A 1.0 替换验证（2026-09-30，历史代码）
 
-按用户决定移除 0.3.0 编解码器，只支持协议 `1.0`。官方最新稳定发布核对为 `v1.0.1`（2026-05-28），schema 固定于 commit `3303592588e388e62e0f69f701af531d2f4e3991`。原始 proto、许可证、SHA-256 和派生 JSON fixtures 位于 [testdata/a2a-v1.0.1](internal/gateway/testdata/a2a-v1.0.1/README.md)。本节记录当时变更；当前验收见文首 2026-10-05 记录。
+按用户决定移除 0.3.0 编解码器，只支持协议 `1.0`。官方最新稳定发布核对为 `v1.0.1`（2026-05-28），schema 固定于 commit `3303592588e388e62e0f69f701af531d2f4e3991`。原始 proto、许可证、SHA-256 和派生 JSON fixtures 位于 [testdata/a2a-v1.0.1](tests/integration/testdata/a2a-v1.0.1/README.md)。本节记录当时变更；当前验收见文首 2026-10-05 记录。
 
 | 检查 | 结果 |
 | --- | --- |

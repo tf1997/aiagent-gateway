@@ -64,7 +64,7 @@ Runs 必须引用已创建的公开会话。返回的 `run_id` 是网关 ID，�
 - `POST /v1/runs/{run_id}/steer` 补充输入。
 - `POST /v1/runs/{run_id}/approval` 提交审批决定，使用 Hermes 事件中的 request ID 与选项。
 
-`Idempotency-Key` 仅在 Runs 提交中支持。网关在发送前预留原实例和请求指纹，向上游发送包含调用方、路由及操作范围的哈希键；同键同请求重试固定原实例，同键不同请求返回 409。其他写接口带此头会被拒绝，不宣称它们具有相同去重保证。上游 5xx 或网络错误不触发自动重发或重新调度。
+`Idempotency-Key` 仅在 Runs 提交中支持。网关在发送前预留原实例和请求指纹，向上游发送包含调用方、路由及操作范围的哈希键；同键同请求重试固定原实例，同键不同请求返回 409。上游实际去重取决于其 `runs_idempotency.supported` 能力，低版本可能不支持。其他写接口带此头会被拒绝，不宣称它们具有相同去重保证。上游 5xx 或网络错误不触发自动重发或重新调度。
 
 固定发布版 `v2026.9.24` 的 Runs 事件是一次性队列，没有事件序号，完成订阅后再次访问 events 返回 404。调研主分支中的重放缓存不属于此发布版；网关不为它虚构重放能力，公开 `run_events_replay` 为 false。支持重放的上游仍可收到原始 Last-Event-ID，并保留其序号和 replay.truncated 提示。
 
@@ -80,9 +80,9 @@ Runs 必须引用已创建的公开会话。返回的 `run_id` 是网关 ID，�
 
 Hermes 请求 JSON 上限 2 MiB，普通响应 4 MiB，单个 SSE 帧 2 MiB。SSE 按事件校验和转换后立即刷新，保留心跳注释、事件名称、`id`、`retry` 以及 Runs 重放提示。未闭合帧、无终态的提前 EOF、非法标识或超时会报告中断，不伪造完成状态。
 
-Hermes 路由按接口缓存能力，30 秒内复用探测结果；超过 2 分钟的结果不能继续用于调度。HTTP 探测 `/v1/capabilities`，A2A 探测接口基础地址下的 `/.well-known/agent-card.json`。缺少当前适配器所需能力的实例不会参与新请求，也不会因新实例能力不足而静默缩小路由承诺。配置的 `expose` 仍是入口上限。generic 路由保留原有管理配置和健康策略。
+Hermes 路由按接口缓存能力，30 秒内复用探测结果。HTTP 探测 `/v1/capabilities`，A2A 探测接口基础地址下的 `/.well-known/agent-card.json`。能力探测用于诊断和能力展示，不作为调度门槛：低版本缺少部分能力、探测接口缺失或失败、缓存缺失或过期，都不会使健康接口拒绝代理。新请求选择 active 且目标接口健康的实例，已有资源继续固定原实例；具体操作是否支持由上游实际响应确定。配置的 `expose`、网关支持的路径和 A2A 协议版本仍限定可用入口。
 
-管理 Endpoint 详情中的 `runtime.interfaces` 提供 `healthy`、`ready`、`http_inflight` 和 `capabilities`。能力和网络健康分别观察；HTTP 不健康不会直接把 A2A 标记为不健康。
+管理 Endpoint 详情中的 `runtime.interfaces` 提供 `healthy`、`ready`、`http_inflight` 和 `capabilities`。接口 `ready` 反映健康状态；`capabilities.ready` 仅表示最近一次探测是否满足能力基线，为 false 不阻止代理。HTTP 不健康不会直接把 A2A 标记为不健康。
 
 后台每 10 秒轮转检查最多 16 个符合条件的资源，每次查询最多 3 秒，独立于健康检查运行。查询失败保留未知状态和原归属；未获得任何上游 ID 的不确定提交不能凭空核查，客户端应使用原幂等键恢复或人工排查。保留期和内存容量沿用公共目录规则。
 

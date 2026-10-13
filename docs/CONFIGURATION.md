@@ -9,13 +9,12 @@ cp config.example.yaml config.yaml
 chmod 600 config.yaml
 # 编辑 config.yaml，替换管理 Token。
 go build -o bin/aiagent-gateway ./cmd/gateway
-./bin/aiagent-gateway --config ./config.yaml --init-only
 ./bin/aiagent-gateway --config ./config.yaml
 ```
 
 不传 `--config` 时读取当前工作目录的 `config.yaml`。配置文件不存在、字段未知/重复、类型不正确、显式 null、多个 YAML 文档或容量非正数都会拒绝启动；解析错误不回显配置值。文件最大 1 MiB。
 
-`--init-only` 只初始化或校验路由存储；`--init` 允许首次初始化后继续监听。两者都不会覆盖损坏的路由存储，常规启动省略这两个选项。`--check-ready` 从同一 YAML 读取监听地址执行就绪检查。
+启动时自动判断路由存储：`data_dir/config.json` 不存在就创建初始存储，存在则读取并校验，损坏或不可读时拒绝启动。首次启动无需额外步骤，`--init` 参数已移除。`--init-only` 保留为可选的初始化或校验后退出命令，不监听端口；`--check-ready` 从同一 YAML 读取监听地址执行就绪检查。
 
 最小实用配置：
 

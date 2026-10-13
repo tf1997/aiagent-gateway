@@ -46,15 +46,14 @@ admin_token: "replace-with-admin-secret"
 
 `port` 和 `admin_port` 只填端口号；数据面监听所有网卡，管理面仅监听本机 `127.0.0.1`。
 
-编译、初始化路由存储并启动：
+编译并启动：
 
 ```sh
 go build -o bin/aiagent-gateway ./cmd/gateway
-./bin/aiagent-gateway --config ./config.yaml --init-only
 ./bin/aiagent-gateway --config ./config.yaml
 ```
 
-进程在前台运行，日志输出到终端，按 `Ctrl+C` 停止。常规重启只需最后一行；首次也可使用 `--init` 初始化后直接监听。已有路由文件损坏时不会覆盖。省略 `--config` 默认读取当前目录的 `config.yaml`；相对路径以配置文件所在目录为准。
+进程在前台运行，日志输出到终端，按 `Ctrl+C` 停止。首次启动和重启使用同一条命令：路由存储缺失时自动初始化，已有文件直接读取，损坏时拒绝启动。省略 `--config` 默认读取当前目录的 `config.yaml`；相对路径以配置文件所在目录为准。
 
 旧 `GATEWAY_*` 启动环境变量和上游凭据环境变量不再读取。完整字段和迁移步骤见 [YAML 配置说明](CONFIGURATION.md)。
 
@@ -181,7 +180,7 @@ curl -fsS "$GATEWAY_ADMIN_URL/admin/v1/routes" \
   }'
 ```
 
-上游无认证时删除 `token`。Hermes 调度还会检查 `/v1/capabilities`，实例必须满足适配器所需能力。
+上游无认证时删除 `token`。Hermes 会探测 `/v1/capabilities` 并展示能力信息；能力不足或探测失败不阻止健康实例代理，具体操作是否支持由上游响应确定。
 
 ### 先创建会话，再发送消息
 
@@ -541,14 +540,14 @@ sudo journalctl -u aiagent-gateway-rollout -f
 
 | 现象 | 检查和处理 |
 | --- | --- |
-| 启动提示缺配置或配置损坏 | 首次启动显式初始化；已有部署恢复原文件，不要清空目录重新初始化 |
+| 启动提示缺配置或配置损坏 | 确认 YAML 启动配置存在且有效；路由存储缺失时会自动初始化，损坏时需恢复原文件 |
 | `401 UNAUTHORIZED` | 核对端口、Token 类型和 `Authorization: Bearer ...` 格式 |
 | 消费者请求返回 401 | 检查目标路由 consumers 是否已配置、Token 是否被轮换或撤销；YAML 中不再配置 callers |
 | `404 ROUTE_NOT_FOUND` | 检查 `/agents/` 后是否使用 key；确认路由存在且 enabled |
 | `400 SESSION_ID_REQUIRED` | generic 默认需要 `X-Session-ID`；无状态路由可关闭粘性 |
 | 旧 Hermes/A2A ID 返回不存在 | 核对调用方、路由及公开 ID；前台重启丢失的映射不能直接恢复 |
-| `503 NO_HEALTHY_ENDPOINT` | 确认存在 active 实例，检查健康；Hermes 还需检查能力 ready |
-| `503 SESSION_ENDPOINT_UNAVAILABLE` | 原绑定实例禁用、故障或能力不可用，恢复原实例；不会自动迁移会话 |
+| `503 NO_HEALTHY_ENDPOINT` | 确认存在 active 实例并检查目标接口健康；Hermes 的能力探测不影响调度 |
+| `503 SESSION_ENDPOINT_UNAVAILABLE` | 原绑定实例禁用或目标接口不健康，恢复原实例；不会自动迁移会话 |
 | `502/504 UPSTREAM_UNAVAILABLE` | 检查上游地址、凭据、连通性和超时；容器中的 `127.0.0.1` 指容器自身 |
 | `428 IF_MATCH_REQUIRED` | PATCH、实例 DELETE、按内部 ID 删除路由时先读取目标资源 ETag；POST 更新和按 key 删除路由可省略 If-Match |
 | `412 VERSION_CONFLICT` | 重新读取目标资源，确认变更后使用新 ETag |

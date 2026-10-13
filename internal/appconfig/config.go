@@ -151,7 +151,7 @@ func (c Config) ListenAddress() string {
 }
 
 func (c Config) AdminListenAddress() string {
-	return net.JoinHostPort("127.0.0.1", c.AdminPort)
+	return net.JoinHostPort("", c.AdminPort)
 }
 
 func (c Config) Options() gateway.Options {

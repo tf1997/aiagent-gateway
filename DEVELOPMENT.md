@@ -10,18 +10,22 @@
 
 ## 2. 模块与开发顺序
 
-| 文件 | 职责 |
+| 文件或目录 | 职责 |
 | --- | --- |
 | cmd/gateway/main.go、internal/appconfig | YAML 配置、双端口启动、信号和停机 |
-| internal/gateway/model.go | 配置、校验、错误与响应结构 |
-| internal/gateway/store.go | 目录锁、原子落盘、不可变快照、幂等/审计 |
-| internal/gateway/admin.go | 管理 CRUD、版本条件、分页与状态 |
-| internal/gateway/runtime.go | 分片会话表、实例状态、调度、容量/TTL |
-| internal/gateway/proxy.go | 认证、连接复用、HTTP/SSE 转发和超时 |
-| internal/gateway/a2a.go | Card、协议验证、上下游标识映射 |
+| internal/gateway/gateway.go | 对外入口和类型别名，保留 gateway.Open 等调用方式 |
+| internal/gateway/runtime/ | 启动组装、调度、会话绑定、健康检查和跨模块协调 |
+| internal/gateway/runtime/config/ | 配置校验与快照、管理 CRUD、消费者认证、迁移和原子存储 |
+| internal/gateway/runtime/resource/ | 资源目录、别名和父子关系、幂等预留、生命周期及持久化 |
+| internal/gateway/runtime/shared/ | Unix Socket 通信、请求重放与代次校验、租约及列表缓存 |
+| internal/gateway/runtime/rollout/ | Agent 归属解析、worker 身份和发布结果观察 |
+| internal/gateway/a2a/ | Card、A2A 1.0 编解码与资源映射、任务分页、SSE 和 Hermes A2A 兼容 |
+| internal/gateway/hermes/ | Hermes HTTP 请求、会话分页、响应/事件观察及后台查询 |
+| internal/gateway/protocol/ | 共享模型、适配器操作接口、资源/缓存结构和 HTTP 工具 |
+| tests/integration/ | 通过公开入口验证 HTTP/A2A/Hermes、认证、存储恢复和跨 worker 行为 |
 | api/openapi.yaml | 管理接口契约 |
 
-先完成模型、存储与管理，再完成代理和绑定，然后接入 A2A、运行保障与网络集成测试。首版模块收敛在同一 internal 包内，避免早期接口抽象过多；后续按性能及维护需要拆包。
+依赖方向为 gateway → runtime → a2a/hermes → protocol。runtime 组装内部四个子包，子包通过操作接口取得跨模块能力，不反向导入 runtime；资源模块封装自身的锁和持久状态。适配器继续通过 protocol 访问调度、资源、缓存和传输。公开接口的集成测试及 A2A fixtures 位于 tests/integration；依赖私有状态的测试与配置迁移 fixture 保留在 runtime，独立资源测试随资源模块存放。详细导航见 [Gateway 代码结构](internal/gateway/README.md)、[Runtime 代码结构](internal/gateway/runtime/README.md)和 [集成测试说明](tests/integration/README.md)。第 7–16 节为阶段记录，其中旧文件名对应此处整理前的结构。
 
 ## 3. 一致性与并发
 
@@ -35,7 +39,7 @@
 
 YAML 文件提供监听地址、数据目录和管理 Token；消费者通过路由 consumers 动态登记，只持久化 Token 哈希。消费者 ID 是资源隔离键，每条路由独立授权。上游 Token 直接保存在路由接口的 token 中，代理移除客户端 Authorization、Cookie 和不可信身份头后注入可信身份/上游凭据。
 
-首次运行必须显式初始化；已有文件不存在或损坏时不能隐式清空。ready 要求有效快照及持久化健康。管理和诊断端口默认仅绑定本机。
+启动时自动初始化缺失的路由存储，已有文件直接读取；损坏或不可读时拒绝启动。ready 要求有效快照及持久化健康。管理和诊断端口默认仅绑定本机。
 
 ## 5. 验收与测试
 
@@ -63,7 +67,7 @@ YAML 文件提供监听地址、数据目录和管理 Token；消费者通过路
 
 `internal/service` 管理系统安装与服务生命周期；unit 通过 `go:embed` 编译进二进制。入口提供 install/uninstall/start/stop/restart/status 子命令，无参数仍以前台方式运行。仅 Linux 支持服务管理；除 status 外需要 root。命令通过 os/exec 直接传递参数，不调用 shell 或执行凭据文件。
 
-安装使用文件锁避免并发变更。先读入候选二进制和备份，再停止旧服务、原子替换二进制及 unit；启动失败恢复旧文件并尝试恢复原来的运行状态。首次创建独立管理凭据，升级不修改凭据和数据。普通 systemd 服务不设置初始化选项；安装时才调用一次性初始化 unit。启动检查通过 ExecStartPost 调用 --check-ready；主进程监听失败返回非零退出码，使 Restart=on-failure 生效。
+安装使用文件锁避免并发变更。先读入候选二进制和备份，再停止旧服务、原子替换二进制及 unit；启动失败恢复旧文件并尝试恢复原来的运行状态。首次创建独立管理凭据，升级不修改凭据和数据。安装时调用一次性初始化 unit；常规前台和状态服务启动也会自动初始化缺失的路由存储。启动检查通过 ExecStartPost 调用 --check-ready；主进程监听失败返回非零退出码，使 Restart=on-failure 生效。
 
 `--init-only` 完成配置创建或验证后退出，不监听端口；`--check-ready` 根据配置的数据监听地址访问本机 /readyz，最长等待 15 秒，不打开配置存储锁。服务默认预留 30 秒停止时间，覆盖网关 20 秒优雅停机窗口。
 
@@ -119,7 +123,7 @@ P4 的本地协议实现已完成；后续已补齐第 12 节所列单实例 Her
 
 `hermes_stream.go` 复用 SSE 行解析，保留事件、心跳与重放序号，按事件观察生命周期；`hermes_list.go` 提供仅调用方可见的会话查询和有界快照游标。原生 Sessions、fork、同步/SSE 聊天、模型锁、Runs 提交/状态/events/stop/steer/approval、显式会话 Chat Completions，以及 Responses 新链/上一响应/命名会话已接入。详细兼容约束见 [HTTP 契约](docs/HERMES_HTTP_API.md)。
 
-`hermes_capabilities.go` 按接口缓存探测结果，Hermes 实例必须满足能力基线才能调度；管理接口同时展示健康、就绪和能力。`reconcile.go` 使用独立后台循环，有界轮转查询未完成/未知资源；查询失败不当成终态，stop 的 stopping 不提前释放执行归属。
+`hermes_capabilities.go` 按接口缓存探测结果，能力信息仅用于诊断和展示，Hermes 调度按接口健康状态判断，兼容能力不完整的低版本；管理接口同时展示健康、就绪和能力，`capabilities.ready` 不影响接口就绪。`reconcile.go` 使用独立后台循环，有界轮转查询未完成/未知资源；查询失败不当成终态，stop 的 stopping 不提前释放执行归属。
 
 真实 Hermes v2026.9.24 忽略 SendMessage 的 returnImmediately，且 SubscribeToTask 缺少标准要求的初始 Task。`hermes_a2a.go` 分别通过同实例流式入口的有界后台读取、同实例 GetTask 首帧补全实现公开 1.0 语义；新增并发释放、初始 Task、后台完成和停止生命周期测试。generic A2A 的严格标准检查保留。
 

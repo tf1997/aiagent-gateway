@@ -22,10 +22,10 @@ Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原
 cp config.example.yaml config.yaml
 chmod 600 config.yaml
 # 编辑 config.yaml，替换示例 Token 和地址。
-go run ./cmd/gateway --config ./config.yaml --init
+go run ./cmd/gateway --config ./config.yaml
 ```
 
-后续启动省略 `--init`；已有路由文件损坏时始终拒绝启动。省略 `--config` 默认读取当前目录的 `config.yaml`，相对数据路径以 YAML 所在目录为准。旧 `GATEWAY_*` 启动变量及上游凭据环境变量均不再读取；完整字段、上游凭据和旧部署迁移见 [YAML 配置说明](docs/CONFIGURATION.md)。部署时持久化数据目录，TLS 由入口代理终止。
+首次与后续启动使用同一条命令：路由存储不存在时自动初始化，已有文件直接读取，损坏时拒绝启动。省略 `--config` 默认读取当前目录的 `config.yaml`，相对数据路径以 YAML 所在目录为准。旧 `GATEWAY_*` 启动变量及上游凭据环境变量均不再读取；完整字段、上游凭据和旧部署迁移见 [YAML 配置说明](docs/CONFIGURATION.md)。部署时持久化数据目录，TLS 由入口代理终止。
 
 以下仅为 curl 客户端设置 shell 变量，值须与 YAML 中的 Token 一致；网关不会读取这些变量：
 
@@ -122,7 +122,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 
 - 首次安装或维护迁移将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
 - 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/config.yaml`，权限 0600；Token 不输出到终端。
-- 首次通过一次性初始化服务创建 `/var/lib/aiagent-gateway/config.json`；常规启动不自动创建缺失的配置文件。
+- 安装时预先创建 `/var/lib/aiagent-gateway/config.json`；前台和状态服务启动时也会自动初始化缺失的路由存储。
 - 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
 - 已迁入灰度架构后，重复执行新二进制的 `install` 会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；配置、资源归属和并发额度由共享状态服务统一管理。
 - 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
@@ -263,8 +263,8 @@ A2A 1.0 task/context 现已使用公共目录，按调用方、路由、资源�
 go test ./...
 go test -race ./...
 go vet ./...
-go test ./internal/gateway -run '^$' -bench . -benchmem
+go test ./internal/gateway/runtime -run '^$' -bench . -benchmem
 go build -o bin/gateway ./cmd/gateway
 ```
 
-受限环境可用 `GATEWAY_TEST_IN_MEMORY=true go test -race ./...` 跑 net.Pipe 编解码路径。本轮已执行真实 TCP 的全套竞态回归与官方 SDK 双实例联调，结果见 [VALIDATION.md](VALIDATION.md)。目标机器容量压测、Linux systemd 实机验收及 P6 跨重启资源恢复仍是独立工作项。
+目录职责和测试位置见 [Gateway 代码结构](internal/gateway/README.md)和 [集成测试说明](tests/integration/README.md)。`GATEWAY_TEST_IN_MEMORY=true go test -race ./internal/gateway/...` 可让包内 HTTP 上游使用 net.Pipe，共享状态测试仍需要本地 Unix Socket；`tests/integration` 使用本地 TCP 和 Unix Socket，不受该变量影响。各阶段的真实 TCP 竞态回归、官方 SDK 双实例联调和当前检查结果见 [VALIDATION.md](VALIDATION.md)。目标机器容量压测、Linux systemd 实机验收及 P6 跨重启资源恢复仍是独立工作项。

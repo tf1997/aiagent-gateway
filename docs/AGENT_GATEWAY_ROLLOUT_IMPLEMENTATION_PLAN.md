@@ -25,12 +25,12 @@ sudo ./aiagent-gateway install
 | [cmd/gateway/main.go](../cmd/gateway/main.go) | 双监听、固定子命令、20 秒停机窗口 | 增加角色与发布命令；业务排空与进程停机分开 |
 | [internal/service/service.go](../internal/service/service.go) | 停止旧服务后覆盖二进制；控制命令最长 2 分钟 | 不可变版本目录、双槽位、后台发布任务及恢复 |
 | [aiagent-gateway.service](../internal/service/units/aiagent-gateway.service) | 单实例、固定路径、30 秒停止窗口 | 稳定基础组件 unit 和 worker 模板 |
-| [internal/gateway/store.go](../internal/gateway/store.go) | 单进程目录锁、配置写入、健康与 shutdown 共用标记 | 状态服务独占存储；worker 读取快照；独立接纳状态 |
-| [internal/gateway/runtime.go](../internal/gateway/runtime.go) | 进程内会话、调度和并发限制 | 共享原子归属、执行租约和全局容量 |
-| [internal/gateway/resources.go](../internal/gateway/resources.go) | 内存资源/别名/幂等预留 | 单写者元数据服务、持久化、交接与恢复 |
-| [internal/gateway/admin.go](../internal/gateway/admin.go) | 本进程配置 CRUD、资源观察及少量累计指标 | 统一管理入口、跨 worker 状态和发布报告 |
-| [internal/gateway/proxy.go](../internal/gateway/proxy.go) 等代理处理器 | HTTP/SSE/A2A 转发与协议校验 | 上报统一结果，区分成功、失败、排除和未知 |
-| [internal/gateway/reconcile.go](../internal/gateway/reconcile.go) | 本进程后台核查资源 | 单所有者或带 fencing 的核查租约 |
+| [internal/gateway/runtime/gateway.go](../internal/gateway/runtime/gateway.go) | 单进程目录锁、配置写入、健康与 shutdown 共用标记 | 状态服务独占存储；worker 读取快照；独立接纳状态 |
+| [internal/gateway/runtime/scheduler.go](../internal/gateway/runtime/scheduler.go) | 进程内会话、调度和并发限制 | 共享原子归属、执行租约和全局容量 |
+| [internal/gateway/runtime/resource/directory.go](../internal/gateway/runtime/resource/directory.go) | 内存资源/别名/幂等预留 | 单写者元数据服务、持久化、交接与恢复 |
+| [internal/gateway/runtime/admin.go](../internal/gateway/runtime/admin.go) | 本进程配置 CRUD、资源观察及少量累计指标 | 统一管理入口、跨 worker 状态和发布报告 |
+| [internal/gateway/runtime/proxy.go](../internal/gateway/runtime/proxy.go) 等代理处理器 | HTTP/SSE/A2A 转发与协议校验 | 上报统一结果，区分成功、失败、排除和未知 |
+| [internal/gateway/runtime/background.go](../internal/gateway/runtime/background.go) | 本进程后台核查资源 | 单所有者或带 fencing 的核查租约 |
 
 已有 Endpoint 权重及 active/draining/disabled 管理后端 Agent，不管理网关版本。新增发布实例模型单独命名为 Worker/Release，不能把 A/B 伪装成 Agent Endpoint。
 

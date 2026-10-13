@@ -167,7 +167,6 @@ def start():
     build_env = os.environ.copy()
     build_env["GOCACHE"] = "/private/tmp/aiagent-gateway-go-cache" if sys.platform == "darwin" else "/tmp/aiagent-gateway-go-cache"
     subprocess.run(["go", "build", "-o", str(BINARY), "./cmd/gateway"], cwd=REPO, env=build_env, check=True)
-    subprocess.run([str(BINARY), "--config", config_path, "--init-only"], cwd=REPO, check=True)
     fd = os.open(STATE / "gateway.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(fd, "ab", buffering=0) as log:
         process = subprocess.Popen([str(BINARY), "--config", config_path], cwd=REPO, stdin=subprocess.DEVNULL,

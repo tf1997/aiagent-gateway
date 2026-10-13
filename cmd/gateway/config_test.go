@@ -16,9 +16,6 @@ func TestYAMLCLIInitializationAndEnvironmentRemoval(t *testing.T) {
 	t.Setenv("GATEWAY_DATA_DIR", filepath.Join(dir, "wrong-data"))
 	t.Setenv("GATEWAY_ADMIN_TOKEN", "ignored")
 	t.Setenv("GATEWAY_INIT", "true")
-	if code := runForeground([]string{"--config", config}); code != 1 {
-		t.Fatal("environment initialized missing route store", code)
-	}
 	if code := runForeground([]string{"--config", config, "--init-only"}); code != 0 {
 		t.Fatal("YAML initialization failed", code)
 	}
@@ -46,5 +43,11 @@ func TestYAMLCLIInitializationAndEnvironmentRemoval(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "open YAML config") {
 			t.Fatal("role ignored config path", role, err)
 		}
+	}
+}
+
+func TestInitFlagRemoved(t *testing.T) {
+	if code := runForeground([]string{"--init"}); code != 2 {
+		t.Fatal("deprecated init flag accepted", code)
 	}
 }

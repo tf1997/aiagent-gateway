@@ -348,7 +348,7 @@ Hermes 的 A2A 插件可通过 `hermes gateway setup` 选择启用，默认端�
 [H9]: https://github.com/NousResearch/hermes-agent/blob/f42f579cf8bac4918ac9599bece71618afadd846/tests/gateway/test_session_api.py
 [H10]: https://github.com/NousResearch/hermes-agent/releases/tag/v2026.9.24
 [H10S]: https://github.com/NousResearch/hermes-agent/blob/f97608f178d1ffeca59860195ab7da295f7c8e5f/gateway/platforms/api_server.py#L1587
-[G1]: ../internal/gateway/proxy.go
-[G2]: ../internal/gateway/runtime.go
-[G3]: ../internal/gateway/model.go
-[G4]: ../internal/gateway/a2a.go
+[G1]: ../internal/gateway/runtime/proxy.go
+[G2]: ../internal/gateway/runtime/scheduler.go
+[G3]: ../internal/gateway/protocol/model.go
+[G4]: ../internal/gateway/a2a/handler.go

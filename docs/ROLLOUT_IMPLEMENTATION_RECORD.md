@@ -75,13 +75,13 @@ flowchart LR
 
 日志通过文件锁保证单写者；记录包含格式版本、序号、变更和 SHA-256 校验。提交在 `fsync` 成功后确认，每 1024 次实际提交压缩为原子替换的快照日志。恢复时可截断不完整尾记录，完整记录校验失败则拒绝加载。提交失败后，当前日志实例停止接受后续提交，避免在未知落盘状态上继续工作。
 
-Agent 领域状态由 [gateway/shared.go](../internal/gateway/shared.go) 和 [gateway/durable.go](../internal/gateway/durable.go) 接入。worker 通过带认证的 Unix Socket 调用配置、会话分配、资源预留、查询、观察和释放等领域操作，不直接争用配置目录写锁。
+Agent 领域状态由 [runtime/shared.go](../internal/gateway/runtime/shared.go) 接入，共享通信位于 [runtime/shared](../internal/gateway/runtime/shared)，资源与会话恢复分别位于 [resource/durable.go](../internal/gateway/runtime/resource/durable.go) 和 [sessions.go](../internal/gateway/runtime/sessions.go)。worker 通过带认证的 Unix Socket 调用配置、会话分配、资源预留、查询、观察和释放等领域操作，不直接争用配置目录写锁。
 
 共享内容包括会话绑定、Hermes/A2A 资源及别名、幂等预留、全局并发额度和列表快照。持久内容与瞬时内容分开：会话/资源/幂等元数据落盘；活动连接计数不作为恢复后的活连接重建，短期列表快照也不跨状态服务重启保存。
 
 ### 3.3 将原代理处理器接入共享状态
 
-改造 [runtime.go](../internal/gateway/runtime.go)、[resources.go](../internal/gateway/resources.go)、[store.go](../internal/gateway/store.go) 及 Hermes/A2A 处理器，使 worker 的调度、资源访问和执行释放转到状态服务。
+调度、资源目录与启动接入分别位于 [scheduler.go](../internal/gateway/runtime/scheduler.go)、[resource/directory.go](../internal/gateway/runtime/resource/directory.go)、[gateway.go](../internal/gateway/runtime/gateway.go)。Hermes/A2A 处理器通过运行时操作，使 worker 的调度、资源访问和执行释放转到状态服务。
 
 资源预留及公开 ID 映射必须在对外暴露前提交；持久化错误向处理器返回，不能先宣布创建成功再补写归属。资源与相关幂等记录放在同一个日志事务中，结果未知的创建操作保留原归属，避免重新调度导致重复执行。
 
@@ -89,9 +89,9 @@ Agent 领域状态由 [gateway/shared.go](../internal/gateway/shared.go) 和 [ga
 
 ### 3.4 增加真实代理结果采集
 
-[rollout_observe.go](../internal/gateway/rollout_observe.go) 包装 worker 的 HTTP 处理和上游 transport，记录是否实际发出代理请求、协议类型、流结束状态和错误。worker 通过内部 trailer 返回最终结果，入口结合自身传输结果生成发布证据，并在客户端响应中移除内部字段。
+[rollout/worker.go](../internal/gateway/runtime/rollout/worker.go) 包装 worker 的 HTTP 处理，[transport.go](../internal/gateway/runtime/rollout/transport.go) 和 [result.go](../internal/gateway/runtime/rollout/result.go) 记录是否实际发出代理请求、协议类型、流结束状态和错误。worker 通过内部 trailer 返回最终结果，入口结合自身传输结果生成发布证据，并在客户端响应中移除内部字段。
 
-[rollout_resolve.go](../internal/gateway/rollout_resolve.go) 按已认证调用方、路由、接口和 session/resource 解析灰度归属，复用 Hermes/A2A 已知资源关系。客户端提供的内部发布头在入口清除，不能指定候选或伪造内部身份。
+[rollout/resolve.go](../internal/gateway/runtime/rollout/resolve.go) 按已认证调用方、路由、接口和 session/resource 解析灰度归属，复用 Hermes/A2A 已知资源关系。客户端提供的内部发布头在入口清除，不能指定候选或伪造内部身份。
 
 ### 3.5 增加固定入口和原子切流
 
@@ -246,8 +246,8 @@ PREPARING → STARTING → VERIFYING → PROMOTING
 | 日志 | 独占锁、不完整尾恢复、完整记录损坏拒绝、压缩恢复通过 | [journal_test.go](../internal/state/journal_test.go) |
 | 固定入口 | 条件更新、会话分流、重启证据、存储不可用时拒绝请求通过 | [entry_test.go](../internal/entry/entry_test.go) |
 | 发布控制器 | 转正、代理失败/样本不足回退、全量观察故障、排空超时及 resume、切流回执丢失恢复通过 | [controller_test.go](../internal/rollout/controller_test.go) |
-| 共享业务状态 | 跨 worker 会话绑定、全局额度、并发资源预留、幂等及 unknown 保护、资源恢复、Hermes/A2A 续接和列表共享通过 | [shared_test.go](../internal/gateway/shared_test.go) |
-| 代理与长流 | HTTP 协议错误、SSE 非正常结束、切流期间长流保留、失败 POST 不重放、内部字段不暴露通过 | [shared_test.go](../internal/gateway/shared_test.go) |
+| 共享业务状态 | 跨 worker 会话绑定、全局额度、并发资源预留、幂等及 unknown 保护、资源恢复、Hermes/A2A 续接和列表共享通过 | [包内状态测试](../internal/gateway/runtime/shared_test.go)、[跨 worker 集成测试](../tests/integration/shared_test.go) |
+| 代理与长流 | HTTP 协议错误、SSE 非正常结束、切流期间长流保留、失败 POST 不重放、内部字段不暴露通过 | [shared_test.go](../tests/integration/shared_test.go) |
 | 安装器 | 不停止服务中的旧版、凭据保留、迁移显式要求、产物哈希与 unit 路径、卸载保留恢复数据通过 | [rollout_test.go](../internal/service/rollout_test.go) |
 | 全量静态与回归检查 | `go test ./...`、`go test -race ./...`、`go vet ./...` 通过 | 全仓库 |
 | 交叉构建 | Linux amd64/arm64，`CGO_ENABLED=0` 构建通过 | `cmd/gateway` |

@@ -3228,7 +3228,7 @@
                     },
                     "ready": {
                       "type": "boolean",
-                      "description": "Interface health and, for Hermes routes, compatible capabilities observed within two minutes."
+                      "description": "Interface health used for scheduling. Hermes capability discovery does not gate readiness or requests."
                     },
                     "capabilities": {
                       "type": [
@@ -3241,7 +3241,8 @@
                           "format": "date-time"
                         },
                         "ready": {
-                          "type": "boolean"
+                          "type": "boolean",
+                          "description": "Whether the last probe met the capability baseline. Diagnostic only; false does not block proxying."
                         },
                         "features": {
                           "type": "object",
@@ -3274,7 +3275,7 @@
                 }
               }
             },
-            "description": "Approximate runtime counters and resource states. Hermes interface readiness also requires a fresh compatible capability discovery result. Background reconciliation retains unknown executions when probes fail."
+            "description": "Approximate runtime counters and resource states. Hermes capability discovery is diagnostic and does not affect interface readiness or scheduling. Background reconciliation retains unknown executions when probes fail."
           }
         },
         "required": [

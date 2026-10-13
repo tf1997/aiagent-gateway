@@ -128,11 +128,11 @@ def main():
             return 'http://127.0.0.1:' + str(server.server_port)
 
         try:
-            subprocess.run([binary, '--config', str(config_path), '--init-only'], check=True,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             start('state', 'state-server')
             admin_url = f'http://127.0.0.1:{admin_port}'
             wait(lambda: request(admin_url + '/admin/v1/config/status')[0] == 200)
+            assert json.loads((root / 'data/config.json').read_text())['schema_version'] == 2
+            print('PASS automatic state store initialization')
             status, _ = request(admin_url + '/admin/v1/routes', 'POST', {
                 'key': 'probe', 'consumers': [{'id': 'probe', 'token': caller}], 'agent_type': 'generic', 'expose': ['proxy'],
                 'endpoints': [{'interfaces': {'proxy': {'url': upstream(i)}}} for i in (1, 2)]})

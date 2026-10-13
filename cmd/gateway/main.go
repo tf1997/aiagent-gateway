@@ -68,7 +68,6 @@ func run() int {
 func runForeground(args []string) int {
 	fs := flag.NewFlagSet("gateway", flag.ContinueOnError)
 	configPath := fs.String("config", appconfig.DefaultPath, "YAML configuration file")
-	initialize := fs.Bool("init", false, "allow first-time route store initialization")
 	initOnly := fs.Bool("init-only", false, "initialize or validate the route store, then exit")
 	checkReady := fs.Bool("check-ready", false, "wait for the local HTTP readiness endpoint, then exit")
 	if err := fs.Parse(args); err != nil {
@@ -93,9 +92,7 @@ func runForeground(args []string) int {
 		}
 		return 0
 	}
-	opts := cfg.Options()
-	opts.Initialize = *initialize || *initOnly
-	g, err := gateway.Open(opts)
+	g, err := gateway.Open(cfg.Options())
 	if err != nil {
 		slog.Error("startup failed", "error", err)
 		return 1
