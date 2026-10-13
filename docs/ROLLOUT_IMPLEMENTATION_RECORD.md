@@ -10,6 +10,8 @@
 
 发版与升级的执行顺序见本文第 11 节；可直接使用的构建、上传、安装、灰度升级和恢复命令见 [完整操作步骤](ROLLOUT_OPERATIONS.md#构建发版)。
 
+首次安装的文件布局、各进程职责，以及全组件维护过程见 [安装、运行文件与升级全流程](DEPLOYMENT_LIFECYCLE.md)。
+
 ## 1. 从原安装方式到自动发布
 
 原部署由一个网关进程承接业务和管理请求，安装升级需要停止旧服务并替换二进制。会话绑定、资源目录和并发计数主要保存在进程内，直接启动两个实例会出现三个问题：
@@ -47,7 +49,7 @@ flowchart LR
 | 组件 | 当前职责 | 默认监听 |
 | --- | --- | --- |
 | 固定入口 | 选择 worker、流式转发、记录活动请求与最终结果 | 外部 `:8080`；控制 Unix Socket |
-| 共享状态服务 | 配置唯一写入、会话/资源归属、幂等、全局额度 | 管理 `127.0.0.1:9090`；状态 Unix Socket |
+| 共享状态服务 | 配置唯一写入、会话/资源归属、幂等、全局额度 | 公共管理 `:9090`（所有网卡）；状态 Unix Socket |
 | 发布控制器 | 持久状态机、发布策略、恢复、调用 systemd driver | 受保护的控制 Unix Socket |
 | worker A/B | 现有 Agent 协议处理、访问上游、报告代理结果 | 数据 `127.0.0.1:18080/18081`；管理 `19090/19091` |
 
@@ -223,10 +225,10 @@ PREPARING → STARTING → VERIFYING → PROMOTING
 | `/opt/aiagent-gateway/releases/<sha256>/gateway` | 业务版本产物 |
 | `/opt/aiagent-gateway/infrastructure/<sha256>/gateway` | 固定入口、状态服务和控制器产物 |
 | `/etc/aiagent-gateway/deployment.json` | 部署信息及发布策略 |
-| `/etc/aiagent-gateway/gateway.env` | 保留原有凭据和外部监听配置 |
+| `/etc/aiagent-gateway/config.yaml` | 启动配置、公共监听端口和管理 Token |
 | `/var/lib/aiagent-gateway/config.json` | 状态服务独占写入的路由配置 |
-| `<GATEWAY_DATA_DIR>/shared/state.log` | 会话、资源、别名和幂等持久日志 |
-| `<GATEWAY_DATA_DIR>/entry/state.log` | 入口策略、灰度亲和和请求结果日志 |
+| `/var/lib/aiagent-gateway/shared/state.log` | 会话、资源、别名和幂等持久日志 |
+| `/var/lib/aiagent-gateway/entry/state.log` | 入口策略、灰度亲和和请求结果日志 |
 | `/var/lib/aiagent-gateway-rollout/state.log` | 后台发布报告和切流意图 |
 
 旧安装检测到后，必须在维护窗口执行 `install --migrate`。它保留凭据、路由及 Endpoint ID，但不能继承旧内存映射。初始化或迁移失败时仍需按日志恢复，没有实现完整的旧部署自动快照回滚。

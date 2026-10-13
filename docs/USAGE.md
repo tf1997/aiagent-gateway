@@ -14,12 +14,12 @@
 
 网关有两类端口、两类 Token：
 
-| 入口 | 默认地址 | 认证 | 用途 |
+| 入口 | 本机访问示例 | 认证 | 用途 |
 | --- | --- | --- | --- |
 | 数据接口 | `http://127.0.0.1:8080` | 调用方 Token | HTTP/SSE、Hermes、A2A |
 | 管理接口 | `http://127.0.0.1:9090` | 管理 Token | 路由、实例、运行状态、指标 |
 
-数据监听默认绑定 `:8080`，管理监听默认仅绑定 `127.0.0.1:9090`。`/healthz` 和 `/readyz` 位于数据端口，无需 Token。对外 HTTPS 由入口反向代理提供；SSE 接入时应关闭代理响应缓冲，并设置足够长的读取超时。
+数据监听默认为 `:8080`，管理监听默认为 `:9090`，均监听所有网卡，支持通过网关 IP 或域名远程访问。`/healthz` 和 `/readyz` 位于数据端口，无需 Token。对外 HTTPS 由入口反向代理提供；SSE 接入时应关闭代理响应缓冲，并设置足够长的读取超时。
 
 管理 Token、各调用方 Token 必须不同。客户端 Token 只用于网关认证，上游凭据由网关单独配置。
 
@@ -44,7 +44,7 @@ public_url: "http://127.0.0.1:8080"
 admin_token: "replace-with-admin-secret"
 ```
 
-`port` 和 `admin_port` 只填端口号；数据面监听所有网卡，管理面仅监听本机 `127.0.0.1`。
+`port` 和 `admin_port` 只填端口号；数据面和公共管理面均监听所有网卡。
 
 编译并启动：
 
@@ -70,6 +70,8 @@ curl -fsS "$GATEWAY_URL/readyz"
 ```
 
 正常返回 `{"ok":true}` 和 `{"ready":true}`。就绪检查只说明网关能够接收请求，上游是否可用需通过实际业务请求验证。`GATEWAY_CALLER_TOKEN` 是本文 curl 示例使用的客户端变量；服务端通过路由 `consumers` 登记和校验消费者，不读取 YAML callers 或本节客户端变量。
+
+从其他机器调用时，将 `GATEWAY_URL` 和 `GATEWAY_ADMIN_URL` 中的 `127.0.0.1` 替换为网关可达的 IP 或域名，并使用配置的端口，例如 `GATEWAY_ADMIN_URL='http://gateway.example.com:9090'`；经过 HTTPS 入口代理时使用对应的 HTTPS 地址。后续管理请求使用该地址，并携带 `Authorization: Bearer $GATEWAY_ADMIN_TOKEN`。
 
 ## 3. 创建普通 HTTP 路由并调用
 

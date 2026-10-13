@@ -34,15 +34,30 @@ func TestLoadYAMLDefaultsPathsAndEnvironmentIgnored(t *testing.T) {
 }
 
 func TestListenerPorts(t *testing.T) {
-	for _, value := range []string{"18080", `"18080"`, "1", "65535"} {
-		c, err := Parse([]byte(minimal + "port: " + value + "\nadmin_port: " + value + "\n"))
-		if err != nil {
-			t.Fatalf("port %s: %v", value, err)
-		}
-		port := strings.Trim(value, `"`)
-		if c.ListenAddress() != ":"+port || c.AdminListenAddress() != "127.0.0.1:"+port {
-			t.Fatal("incorrect listener addresses", c.ListenAddress(), c.AdminListenAddress())
-		}
+	for _, tt := range []struct {
+		name         string
+		config       string
+		dataAddress  string
+		adminAddress string
+	}{
+		{"defaults", "", ":8080", ":9090"},
+		{"numeric_ports", "port: 18080\nadmin_port: 19090\n", ":18080", ":19090"},
+		{"quoted_ports", "port: \"18080\"\nadmin_port: \"19090\"\n", ":18080", ":19090"},
+		{"minimum_ports", "port: 1\nadmin_port: 1\n", ":1", ":1"},
+		{"maximum_ports", "port: 65535\nadmin_port: 65535\n", ":65535", ":65535"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Parse([]byte(minimal + tt.config))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := c.ListenAddress(); got != tt.dataAddress {
+				t.Errorf("data listener = %q, want %q (all interfaces)", got, tt.dataAddress)
+			}
+			if got := c.AdminListenAddress(); got != tt.adminAddress {
+				t.Errorf("admin listener = %q, want %q (all interfaces)", got, tt.adminAddress)
+			}
+		})
 	}
 	for _, field := range []string{"port", "admin_port"} {
 		for _, value := range []string{"0", "-1", "65536", `""`, "true", "8080.5", `"+8080"`, `" 8080 "`, `":8080"`, `"127.0.0.1:8080"`, `"[::1]:8080"`} {

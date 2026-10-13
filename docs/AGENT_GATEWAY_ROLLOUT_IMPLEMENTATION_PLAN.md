@@ -42,7 +42,7 @@ sudo ./aiagent-gateway install
 | --- | --- | --- | --- |
 | 稳定入口 | `aiagent-gateway-entry.service` | 原 `GATEWAY_LISTEN`，默认 :8080；控制 UDS | 否 |
 | 发布控制器 | `aiagent-gateway-rollout.service` | root 控制 UDS | 否 |
-| 状态及管理服务 | `aiagent-gateway-state.service` | 原管理端口，默认 127.0.0.1:9090；状态 UDS | 否 |
+| 状态及管理服务 | `aiagent-gateway-state.service` | 公共管理端口，默认 :9090（所有网卡）；状态 UDS | 否 |
 | 业务实例 A | `aiagent-gateway-worker@a.service` | 127.0.0.1:18080、19090 | 空闲槽位时更新 |
 | 业务实例 B | `aiagent-gateway-worker@b.service` | 127.0.0.1:18081、19091 | 空闲槽位时更新 |
 

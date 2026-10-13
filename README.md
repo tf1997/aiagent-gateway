@@ -8,6 +8,8 @@ Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例�
 
 自动灰度升级：[操作说明](docs/ROLLOUT_OPERATIONS.md)、[本次实现过程](docs/ROLLOUT_IMPLEMENTATION_RECORD.md)，包含组件改造、会话到原 Agent 的映射持久化、自动切流/回退和验证结果。架构与规划见 [通用 HTTP 网关发布设计](docs/HTTP_GATEWAY_ROLLOUT_DESIGN.md)及 [本项目实施计划](docs/AGENT_GATEWAY_ROLLOUT_IMPLEMENTATION_PLAN.md)。
 
+首次安装生成哪些文件、运行几个进程、灰度时如何替换产物和交接请求，以及如何更新全部组件，见 [安装、运行文件与升级全流程](docs/DEPLOYMENT_LIFECYCLE.md)。
+
 发版与升级步骤见 [构建打包和上传](docs/ROLLOUT_OPERATIONS.md#构建发版)、[首次安装或维护迁移](docs/ROLLOUT_OPERATIONS.md#首次安装或维护迁移)、[日常灰度升级](docs/ROLLOUT_OPERATIONS.md#日常灰度升级) 和 [异常恢复及降级](docs/ROLLOUT_OPERATIONS.md#结果确认和异常处理)。
 
 Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原始来源和版本对照见 [会话接口调研](docs/HERMES_SESSION_API_RESEARCH.md)。
@@ -127,7 +129,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 - 已迁入灰度架构后，重复执行新二进制的 `install` 会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；配置、资源归属和并发额度由共享状态服务统一管理。
 - 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
-默认数据面为 `:8080`，管理面为 `127.0.0.1:9090`。消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token 和 `public_url`；后者应改为客户端实际可访问的地址。上游 Token 在路由各接口的 `token` 中动态配置。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。旧版需按 [迁移说明](docs/CONFIGURATION.md) 做维护迁移。
+默认数据面为 `:8080`，管理面为 `:9090`，均监听所有网卡。远程管理使用 `http://<网关IP或域名>:9090`，请求携带管理 Token；自定义 `admin_port` 时同步调整访问端口。
+
+消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token 和 `public_url`；后者应改为客户端实际可访问的地址。上游 Token 在路由各接口的 `token` 中动态配置。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。旧版需按 [迁移说明](docs/CONFIGURATION.md) 做维护迁移。
 
 ```sh
 sudo aiagent-gateway status

@@ -4,6 +4,8 @@
 
 组件改造、会话到原 Agent 的映射持久化、代码位置及测试范围见 [实现过程记录](ROLLOUT_IMPLEMENTATION_RECORD.md)。
 
+首次安装、配置与运行文件、进程交接的完整解释见 [安装与升级全流程](DEPLOYMENT_LIFECYCLE.md)；入口、管理/状态服务、控制器和 CLI 一起更新时，见其中的 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)。
+
 操作顺序：[构建发版](#构建发版) → [上传与安装前检查](#上传与安装前检查) → [首次安装或维护迁移](#首次安装或维护迁移) / [日常灰度升级](#日常灰度升级) → [结果确认和异常处理](#结果确认和异常处理)。
 
 ## 构建发版
@@ -267,11 +269,11 @@ generic SSE 需要可识别的结束信号，例如 `[DONE]`；没有结束定�
 | --- | --- | --- |
 | 服务组 | aiagent-gateway.service | 无 |
 | 固定入口 | aiagent-gateway-entry.service | :8080 |
-| 配置及共享状态 | aiagent-gateway-state.service | 管理 127.0.0.1:9090；状态 Unix Socket |
+| 配置及共享状态 | aiagent-gateway-state.service | 公共管理 :9090（所有网卡）；状态 Unix Socket |
 | 发布控制器 | aiagent-gateway-rollout.service | 受保护的 Unix Socket |
 | A/B 业务实例 | aiagent-gateway-worker-a.service / worker-b.service | 18080/18081；内部管理 19090/19091，均为 loopback |
 
-YAML 的 `port`、`admin_port` 只配置端口号：数据面监听所有网卡，管理面仅监听本机；`public_url` 配置对外完整 URL。内置 systemd driver 的 A/B 端口目前固定，部署前须确保空闲，端口冲突会拒绝候选启动。前台 worker 模式允许使用 `--listen`、`--admin` 指定其他内部端口。
+YAML 的 `port`、`admin_port` 只配置端口号：数据面和公共管理面均监听所有网卡；`public_url` 配置对外完整 URL。公共管理 API 由 `state-server` 提供，远程访问 `http://<网关IP或域名>:9090/admin/v1/...`，请求携带管理 Token；自定义 `admin_port` 时使用对应端口。内置 systemd driver 的 A/B 端口目前固定并显式绑定本机，部署前须确保空闲，端口冲突会拒绝候选启动。前台 worker 模式允许使用 `--listen`、`--admin` 指定其他内部端口。
 
 ```sh
 sudo journalctl -u aiagent-gateway-rollout -f

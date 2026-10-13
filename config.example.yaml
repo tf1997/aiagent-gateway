@@ -1,6 +1,6 @@
 # Copy to config.yaml and replace the example tokens.
 # Relative paths are resolved from this file's directory.
-# Ports only: data listens on all interfaces, administration on loopback.
+# Ports only: data and administration listen on all interfaces.
 port: 8080
 admin_port: 9090
 data_dir: "./data"

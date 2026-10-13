@@ -1,5 +1,28 @@
 # 验证记录
 
+## 安装与升级全流程文档（2026-10-13）
+
+新增 [安装、运行文件与升级全流程](docs/DEPLOYMENT_LIFECYCLE.md)，覆盖首次安装分支、四种进程角色、配置和运行文件、版本产物与 unit 替换、请求/会话交接、全量切流、全组件维护、回退恢复及现场检查。README、配置、灰度操作和实现记录已加入入口。
+
+流程对照安装器、systemd driver、角色启动、发布状态机、入口和持久日志实现核对。明确已有 `deployment.json` 时 `install --migrate` 仍走 worker 发布分支；整套维护采用停机备份并重建发布基线，保留业务配置和共享状态。同步修正旧配置迁移中先卸载主 unit 的步骤，保留它供安装器再次执行 stop。
+
+16 段 Shell 示例通过 `bash -n`，YAML 示例使用项目已有 YAML 解析器检查通过；本地文档链接/锚点、空白及 `git diff --check` 检查通过，两幅 Mermaid 图按角色和交接顺序核对。本轮验证为文档检查，未执行示例中的安装、停机或文件迁移命令；Linux/systemd 整套维护演练仍待目标环境验证。
+
+## 管理接口远程访问的测试与文档（2026-10-13）
+
+按远程管理需求，将 `TestListenerPorts` 的管理地址预期统一为监听所有网卡。覆盖默认 `:8080` / `:9090`、不同的数据/管理自定义端口、数字和带引号的数字、1 与 65535 边界，并保留非法端口及带主机地址输入的拒绝检查。
+
+配置示例、README、开发、使用和灰度部署文档已同步公共管理地址 `:9090`，说明通过网关可达 IP/域名和管理 Token 远程访问。内置 systemd worker 的内部监听使用显式 loopback 地址。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go test -count=1 ./...` | 全部通过，包含此前失败的 `internal/appconfig/TestListenerPorts` |
+| `go test -race -count=1 ./...` | 全部通过 |
+| `go vet ./...`、`go build ./...` | 通过 |
+| Go 格式、`git diff --check`、监听说明核对 | 通过 |
+
+以上为本机回归验证。下方目录重构章节中的监听断言失败属于本次修正前的阶段记录。
+
 ## 集成测试独立与 Options 清理（2026-10-13）
 
 将 53 个通过公开接口验证的用例移入 [tests/integration](tests/integration/README.md)，使用独立的 `integration_test` 包。覆盖路由管理、存储恢复、HTTP/A2A/Hermes、凭据、跨 worker 请求与列表快照；资源和并发状态通过管理 API、`/metrics` 或请求结果检查，A2A/Hermes 资源经过真实数据入口创建。

@@ -26,7 +26,7 @@ public_url: "http://127.0.0.1:8080"
 admin_token: "replace-with-admin-secret"
 ```
 
-`port` 和 `admin_port` 只填写 1–65535 的端口号，支持数字或带引号的数字，不填写 IP 或冒号。数据面监听所有网卡，管理面仅监听本机 `127.0.0.1`。
+`port` 和 `admin_port` 只填写 1–65535 的端口号，支持数字或带引号的数字，不填写 IP 或冒号。数据面和公共管理面均监听所有网卡，默认地址分别为 `:8080`、`:9090`。远程管理访问 `http://<网关IP或域名>:9090/admin/v1/...`，请求携带 `Authorization: Bearer <admin_token>`；自定义 `admin_port` 时使用对应端口。
 
 YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials` 字段**。消费者通过路由管理 API 的 `consumers` 动态配置，上游 Token 放在路由各个接口的 `token` 中，见 [使用说明](USAGE.md#动态配置消费者)。Token 按字面读取，不展开 `$VAR` / `${VAR}`。
 
@@ -64,7 +64,7 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 | --- | --- | --- |
 | `admin_token` | 必填 | 管理及本机控制认证 |
 | `port` | `8080` | 数据端口，监听所有网卡 |
-| `admin_port` | `9090` | 管理端口，仅监听本机 127.0.0.1 |
+| `admin_port` | `9090` | 公共管理端口，监听所有网卡，支持远程访问 |
 | `data_dir` | `./data` | 路由与共享状态目录 |
 | `public_url` | 空 | A2A Card 对外基础地址；使用 Card 时必须设置 |
 | `max_inflight` | 4096 | 全局并发上限 |
@@ -87,11 +87,13 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 
 ## systemd 安装
 
+安装生成的文件、各角色读取配置的方式，以及全组件维护步骤见 [安装、运行文件与升级全流程](DEPLOYMENT_LIFECYCLE.md)。
+
 首次 `install` 生成 `/etc/aiagent-gateway/config.yaml`，使用独立随机 Token，文件权限 0600，目录权限 0700。也可在全新服务器预先放置有效 YAML；安装器保留已有内容。
 
 服务 unit 使用 `LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml` 和 `--config=%d/config.yaml`，由 systemd 将 root 文件提供给服务用户读取。需要支持该机制的 systemd（247+），详情见 [systemd 凭据文档](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#LoadCredential=)。不再使用 EnvironmentFile，也不需要放宽原文件权限。
 
-安装器生成的 `data_dir` 是 `/var/lib/aiagent-gateway`。内置 systemd unit/driver 使用固定的状态目录、Socket、部署清单及发布日志路径，预置 YAML 也必须使用上述绝对默认路径；不兼容的路径配置会在启动/升级前拒绝。监听地址、公开 URL 和容量可调整。消费者及上游凭据通过路由 API 动态调整，无需重启。需要自定义内部路径时，使用前台角色启动或自行维护 unit。
+安装器生成的 `data_dir` 是 `/var/lib/aiagent-gateway`。内置 systemd unit/driver 使用固定的状态目录、Socket、部署清单及发布日志路径，预置 YAML 也必须使用上述绝对默认路径；不兼容的路径配置会在启动/升级前拒绝。监听端口、公开 URL 和容量可调整。消费者及上游凭据通过路由 API 动态调整，无需重启。需要自定义内部路径时，使用前台角色启动或自行维护 unit。
 
 ### 从 gateway.yaml / credentials 版本迁移
 
@@ -107,7 +109,7 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 - 旧单进程 systemd：先保存 YAML，再在维护窗口执行新二进制的 `install --migrate`。
 - 已有灰度部署：旧入口、状态服务、发布控制器及 worker 都读取环境变量，需一起维护迁移。普通 install 会拒绝旧部署格式，不能只升级 worker。
 
-已有灰度部署在维护窗口迁移时，先结束正在进行的发布、暂停流量并确认请求/后台执行结束，然后保存整套文件和状态备份。停止服务组后，用旧管理 CLI 卸载 unit（它保留数据）；将旧 `deployment.json`、入口状态目录 `/var/lib/aiagent-gateway/entry` 和发布日志目录 `/var/lib/aiagent-gateway-rollout` 移入独立备份目录。保留 `/var/lib/aiagent-gateway/config.json` 和 `/var/lib/aiagent-gateway/shared` 原位，再执行新二进制 `install --migrate`，重新建立 YAML 版入口和发布基线。不要将旧控制日志恢复到运行中的新部署。
+已有灰度部署在维护窗口迁移时，先结束正在进行的发布、暂停流量并确认请求/后台执行结束。停止服务组，核对所有子进程退出后，保存整套文件和状态备份。保留服务组主 unit，供安装器在重建前再次执行 stop；若旧 state unit 仍引用 `EnvironmentFile=` 或 `gateway.yaml`，将该 unit 归档移出 `/etc/systemd/system`，由安装器重建。将旧 `deployment.json`、入口状态目录 `/var/lib/aiagent-gateway/entry` 和发布日志目录 `/var/lib/aiagent-gateway-rollout` 移入独立备份目录。保留转换后的 `config.yaml`、`/var/lib/aiagent-gateway/config.json` 和 `/var/lib/aiagent-gateway/shared` 原位，再执行新二进制 `install --migrate`，重新建立 YAML 版入口和发布基线。具体备份与重建顺序见 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)；旧控制日志仅用于维护恢复，不写回正在运行的新部署。
 
 这一步会中断连接、重建发布基线，旧 release 仍保留用于维护恢复，但环境变量版本不能作为新版控制器的日常灰度候选。恢复旧部署需要停机并整体恢复先前备份，不能用旧配置覆盖新版已接收的资源数据。当前仍需 Linux/systemd 实机验收。
 
