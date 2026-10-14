@@ -86,7 +86,7 @@ func (g *Handler) listA2ATasks(w http.ResponseWriter, r *http.Request, c protoco
 	for _, ref := range refs {
 		task, err := g.FetchTask(ctx, c, rt, ref, q.Params)
 		if err != nil {
-			RPCError(w, q.ID, -32603, "Cannot retrieve owned task list")
+			writeUpstreamRPCError(w, q.ID, "Cannot retrieve owned task list", err)
 			return
 		}
 		if task == nil {
@@ -176,16 +176,23 @@ func (g *Handler) FetchTask(ctx context.Context, c protocol.Caller, rt *protocol
 	}
 	response, err := g.Transport(rt.Timeout.ResponseHeaderMS).RoundTrip(req)
 	if err != nil {
-		return nil, err
+		return nil, protocol.DescribeUpstreamError(0, nil, err, l.Interface.Token)
 	}
 	defer response.Body.Close()
 	body := protocol.NewIdleBody(response.Body, cancel, time.Duration(rt.Timeout.StreamIdleMS)*time.Millisecond)
 	defer body.Close()
 	raw, err := io.ReadAll(io.LimitReader(body, (2<<20)+1))
+	if response.StatusCode != 200 {
+		failure := upstreamHTTPError(response.StatusCode, raw, err, q.ID, l.Interface.Token)
+		if rpc, ok := failure.(*upstreamRPCFailure); ok && rpc.detail["code"] == -32001 {
+			return nil, nil
+		}
+		return nil, failure
+	}
 	if err != nil || len(raw) > 2<<20 {
 		return nil, fmt.Errorf("invalid task response")
 	}
-	env, err := decodeEnvelope(raw, q.ID)
+	env, err := decodeEnvelope(raw, q.ID, l.Interface.Token)
 	if err != nil {
 		return nil, err
 	}
@@ -193,10 +200,7 @@ func (g *Handler) FetchTask(ctx context.Context, c protocol.Caller, rt *protocol
 		if e["code"] == -32001 {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("upstream RPC failure")
-	}
-	if response.StatusCode != 200 {
-		return nil, fmt.Errorf("upstream HTTP failure")
+		return nil, &upstreamRPCFailure{detail: e}
 	}
 	task := env["result"].(map[string]any)
 	if err := checkIdentity(task, "task", q); err != nil {

@@ -505,27 +505,25 @@ func (h *hermesRequest) forward(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Err() == context.DeadlineExceeded {
 			code = 504
 		}
-		protocol.Problem(w, code, "HERMES_UPSTREAM_UNAVAILABLE")
+		protocol.UpstreamProblem(w, code, "HERMES_UPSTREAM_UNAVAILABLE", protocol.DescribeUpstreamError(0, nil, err, h.lease.Interface.Token))
 		return
 	}
 	defer res.Body.Close()
+	idle := time.Duration(h.rt.Timeout.StreamIdleMS) * time.Millisecond
+	// Apply the read timeout to error bodies as well as successful responses.
+	body := protocol.NewIdleBody(res.Body, func() { res.Body.Close() }, idle)
+	defer body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		if res.StatusCode < 500 && r.Method == "POST" && h.executionNew {
 			h.g.Resources.Update(h.execution, protocol.ResourceTerminal)
 		}
-		// Error text can contain upstream IDs or provider credentials.
 		code := res.StatusCode
 		if code >= 300 && code < 400 {
 			code = 502
 		}
-		protocol.Problem(w, code, "HERMES_UPSTREAM_ERROR")
+		protocol.UpstreamProblem(w, code, "HERMES_UPSTREAM_ERROR", protocol.ReadUpstreamError(res.StatusCode, body, h.lease.Interface.Token))
 		return
 	}
-	idle := time.Duration(h.rt.Timeout.StreamIdleMS) * time.Millisecond
-	// The request context cancellation interrupts both reads and the model call.
-	// Close also releases the transport body if a stream is abandoned.
-	body := protocol.NewIdleBody(res.Body, func() { res.Body.Close() }, idle)
-	defer body.Close()
 	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
 		if err = h.observeHeader(res.Header); err != nil {
 			hermesError(w, err)

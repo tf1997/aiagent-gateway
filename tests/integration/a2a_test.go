@@ -133,7 +133,7 @@ func TestA2AV1MessageAndErrors(t *testing.T) {
 	var failure atomic.Bool
 	up := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if failure.Load() {
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"private upstream task id","data":[{"@type":"secret","taskId":"secret"}]}}`)
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-32002,"message":"task is already completed","data":{"state":"completed","token":"provider-secret"}}}`)
 			return
 		}
 		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"message":{"messageId":"reply","contextId":"up-context","role":"ROLE_AGENT","parts":[{"text":"hello"}]}}}`)
@@ -148,8 +148,8 @@ func TestA2AV1MessageAndErrors(t *testing.T) {
 	failure.Store(true)
 	w = dataRequest(g, "POST", "/agents/test/a2a", sendV1, "alice", "")
 	requireRPCCode(t, w, -32002)
-	if strings.Contains(w.Body.String(), "secret") || strings.Contains(w.Body.String(), "private upstream") {
-		t.Fatal("upstream details leaked", w.Body.String())
+	if !strings.Contains(w.Body.String(), "task is already completed") || !strings.Contains(w.Body.String(), `"state":"completed"`) || strings.Contains(w.Body.String(), "provider-secret") {
+		t.Fatal("upstream details lost or credentials exposed", w.Body.String())
 	}
 }
 

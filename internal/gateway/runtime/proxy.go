@@ -226,7 +226,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, c protocol.Calle
 		if ctx.Err() == context.DeadlineExceeded {
 			code = 504
 		}
-		protocol.Problem(w, code, "UPSTREAM_UNAVAILABLE")
+		protocol.UpstreamProblem(w, code, "UPSTREAM_UNAVAILABLE", protocol.DescribeUpstreamError(0, nil, err, l.iface.Token))
 	}}
 	rp.ServeHTTP(dw, r)
 }

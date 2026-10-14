@@ -23,19 +23,24 @@ func (g *Handler) hermesSubscriptionSeed(ctx context.Context, q RPC, c protocol.
 	}
 	res, err := g.Transport(l.Route.Timeout.ResponseHeaderMS).RoundTrip(req)
 	if err != nil {
-		return nil, err
+		return nil, protocol.DescribeUpstreamError(0, nil, err, l.Interface.Token)
 	}
 	defer res.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(res.Body, (2<<20)+1))
-	if err != nil || len(raw) > 2<<20 || res.StatusCode != 200 {
+	body := protocol.NewIdleBody(res.Body, func() { res.Body.Close() }, time.Duration(l.Route.Timeout.StreamIdleMS)*time.Millisecond)
+	defer body.Close()
+	raw, err := io.ReadAll(io.LimitReader(body, (2<<20)+1))
+	if res.StatusCode != 200 {
+		return nil, upstreamHTTPError(res.StatusCode, raw, err, q.ID, l.Interface.Token)
+	}
+	if err != nil || len(raw) > 2<<20 {
 		return nil, fmt.Errorf("cannot read subscribed task")
 	}
-	env, err := decodeEnvelope(raw, q.ID)
+	env, err := decodeEnvelope(raw, q.ID, l.Interface.Token)
 	if err != nil {
 		return nil, err
 	}
-	if env["error"] != nil {
-		return nil, fmt.Errorf("cannot read subscribed task")
+	if detail, ok := env["error"].(map[string]any); ok {
+		return nil, &upstreamRPCFailure{detail: detail}
 	}
 	task, ok := env["result"].(map[string]any)
 	if !ok {
@@ -69,14 +74,16 @@ func (g *Handler) hermesImmediate(w http.ResponseWriter, r *http.Request, c prot
 	if err != nil {
 		cancelOnDisconnect()
 		cancel()
-		RPCError(w, q.ID, -32603, "Upstream unavailable")
+		writeUpstreamRPCError(w, q.ID, "Upstream unavailable", protocol.DescribeUpstreamError(0, nil, err, l.Interface.Token))
 		return
 	}
 	if res.StatusCode != 200 || !strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
-		res.Body.Close()
+		body := protocol.NewIdleBody(res.Body, cancel, time.Duration(l.Route.Timeout.StreamIdleMS)*time.Millisecond)
+		raw, err := io.ReadAll(io.LimitReader(body, (2<<20)+1))
+		body.Close()
 		cancelOnDisconnect()
 		cancel()
-		RPCError(w, q.ID, -32603, "Hermes streaming required for immediate send")
+		writeUpstreamRPCError(w, q.ID, "Hermes streaming required for immediate send", upstreamHTTPError(res.StatusCode, raw, err, q.ID, l.Interface.Token))
 		return
 	}
 	done, accepted := g.RegisterBackground()
@@ -100,14 +107,22 @@ func (g *Handler) hermesImmediate(w http.ResponseWriter, r *http.Request, c prot
 		defer body.Close()
 		state := &a2aStreamState{}
 		sent := false
+		upstreamFailed := false
 		var observed protocol.Resource
 		transform := func(raw []byte) ([]byte, error) {
-			env, err := decodeEnvelope(raw, q.ID)
+			env, err := decodeEnvelope(raw, q.ID, l.Interface.Token)
 			if err != nil {
 				return nil, err
 			}
 			if env["error"] != nil {
-				return nil, protocol.ErrResourceInvalid
+				upstreamFailed = true
+				state.done = true
+				encoded, err := json.Marshal(env)
+				if err == nil && !sent {
+					first <- encoded
+					sent = true
+				}
+				return encoded, err
 			}
 			result := env["result"].(map[string]any)
 			node, kind, err := decodeResult(result, q.Method)
@@ -142,25 +157,35 @@ func (g *Handler) hermesImmediate(w http.ResponseWriter, r *http.Request, c prot
 			return encoded, nil
 		}
 		g.forwardA2AStream(&discardStream{header: make(http.Header)}, body, q.ID, idle, state, transform)
-		if !state.done && observed.ID != "" {
+		if (!state.done || upstreamFailed) && observed.ID != "" {
 			g.Resources.Update(observed, protocol.ResourceUnknown)
 		}
 		if !sent {
 			first <- nil
 		}
 	}()
-	select {
-	case raw := <-first:
+	writeFirst := func(raw []byte) {
 		if raw == nil {
 			RPCError(w, q.ID, -32603, "Hermes did not return an initial Task")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(raw)
+	}
+	select {
+	case raw := <-first:
+		writeFirst(raw)
 	case <-r.Context().Done():
 		cancel()
 	case <-ctx.Done():
-		RPCError(w, q.ID, -32603, "Upstream unavailable")
+		// A short stream may finish and cancel its context after queuing the
+		// first response. Prefer that response, including an upstream error.
+		select {
+		case raw := <-first:
+			writeFirst(raw)
+		default:
+			writeUpstreamRPCError(w, q.ID, "Upstream unavailable", protocol.DescribeUpstreamError(0, nil, ctx.Err(), l.Interface.Token))
+		}
 	}
 }
 

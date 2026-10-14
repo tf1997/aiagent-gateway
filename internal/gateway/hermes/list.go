@@ -88,7 +88,7 @@ func (g *Handler) listHermesSessions(w http.ResponseWriter, r *http.Request, c p
 			continue
 		}
 		if err != nil {
-			protocol.Problem(w, 502, "SESSION_LIST_UPSTREAM_UNAVAILABLE")
+			protocol.UpstreamProblem(w, 502, "SESSION_LIST_UPSTREAM_UNAVAILABLE", err)
 			return
 		}
 		session, ok := value["session"].(map[string]any)
@@ -149,11 +149,11 @@ func (g *Handler) readHermesSession(r *http.Request, l *protocol.Lease, c protoc
 	client := &http.Client{Transport: g.Transport(l.Route.Timeout.ResponseHeaderMS), Timeout: 5 * time.Second, CheckRedirect: protocol.NoRedirect}
 	res, err := client.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, protocol.DescribeUpstreamError(0, nil, err, l.Interface.Token)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return nil, res.StatusCode, protocol.ErrResourceNotFound
+		return nil, res.StatusCode, protocol.ReadUpstreamError(res.StatusCode, res.Body, l.Interface.Token)
 	}
 	raw, err := io.ReadAll(io.LimitReader(res.Body, (2<<20)+1))
 	if err != nil || len(raw) > 2<<20 {

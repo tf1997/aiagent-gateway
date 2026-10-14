@@ -10,6 +10,8 @@ Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例�
 
 首次安装生成哪些文件、运行几个进程、灰度时如何替换产物和交接请求，以及如何更新全部组件，见 [安装、运行文件与升级全流程](docs/DEPLOYMENT_LIFECYCLE.md)。
 
+减少常驻进程的拟议改造见 [单常驻进程、双进程灰度升级方案](docs/SINGLE_PROCESS_ROLLOUT_PLAN.md)：目标为平时 1 个网关进程、升级期间 2 个，采用监听 socket 继承和进程内灰度分配。该方案尚未实现，不改变当前安装行为。
+
 发版与升级步骤见 [构建打包和上传](docs/ROLLOUT_OPERATIONS.md#构建发版)、[首次安装或维护迁移](docs/ROLLOUT_OPERATIONS.md#首次安装或维护迁移)、[日常灰度升级](docs/ROLLOUT_OPERATIONS.md#日常灰度升级) 和 [异常恢复及降级](docs/ROLLOUT_OPERATIONS.md#结果确认和异常处理)。
 
 Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原始来源和版本对照见 [会话接口调研](docs/HERMES_SESSION_API_RESEARCH.md)。
@@ -66,6 +68,8 @@ curl -N http://localhost:8080/agents/research/chat \
 ```
 
 若上游无需会话粘性，创建路由时传 `"session_policy":{"enabled":false}`。上游 URL 的路径作为前缀，查询参数合并保留。上游 Token 直接配置在 Endpoint 的 `interfaces.proxy.token` 中，随路由管理更新即时生效，管理响应不回显；客户端 Authorization、Cookie 和身份转发头会被清理。
+
+普通 HTTP 代理透传上游错误状态及正文；Hermes 错误通过 `upstream.status/body` 返回详情，连接失败通过 `upstream.message` 返回具体原因。A2A 保留上游 `error.message/data`，非 JSON-RPC 的 HTTP 错误附在 `error.data.upstream`。新增错误详情对凭据脱敏，HTTP 错误正文最多 64 KiB；响应示例见 [常见问题](docs/USAGE.md#9-常见问题)。
 
 ## 同一 Agent 的聊天与 A2A
 
@@ -126,7 +130,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 - 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/config.yaml`，权限 0600；Token 不输出到终端。
 - 安装时预先创建 `/var/lib/aiagent-gateway/config.json`；前台和状态服务启动时也会自动初始化缺失的路由存储。
 - 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
-- 已迁入灰度架构后，重复执行新二进制的 `install` 会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；配置、资源归属和并发额度由共享状态服务统一管理。
+- 已迁入灰度架构后，安装不同版本会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；同一 SHA-256 版本已健康运行时直接成功返回，正在发布时接续等待原任务。配置、资源归属和并发额度由共享状态服务统一管理。
 - 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
 默认数据面为 `:8080`，管理面为 `:9090`，均监听所有网卡。远程管理使用 `http://<网关IP或域名>:9090`，请求携带管理 Token；自定义 `admin_port` 时同步调整访问端口。

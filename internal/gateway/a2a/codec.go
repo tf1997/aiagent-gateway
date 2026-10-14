@@ -252,7 +252,7 @@ func TaskResourceState(s string) protocol.ResourceState {
 	return protocol.ResourceUnknown
 }
 
-func decodeEnvelope(b []byte, id json.RawMessage) (map[string]any, error) {
+func decodeEnvelope(b []byte, id json.RawMessage, secrets ...string) (map[string]any, error) {
 	var m map[string]any
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.UseNumber()
@@ -294,45 +294,14 @@ func decodeEnvelope(b []byte, id json.RawMessage) (map[string]any, error) {
 		if _, ok := e["message"].(string); !ok {
 			return nil, fmt.Errorf("invalid error message")
 		}
-		// Upstream error details can contain private IDs, URLs and credentials.
-		m["error"] = map[string]any{"code": code, "message": errorText(code)}
+		detail := map[string]any{"code": code, "message": e["message"]}
+		if data, ok := e["data"]; ok {
+			detail["data"] = data
+		}
+		m["error"] = protocol.RedactErrorDetails(detail, secrets...)
 	}
 	m["id"] = id
 	return m, nil
-}
-
-func errorText(code int) string {
-	switch code {
-	case -32700:
-		return "Invalid JSON payload"
-	case -32600:
-		return "Invalid request"
-	case -32601:
-		return "Method not found"
-	case -32602:
-		return "Invalid parameters"
-	case -32603:
-		return "Upstream internal error"
-	case -32001:
-		return "Task not found"
-	case -32002:
-		return "Task not cancelable"
-	case -32003:
-		return "Push notifications not supported"
-	case -32004:
-		return "Unsupported operation"
-	case -32005:
-		return "Content type not supported"
-	case -32006:
-		return "Invalid agent response"
-	case -32007:
-		return "Extended agent card not configured"
-	case -32008:
-		return "Extension support required"
-	case -32009:
-		return "Version not supported"
-	}
-	return "Upstream error"
 }
 
 func decodeResult(result map[string]any, method string) (map[string]any, string, error) {

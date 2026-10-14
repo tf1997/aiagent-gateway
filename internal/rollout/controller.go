@@ -77,11 +77,22 @@ func (c *Controller) Begin(artifact string, policy p.Policy) error {
 	if err := policy.Validate(); err != nil {
 		return err
 	}
-	if !terminal(c.report.Phase) {
-		return fmt.Errorf("rollout %s is %s", c.report.ID, c.report.Phase)
+	if err := c.j.Healthy(); err != nil {
+		return err
 	}
 	if artifact == "" {
 		return fmt.Errorf("artifact required")
+	}
+	if !terminal(c.report.Phase) {
+		if c.report.Phase != "RECOVERY_REQUIRED" && (artifact == c.report.Artifact || (c.report.Phase == "RECOVERING" && artifact == c.report.Stable.Artifact)) {
+			return nil
+		}
+		return fmt.Errorf("rollout %s is %s", c.report.ID, c.report.Phase)
+	}
+	if artifact == c.report.Stable.Artifact && c.report.Stable.Incarnation != "" {
+		// The stable deployment is already selected. Tick continues its health
+		// checks/recovery; a repeat must not reset the report or start a canary.
+		return nil
 	}
 	now := c.now()
 	c.report = Report{ID: p.ID("rollout_"), Phase: "PREPARING", Stable: c.report.Stable, Artifact: artifact, Policy: policy, Started: now, Since: now}

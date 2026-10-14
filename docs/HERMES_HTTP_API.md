@@ -31,6 +31,8 @@ Content-Type: application/json
 
 会话压缩产生的新上游 ID 会作为同一公开会话的别名登记；旧入口继续访问原实例。fork 使用独立公开 ID。DELETE 不代替停止正在运行的任务；上游的 409 等错误状态保留。删除成功的公开会话不再用于新请求，相关映射按资源保留规则回收。
 
+上游非 2xx 响应返回 `error: "HERMES_UPSTREAM_ERROR"`，并通过 `upstream.status`、`upstream.body` 展示状态码及 JSON/文本错误详情；3xx 仍转换为网关 502，不跟随重定向。网络失败返回 `HERMES_UPSTREAM_UNAVAILABLE` 和 `upstream.message`。错误正文读取受流空闲超时和 64 KiB 上限约束，截断时标记 `upstream.truncated`，凭据字段和已配置的上游 Token 脱敏。会话列表查询失败也携带对应上游详情。
+
 `X-Hermes-Session-Key` 在发往上游前按调用方、路由进行哈希命名；省略时使用当前公开会话的独立作用域。该处理隔离 API 关联标识，不隔离共享 profile 内的工具权限、文件和长期记忆存储。
 
 ## 会话列表

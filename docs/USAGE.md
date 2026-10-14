@@ -326,6 +326,8 @@ jq -n --arg id "$TASK_ID" '{jsonrpc:"2.0",id:2,method:"GetTask",params:{id:$id}}
 
 JSON-RPC 协议错误可能使用 **HTTP 200 + `error` 对象**，客户端除检查 HTTP 状态外还要检查正文。缺少版本头或版本不支持返回 `error.code:-32009`。`ListTasks` 默认 `pageSize:50`、上限 100，按 `nextPageToken` 翻页，游标有效期 2 分钟。
 
+上游 A2A 错误保留 `error.code`、`error.message` 和可选 `error.data`，包括 SSE 错误事件。若上游返回非 JSON-RPC 的 HTTP 错误，详情放在 `error.data.upstream` 中，包含 HTTP `status` 和 `body`；连接失败的具体原因放在 `error.data.upstream.message`。
+
 ## 6. 管理路由、扩容与下线
 
 管理请求均携带管理 Token。列表格式为 `{"items":[...],"total":...,"offset":...,"limit":...}`，`limit` 默认及上限均为 100。
@@ -550,7 +552,8 @@ sudo journalctl -u aiagent-gateway-rollout -f
 | 旧 Hermes/A2A ID 返回不存在 | 核对调用方、路由及公开 ID；前台重启丢失的映射不能直接恢复 |
 | `503 NO_HEALTHY_ENDPOINT` | 确认存在 active 实例并检查目标接口健康；Hermes 的能力探测不影响调度 |
 | `503 SESSION_ENDPOINT_UNAVAILABLE` | 原绑定实例禁用或目标接口不健康，恢复原实例；不会自动迁移会话 |
-| `502/504 UPSTREAM_UNAVAILABLE` | 检查上游地址、凭据、连通性和超时；容器中的 `127.0.0.1` 指容器自身 |
+| `502/504 UPSTREAM_UNAVAILABLE` | 查看 `upstream.message` 中的连接/超时原因；容器中的 `127.0.0.1` 指容器自身 |
+| `HERMES_UPSTREAM_ERROR` | 查看 `upstream.status` 和 `upstream.body` 中的上游状态码、错误消息和详情 |
 | `428 IF_MATCH_REQUIRED` | PATCH、实例 DELETE、按内部 ID 删除路由时先读取目标资源 ETag；POST 更新和按 key 删除路由可省略 If-Match |
 | `412 VERSION_CONFLICT` | 重新读取目标资源，确认变更后使用新 ETag |
 | `409 ENDPOINT_IN_USE` / `ROUTE_IN_USE` | 仍有绑定、活跃请求或资源引用；先排空并检查归属 |
@@ -561,3 +564,19 @@ sudo journalctl -u aiagent-gateway-rollout -f
 | SSE 长时间无输出或集中输出 | 检查上游是否流式、客户端是否关闭缓冲、入口代理是否缓冲以及各层超时 |
 
 排查顺序建议为：网关 `/readyz` → 管理 `/admin/v1/config/status` → 路由及 Endpoint 详情 → 实际业务请求 → 进程/systemd 日志。灰度部署额外查看 `rollout status --json` 和对应 worker 的日志。
+
+普通 generic HTTP 代理透传上游 HTTP 状态和正文。Hermes 的 HTTP 错误响应保留网关 `error` 码，同时增加 `upstream`，例如：
+
+```json
+{
+  "error": "HERMES_UPSTREAM_ERROR",
+  "upstream": {
+    "status": 422,
+    "body": {"error": {"message": "model not found", "code": "model_not_found"}}
+  }
+}
+```
+
+`upstream.body` 保留 JSON 结构；非 JSON 响应使用字符串。新增的 `upstream.body` 最多保留 64 KiB 上游正文，超限时 `upstream.truncated` 为 true；读取中断时仍返回已收到的正文及 `upstream.message`。有效 A2A JSON-RPC 错误及 SSE 事件沿用 2 MiB 上限。新增详情及 A2A 错误会隐藏已配置的上游 Token、Bearer/Basic 凭据和明确的凭据字段（如 api_key、password），保留业务错误消息和诊断信息。
+
+这些代理响应变更位于业务 worker；install 灰度部署更新到包含修复的新 worker 后生效，前台部署则重启为新二进制。

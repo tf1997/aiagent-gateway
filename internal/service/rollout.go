@@ -135,6 +135,32 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 				return err
 			}
 		}
+		// The installer may be newer than the resident controller. Inspect the
+		// live report here so old controllers never receive duplicate releases.
+		var current rollout.Report
+		if err = client.Call(ctx, "GET", "/control/v1/rollout", nil, &current); err != nil {
+			return err
+		}
+		switch current.Phase {
+		case "RECOVERY_REQUIRED":
+			return fmt.Errorf("rollout %s requires recovery: %s; use rollout status and resume or rollback", current.ID, current.Reason)
+		case "COMPLETED", "ROLLED_BACK", "FAILED":
+			if sameRelease(current.Stable, artifact) {
+				if err := m.verifyInstalledRelease(ctx, token, current.Stable); err != nil {
+					return fmt.Errorf("release is already installed but not ready: %w; inspect rollout status", err)
+				}
+				fmt.Fprintf(m.output, "release already active: %s; installation unchanged\n", current.Stable.Release)
+				return nil
+			}
+		case "":
+			return fmt.Errorf("rollout controller is initializing; retry install after startup")
+		default:
+			if current.Artifact != artifact && !(current.Phase == "RECOVERING" && sameRelease(current.Stable, artifact)) {
+				return fmt.Errorf("rollout %s is %s for another release; wait for completion or use rollout status", current.ID, current.Phase)
+			}
+			fmt.Fprintf(m.output, "release %s already has rollout %s (%s); waiting for that rollout\n", filepath.Base(filepath.Dir(artifact)), current.ID, current.Phase)
+			return waitRolloutFor(context.Background(), client, m.output, current.ID, artifact)
+		}
 
 		if d.Policy.AutoProfiles {
 			d.Policy, err = policyForConfig(d.Policy, m.path(dataPath))
@@ -142,13 +168,14 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 				return err
 			}
 		}
+		var started rollout.Report
 		if err = client.Call(ctx, "POST", "/control/v1/rollout", struct {
 			Artifact string
 			Policy   p.Policy
-		}{artifact, d.Policy}, nil); err != nil {
+		}{artifact, d.Policy}, &started); err != nil {
 			return err
 		}
-		return waitRollout(context.Background(), client, m.output)
+		return waitRolloutFor(context.Background(), client, m.output, started.ID, artifact)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -251,9 +278,15 @@ func (m *manager) installRollout(ctx context.Context, migrate bool) error {
 	}
 	client := rollout.NewClient(m.path(ControllerSocket), token)
 	defer client.HTTP.CloseIdleConnections()
-	return waitRollout(context.Background(), client, m.output)
+	return waitRolloutFor(context.Background(), client, m.output, "", artifact)
 }
 func waitRollout(ctx context.Context, c *rollout.Client, out io.Writer) error {
+	return waitRolloutFor(ctx, c, out, "", "")
+}
+
+// Pin the requested rollout and artifact: completion of another operation must
+// not be reported as successful installation of this binary.
+func waitRolloutFor(ctx context.Context, c *rollout.Client, out io.Writer, id, artifact string) error {
 	last := ""
 	unavailable := time.Now().Add(time.Minute)
 	for {
@@ -265,12 +298,18 @@ func waitRollout(ctx context.Context, c *rollout.Client, out io.Writer) error {
 			}
 		} else {
 			unavailable = time.Now().Add(time.Minute)
+			if id != "" && r.ID != id {
+				return fmt.Errorf("rollout changed from %s to %s; inspect rollout status", id, r.ID)
+			}
 			if r.Phase != last {
 				fmt.Fprintf(out, "%s %s\n", r.ID, r.Phase)
 				last = r.Phase
 			}
 			switch r.Phase {
 			case "COMPLETED":
+				if artifact != "" && !sameRelease(r.Stable, artifact) {
+					return fmt.Errorf("rollout completed with a different active release: %s", r.Stable.Release)
+				}
 				fmt.Fprintf(out, "active release: %s\n", r.Stable.Release)
 				return nil
 			case "ROLLED_BACK", "FAILED", "RECOVERY_REQUIRED":
@@ -283,6 +322,34 @@ func waitRollout(ctx context.Context, c *rollout.Client, out io.Writer) error {
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+func sameRelease(target p.Target, artifact string) bool {
+	return target.Artifact == artifact && target.Release == filepath.Base(filepath.Dir(artifact))
+}
+
+func sameWorker(id p.Identity, target p.Target) bool {
+	return id.Ready && target.Incarnation != "" && id.Incarnation == target.Incarnation && id.Instance == target.Instance && id.Release == target.Release && id.Protocol == p.Version && id.StateProtocol == 1
+}
+
+func (m *manager) verifyInstalledRelease(ctx context.Context, token string, target p.Target) error {
+	id, err := NewSystemdDriver(token).Identity(ctx, target)
+	if err != nil {
+		return err
+	}
+	if !sameWorker(id, target) {
+		return fmt.Errorf("stable worker identity or readiness mismatch")
+	}
+	client := rollout.NewClient(m.path(EntrySocket), token)
+	defer client.HTTP.CloseIdleConnections()
+	traffic, err := client.Traffic(ctx)
+	if err != nil {
+		return err
+	}
+	if traffic.Stable != target || traffic.Candidate != nil || traffic.Percent != 0 || traffic.Frozen || traffic.Rollout != "" {
+		return fmt.Errorf("entry is not serving the recorded stable worker")
+	}
+	return nil
 }
 
 const masterUnit = `[Unit]
@@ -526,7 +593,7 @@ func waitStable(ctx context.Context, c *rollout.Client, token string) error {
 			}
 			if report.Stable.Incarnation != "" {
 				id, e := NewSystemdDriver(token).Identity(ctx, report.Stable)
-				if e == nil && id.Ready && id.Incarnation == report.Stable.Incarnation {
+				if e == nil && sameWorker(id, report.Stable) {
 					return nil
 				}
 			}

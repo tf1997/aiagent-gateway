@@ -5,6 +5,7 @@ import (
 	"aiagent-gateway/internal/state"
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -209,5 +210,78 @@ func TestCandidateStartFailureKeepsStable(t *testing.T) {
 	tick(t, c, 3)
 	if c.Report().Phase != "ROLLED_BACK" || e.traffic.Stable.Release != "old" || len(d.stopped) > 0 {
 		t.Fatal(c.Report())
+	}
+}
+
+func TestRepeatedBeginPreservesRollout(t *testing.T) {
+	for _, phase := range []string{"PREPARING", "STARTING", "VERIFYING", "PROMOTING", "OBSERVING", "DRAINING", "COMMITTING", "ROLLING_BACK", "COMPLETED"} {
+		t.Run(phase, func(t *testing.T) {
+			c, d, e, _ := controllerFixture(t)
+			c.report.Phase = phase
+			if phase == "COMPLETED" {
+				c.report.Stable = d.targets["new"]
+			}
+			if err := c.save(); err != nil {
+				t.Fatal(err)
+			}
+			before, stored := c.Report(), c.j.Snapshot()
+			// Policy changes must not reset an operation already in progress.
+			policy := p.DefaultPolicy()
+			policy.CanaryPercent = 10
+			if err := c.Begin("new", policy); err != nil {
+				t.Fatal("same release rejected", err)
+			}
+			if !reflect.DeepEqual(c.Report(), before) || !reflect.DeepEqual(c.j.Snapshot(), stored) || d.frozen || len(d.stopped) != 0 || e.traffic.Revision != 1 {
+				t.Fatal("repeat reset rollout state")
+			}
+			if phase != "COMPLETED" {
+				if err := c.Begin("other", policy); err == nil {
+					t.Fatal("different release replaced active rollout")
+				}
+			}
+		})
+	}
+}
+
+func TestRepeatedBeginAfterRestartAndFailure(t *testing.T) {
+	c, d, e, _ := controllerFixture(t)
+	tick(t, c, 2)
+	restored, err := Open(c.j, d, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := restored.Report()
+	if err := restored.Begin("new", p.DefaultPolicy()); err != nil || !reflect.DeepEqual(before, restored.Report()) {
+		t.Fatal("restart lost repeat detection", err)
+	}
+	for _, phase := range []string{"FAILED", "ROLLED_BACK"} {
+		c.report.Phase = phase
+		before := c.Report()
+		if err := c.Begin("old", p.DefaultPolicy()); err != nil || !reflect.DeepEqual(before, c.Report()) {
+			t.Fatal("active stable release started a new rollout", err)
+		}
+		if err := c.Begin("new", p.DefaultPolicy()); err != nil || c.Report().ID == before.ID || c.Report().Phase != "PREPARING" {
+			t.Fatal("failed release could not be retried", err)
+		}
+	}
+	c.report.Phase = "RECOVERY_REQUIRED"
+	before = c.Report()
+	if err := c.Begin("new", p.DefaultPolicy()); err == nil || !reflect.DeepEqual(before, c.Report()) {
+		t.Fatal("repeat bypassed required recovery", err)
+	}
+	c.report.Phase = "RECOVERING"
+	before = c.Report()
+	if err := c.Begin("old", p.DefaultPolicy()); err != nil || !reflect.DeepEqual(before, c.Report()) {
+		t.Fatal("repeat interrupted stable recovery", err)
+	}
+}
+
+func TestRepeatBeginRejectsUnavailableJournal(t *testing.T) {
+	c, _, _, _ := controllerFixture(t)
+	if err := c.j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Begin("new", p.DefaultPolicy()); err == nil {
+		t.Fatal("unavailable controller reported successful repeat")
 	}
 }

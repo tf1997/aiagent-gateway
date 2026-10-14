@@ -48,7 +48,7 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	posted := make(chan string, 1)
-	report := rollout.Report{Phase: "COMPLETED", Stable: p.Target{Release: "new"}}
+	report := rollout.Report{ID: "old-rollout", Phase: "COMPLETED", Stable: p.Target{Release: "old"}}
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer unchanged-secret" {
 			t.Error("token changed")
@@ -62,6 +62,7 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 				t.Error("invalid submission")
 			}
 			posted <- q.Artifact
+			report = rollout.Report{ID: "new-rollout", Phase: "COMPLETED", Stable: p.Target{Artifact: q.Artifact, Release: filepath.Base(filepath.Dir(q.Artifact))}}
 		}
 		json.NewEncoder(w).Encode(report)
 	})}

@@ -6,6 +6,7 @@
 | --- | --- |
 | `gateway_test.go` | 存储初始化与恢复、HTTP 路径、流式输出、取消和超时 |
 | `admin_test.go` | 路由 upsert、ETag、幂等回执、公开配置模型 |
+| `upstream_errors_test.go` | HTTP/A2A/Hermes 错误详情、列表及异步错误、读取超时、entry/worker 转发 |
 | `consumers_test.go`、`credentials_test.go` | 消费者轮换与撤销、上游 Token 转发、持久化与脱敏 |
 | `interfaces_test.go` | 统一入口、兼容路径、接口禁用与能力声明 |
 | `a2a_test.go`、`a2a_list_test.go` | A2A 1.0 请求/响应、资源隔离、分页、SSE 和取消 |

@@ -27,6 +27,10 @@ type RPC struct {
 }
 
 func RPCError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
+	writeRPCError(w, id, map[string]any{"code": code, "message": msg})
+}
+
+func writeRPCError(w http.ResponseWriter, id json.RawMessage, detail map[string]any) {
 	var value any
 	decoder := json.NewDecoder(bytes.NewReader(id))
 	decoder.UseNumber()
@@ -36,7 +40,7 @@ func RPCError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
 	default:
 		id = json.RawMessage("null")
 	}
-	protocol.WriteJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": code, "message": msg}})
+	protocol.WriteJSON(w, 200, map[string]any{"jsonrpc": "2.0", "id": id, "error": detail})
 }
 
 func (g *Handler) Card(w http.ResponseWriter, r *http.Request, rt *protocol.Route) {
@@ -291,7 +295,7 @@ func (g *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, c protocol.C
 	if rt.AgentType == "hermes" && q.Method == "SubscribeToTask" {
 		seed, err = g.hermesSubscriptionSeed(ctx, q, c, l)
 		if err != nil {
-			RPCError(w, q.ID, -32603, "Cannot read subscribed task")
+			writeUpstreamRPCError(w, q.ID, "Cannot read subscribed task", err)
 			return
 		}
 	}
@@ -303,7 +307,7 @@ func (g *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, c protocol.C
 	res, err := g.Transport(l.Route.Timeout.ResponseHeaderMS).RoundTrip(req)
 	if err != nil {
 		g.RecordFailure()
-		RPCError(w, q.ID, -32603, "Upstream unavailable")
+		writeUpstreamRPCError(w, q.ID, "Upstream unavailable", protocol.DescribeUpstreamError(0, nil, err, l.Interface.Token))
 		return
 	}
 	defer res.Body.Close()
@@ -312,17 +316,12 @@ func (g *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, c protocol.C
 	defer body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		raw, err := io.ReadAll(io.LimitReader(body, (2<<20)+1))
-		env, decodeErr := decodeEnvelope(raw, q.ID)
-		if err != nil || len(raw) > 2<<20 || decodeErr != nil || env["error"] == nil {
-			RPCError(w, q.ID, -32603, "Upstream HTTP failure")
-			return
-		}
-		protocol.WriteJSON(w, 200, env)
+		writeUpstreamRPCError(w, q.ID, "Upstream HTTP failure", upstreamHTTPError(res.StatusCode, raw, err, q.ID, l.Interface.Token))
 		return
 	}
 	stream := &a2aStreamState{subscribe: q.Method == "SubscribeToTask", seed: seed}
 	transform := func(b []byte) ([]byte, error) {
-		env, err := decodeEnvelope(b, q.ID)
+		env, err := decodeEnvelope(b, q.ID, l.Interface.Token)
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +371,7 @@ func (g *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, c protocol.C
 		return
 	}
 	if isStreaming(q.Method) {
-		env, err := decodeEnvelope(raw, q.ID)
+		env, err := decodeEnvelope(raw, q.ID, l.Interface.Token)
 		if err != nil || env["error"] == nil {
 			RPCError(w, q.ID, -32006, "Expected SSE stream")
 			return
