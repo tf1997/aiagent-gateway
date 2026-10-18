@@ -23,7 +23,7 @@
 
 子包不反向导入 `runtime`。`config.Backend`、`shared.Backend` 和 `rollout` 的操作接口由运行时提供；资源模块通过共享客户端切换到状态服务，调用方拿到资源副本或释放函数，不接触目录内部 Map 和锁。适配器继续只依赖上层 [protocol](../protocol) 契约。
 
-配置更新仍在配置锁和生命周期写锁内完成，持久化成功后原子替换路由 Map。资源锁顺序、共享请求字段、`config.json` 和日志格式沿用原有语义。
+配置更新仍在配置锁和生命周期写锁内完成，持久化成功后原子替换路由 Map。磁盘存储拆为版本元数据 `config.json`、路由 `routes.json` 和管理幂等/审计 `route-logs.json`，通过 `.config.pending.json` 恢复跨文件写入。资源锁顺序、共享请求字段和共享状态日志格式沿用原有语义。
 
 运行参数 `Options` 在 `gateway.go` 中定义，上层 `gateway.Options` 继续作为对外别名。运行时直接引用 `protocol.Route`、`protocol.Config` 等共享模型，原 `options.go` 中的中转别名已移除。
 

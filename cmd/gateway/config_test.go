@@ -19,8 +19,10 @@ func TestYAMLCLIInitializationAndEnvironmentRemoval(t *testing.T) {
 	if code := runForeground([]string{"--config", config, "--init-only"}); code != 0 {
 		t.Fatal("YAML initialization failed", code)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "data/config.json")); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"config.json", "routes.json", "route-logs.json"} {
+		if _, err := os.Stat(filepath.Join(dir, "data", name)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "wrong-data")); !os.IsNotExist(err) {
 		t.Fatal("environment data path used")

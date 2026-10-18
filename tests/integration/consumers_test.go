@@ -59,7 +59,7 @@ func TestDynamicConsumersRotationRevocationAndRecovery(t *testing.T) {
 			t.Fatal("management response leaked credentials")
 		}
 	}
-	raw, err := os.ReadFile(filepath.Join(o.DataDir, "config.json"))
+	raw, err := os.ReadFile(filepath.Join(o.DataDir, "routes.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

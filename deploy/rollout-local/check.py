@@ -131,12 +131,22 @@ def main():
             start('state', 'state-server')
             admin_url = f'http://127.0.0.1:{admin_port}'
             wait(lambda: request(admin_url + '/admin/v1/config/status')[0] == 200)
-            assert json.loads((root / 'data/config.json').read_text())['schema_version'] == 2
+            metadata = json.loads((root / 'data/config.json').read_text())
+            assert metadata == {'storage_version': 1, 'schema_version': 2, 'config_revision': 1}
+            assert json.loads((root / 'data/routes.json').read_text())['routes'] == []
+            assert json.loads((root / 'data/route-logs.json').read_text())['idempotency'] == {}
             print('PASS automatic state store initialization')
             status, _ = request(admin_url + '/admin/v1/routes', 'POST', {
                 'key': 'probe', 'consumers': [{'id': 'probe', 'token': caller}], 'agent_type': 'generic', 'expose': ['proxy'],
                 'endpoints': [{'interfaces': {'proxy': {'url': upstream(i)}}} for i in (1, 2)]})
             assert status == 201
+            metadata = json.loads((root / 'data/config.json').read_text())
+            routes = json.loads((root / 'data/routes.json').read_text())
+            route_logs = json.loads((root / 'data/route-logs.json').read_text())
+            assert metadata['config_revision'] == routes['config_revision'] == route_logs['config_revision'] == 2
+            assert routes['routes'][0]['key'] == 'probe'
+            assert route_logs['audit'][-1]['action'] == 'POST'
+            assert not (root / 'data/.config.pending.json').exists()
             targets = []
             for slot in ('a', 'b'):
                 data_port, control_port = port(), port()

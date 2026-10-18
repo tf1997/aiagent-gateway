@@ -529,7 +529,8 @@ sudo journalctl -u aiagent-gateway-rollout -f
 
 | 项目 | 前台单进程模式 | systemd 灰度部署模式 |
 | --- | --- | --- |
-| 路由和实例配置 | 保存到 `config.json` | 由共享状态服务保存到 `config.json` |
+| 路由和实例配置 | 保存到 `routes.json`，版本在 `config.json` | 由共享状态服务维护同样的拆分存储 |
+| 管理幂等回执和审计记录 | 保存到 `route-logs.json` | 由共享状态服务保存到 `route-logs.json` |
 | 会话、公开资源 ID、归属、数据幂等预留 | 内存保存，重启丢失 | 由共享状态日志持久化，worker 切换仍定位原 Agent |
 | 列表分页快照 | 重启失效 | 可跨 worker，状态服务重启后失效 |
 | 已建立的 TCP/SSE 连接 | 停止进程会中断 | 灰度时留在原 worker 排空，不能通过状态日志重建 |

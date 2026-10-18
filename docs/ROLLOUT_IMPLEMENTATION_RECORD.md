@@ -226,7 +226,9 @@ PREPARING → STARTING → VERIFYING → PROMOTING
 | `/opt/aiagent-gateway/infrastructure/<sha256>/gateway` | 固定入口、状态服务和控制器产物 |
 | `/etc/aiagent-gateway/deployment.json` | 部署信息及发布策略 |
 | `/etc/aiagent-gateway/config.yaml` | 启动配置、公共监听端口和管理 Token |
-| `/var/lib/aiagent-gateway/config.json` | 状态服务独占写入的路由配置 |
+| `/var/lib/aiagent-gateway/config.json` | 状态服务维护的存储格式、schema 和配置版本 |
+| `/var/lib/aiagent-gateway/routes.json` | 状态服务独占写入的路由、实例和凭据 |
+| `/var/lib/aiagent-gateway/route-logs.json` | 状态服务维护的管理幂等回执和审计记录 |
 | `/var/lib/aiagent-gateway/shared/state.log` | 会话、资源、别名和幂等持久日志 |
 | `/var/lib/aiagent-gateway/entry/state.log` | 入口策略、灰度亲和和请求结果日志 |
 | `/var/lib/aiagent-gateway-rollout/state.log` | 后台发布报告和切流意图 |

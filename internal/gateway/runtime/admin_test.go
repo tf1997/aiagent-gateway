@@ -260,6 +260,110 @@ func TestMigrationWriteFailures(t *testing.T) {
 	}
 }
 
+func TestSchema2StoreSplitMigration(t *testing.T) {
+	dir := t.TempDir()
+	c, _, err := configuration.Load(legacyFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Routes[0].Endpoints[0].Interfaces["proxy"] = protocol.EndpointInterface{URL: "http://localhost:1234/base", Token: "upstream-secret"}
+	c.Receipts["existing-key"] = protocol.Receipt{Hash: "saved-hash", ETag: `"5"`, Body: json.RawMessage(`{"id":"rt_existing"}`)}
+	c.ReceiptOrder = []string{"existing-key"}
+	raw, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeConfig(t, dir, raw)
+	g, err := Open(testOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if g != nil {
+			g.Close()
+		}
+	}()
+	assertFile(t, filepath.Join(dir, "config.json"), raw)
+	backup := filepath.Join(dir, "config.schema-2.backup.json")
+	if err := os.WriteFile(backup, []byte("conflicting backup"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w := admin(t, g, "PATCH", "/admin/v1/routes/test", `{"enabled":false}`, `"5"`, "")
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "MIGRATION_BACKUP_FAILED") {
+		t.Fatal("split migration overwrote conflicting backup", w.Code, w.Body.String())
+	}
+	assertFile(t, filepath.Join(dir, "config.json"), raw)
+	if err := os.Remove(backup); err != nil {
+		t.Fatal(err)
+	}
+	w = admin(t, g, "PATCH", "/admin/v1/routes/test", `{"enabled":false}`, `"5"`, "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	assertFile(t, backup, raw)
+	meta, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil || bytes.Contains(meta, []byte(`"routes"`)) || bytes.Contains(meta, []byte(`"audit"`)) || bytes.Contains(meta, []byte(`"idempotency"`)) {
+		t.Fatal("metadata still contains routes or logs", err)
+	}
+	g.Close()
+	g, err = Open(testOptions(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := g.current.Load().Config
+	if got.Revision != c.Revision+1 || got.Routes[0].ID != c.Routes[0].ID || got.Routes[0].Version != 6 || got.Routes[0].Enabled || got.Routes[0].Endpoints[0].Interfaces["proxy"].Token != "upstream-secret" {
+		t.Fatal("split migration lost route identity, version or token")
+	}
+	if got.Receipts["existing-key"].Hash != "saved-hash" || len(got.ReceiptOrder) != 1 || len(got.Audit) != len(c.Audit)+1 || got.Audit[0] != c.Audit[0] {
+		t.Fatal("split migration lost receipts or audit")
+	}
+	assertFile(t, backup, raw)
+}
+
+func TestSplitStoreFailureRequiresRecovery(t *testing.T) {
+	dir := t.TempDir()
+	opts := testOptions(dir)
+	g, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if g != nil {
+			g.Close()
+		}
+	}()
+	before := g.current.Load()
+	logs := filepath.Join(dir, "route-logs.json")
+	if err := os.Remove(logs); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(logs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	w := admin(t, g, "POST", "/admin/v1/routes", namedRouteInput, "", "recover-key")
+	if w.Code != 503 || g.current.Load() != before || g.healthy.Load() {
+		t.Fatal("partial write published a snapshot or stayed ready", w.Code)
+	}
+	if w := admin(t, g, "POST", "/admin/v1/routes", namedRouteInput, "", "recover-key"); w.Code != 503 {
+		t.Fatal("accepted write before recovery", w.Code)
+	}
+	g.Close()
+	if err := os.Remove(logs); err != nil {
+		t.Fatal(err)
+	}
+	g, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.healthy.Load() || len(g.current.Load().Config.Routes) != 1 || len(g.current.Load().Config.Audit) != 1 {
+		t.Fatal("pending write not recovered")
+	}
+	w = admin(t, g, "POST", "/admin/v1/routes", namedRouteInput, "", "recover-key")
+	if w.Code != 201 || g.current.Load().Config.Revision != before.Config.Revision+1 || len(g.current.Load().Config.Audit) != 1 {
+		t.Fatal("retry did not replay recovered receipt", w.Code, w.Body.String())
+	}
+}
+
 func TestConfigSchemasAndLegacyA2A(t *testing.T) {
 	raw := legacyFixture(t)
 	card := `,"agent_card":{"name":"test","description":"test","version":"1","skills":[],"defaultInputModes":[],"defaultOutputModes":[]}`

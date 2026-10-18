@@ -48,9 +48,9 @@ func (g *Gateway) commitConfig(c protocol.Config) *configuration.Error {
 	if err := g.persistSessions(); err != nil {
 		return &configuration.Error{Status: 503, Code: "STATE_PERSISTENCE_FAILED"}
 	}
-	renamed, err := g.persist(c)
+	committed, err := g.persist(c)
 	if err != nil {
-		if renamed {
+		if committed {
 			g.healthy.Store(false)
 		}
 		return &configuration.Error{Status: 503, Code: "PERSISTENCE_FAILED"}

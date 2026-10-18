@@ -128,7 +128,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 
 - 首次安装或维护迁移将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
 - 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/config.yaml`，权限 0600；Token 不输出到终端。
-- 安装时预先创建 `/var/lib/aiagent-gateway/config.json`；前台和状态服务启动时也会自动初始化缺失的路由存储。
+- 安装时预先创建数据目录中的 `config.json`、`routes.json` 和 `route-logs.json`；前台和状态服务启动时也会自动初始化全新的路由存储。
 - 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
 - 已迁入灰度架构后，安装不同版本会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；同一 SHA-256 版本已健康运行时直接成功返回，正在发布时接续等待原任务。配置、资源归属和并发额度由共享状态服务统一管理。
 - 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
@@ -188,11 +188,11 @@ curl -fsS -X DELETE http://127.0.0.1:9090/admin/v1/routes/research \
   -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN"
 ```
 
-上述部分更新示例要求 `research` 已存在；首次创建还需提供 `expose` 等必要配置。启动参数现在只从 YAML 读取，环境变量已弃用；`config.json` 是管理 API 自动维护的路由存储，不替代进程配置。
+上述部分更新示例要求 `research` 已存在；首次创建还需提供 `expose` 等必要配置。启动参数只从 YAML 读取，环境变量已弃用。管理 API 自动维护三份存储：`config.json` 只保留版本信息，`routes.json` 保存路由和内嵌实例，`route-logs.json` 保存管理幂等回执和审计记录，后两类记录各保留最近 1000 条。文件布局及兼容说明见 [路由存储文件](docs/CONFIGURATION.md#路由存储文件)。
 
 前台模式使用新二进制启动即可启用本次管理接口。灰度部署的管理接口由 state-server 提供，现有部署需按基础组件维护流程更新该组件；日常 install 只替换业务 worker，不会自动升级管理接口。
 
-配置写入同目录临时文件，经 fsync、rename、目录同步后发布内存快照。文件和目录权限默认 0600 / 0700。前台单进程模式下，多个进程不能同时打开同一数据目录；灰度模式由单个状态服务独占目录，worker 通过本机 Socket 访问；文件替换后目录同步失败时 ready 失败，需排查存储并重启恢复。
+配置先提交 `.config.pending.json` 恢复事务，再逐份原子替换三份文件并同步目录，清理事务后发布内存快照。文件和目录权限默认 0600 / 0700。前台单进程模式下，多个进程不能同时打开同一数据目录；灰度模式由单个状态服务独占目录，worker 通过本机 Socket 访问；恢复事务提交后任何写入失败都会使 ready 失败，需排查存储并重启完成恢复。
 
 实例状态支持 active、draining、disabled。draining 不接新会话，已有会话继续访问。有绑定或活跃调用的实例不能删除或替换地址。每个 `interfaces` 项的 `health_url` 可指定主动健康检查地址，默认每 10 秒串行检查，携带该接口的凭据；仅 2xx 表示健康，不跟随重定向。未配置探活或首次探活前默认可调度。两个接口健康互不影响，HTTP 并发共同计入实例上限；实例详情 GET 的 `runtime` 展示接口健康、各接口/实例 HTTP 并发和引用数。
 
@@ -200,11 +200,11 @@ curl -fsS -X DELETE http://127.0.0.1:9090/admin/v1/routes/research \
 
 新数据目录初始化为 `schema_version: 2`。读取 schema 1 时，仅在内存迁移为 `generic`、单项 `expose` 和对应 `interfaces`；ID、配置版本和旧幂等回执保持不变。启动和幂等重放不会改写旧文件。
 
-首次成功管理写入前，将原始 schema 1 文件保存为数据目录中的 `config.schema-1.backup.json`（0600），再原子提交 schema 2。备份或替换失败时保留原文件及内存快照；替换后的目录同步失败会使网关退出 ready 状态。已有同名备份内容不同或为符号链接时拒绝迁移，需先保留并移走冲突备份。
+首次成功管理写入前，将原始单文件配置保存为数据目录中的 `config.schema-1.backup.json` 或 `config.schema-2.backup.json`（0600），再事务提交 schema 2 的拆分存储。备份或事务提交前失败保留原文件及内存快照；事务提交后的写入失败会使网关退出 ready 状态，重启完成同一事务。已有同名备份内容不同或为符号链接时拒绝迁移，需先保留并移走冲突备份。
 
 管理 API 接受纯旧形态创建，返回新形态；`protocol` 与新字段混用返回 409。旧 Endpoint 的 `url/token/health_url` 创建或 PATCH，以及旧 `protocol` PATCH，只适用于 `generic` 且 `expose` 为单项的路由；双入口使用新字段更新。旧幂等回执继续重放原响应，新回执使用新形态。
 
-回滚需先停止网关、导出保存升级后的 `config.json`，再同时恢复旧二进制和 `config.schema-1.backup.json` 对应的配置。旧二进制无法读取 schema 2；备份不包含升级后的配置修改。迁移不修改凭据，前台模式的运行时绑定仍不跨重启恢复；灰度模式使用独立共享状态日志，不应通过恢复旧配置文件回滚业务版本。
+回滚存储格式需先停止网关、备份整个数据目录，再将拆分文件和未完成事务移入备份目录，同时恢复旧二进制和对应 schema 备份为 `config.json`。旧二进制无法读取拆分存储；备份不包含升级后的配置修改。迁移不修改凭据，前台模式的运行时绑定仍不跨重启恢复；灰度模式使用独立共享状态日志，不应通过恢复旧配置文件回滚业务版本。
 
 ## A2A
 

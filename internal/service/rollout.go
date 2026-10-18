@@ -612,7 +612,26 @@ func policyForConfig(policy p.Policy, path string) (p.Policy, error) {
 	if err != nil {
 		return policy, err
 	}
+	type storeVersion struct {
+		Storage  int    `json:"storage_version"`
+		Schema   int    `json:"schema_version"`
+		Revision uint64 `json:"config_revision"`
+	}
+	var version storeVersion
+	if err = json.Unmarshal(raw, &version); err != nil {
+		return policy, err
+	}
+	if version.Storage != 0 {
+		if version.Storage != 1 || version.Schema != 2 || version.Revision == 0 {
+			return policy, fmt.Errorf("unsupported configuration storage version")
+		}
+		raw, err = os.ReadFile(filepath.Join(filepath.Dir(path), "routes.json"))
+		if err != nil {
+			return policy, err
+		}
+	}
 	var config struct {
+		storeVersion
 		Routes []struct {
 			Enabled   *bool    `json:"enabled"`
 			AgentType string   `json:"agent_type"`
@@ -626,6 +645,16 @@ func policyForConfig(policy p.Policy, path string) (p.Policy, error) {
 		} `json:"routes"`
 	}
 	if err = json.Unmarshal(raw, &config); err != nil {
+		return policy, err
+	}
+	if version.Storage != 0 && (config.storeVersion != version || config.Routes == nil) {
+		return policy, fmt.Errorf("incomplete configuration storage; retry after the state service has recovered")
+	}
+	// The state service owns recovery. Never infer fewer required profiles from
+	// a commit that has not finished publishing all of its files.
+	if _, err = os.Lstat(filepath.Join(filepath.Dir(path), ".config.pending.json")); err == nil {
+		return policy, fmt.Errorf("pending configuration requires state service recovery before upgrading")
+	} else if !os.IsNotExist(err) {
 		return policy, err
 	}
 	profiles := map[string]bool{}

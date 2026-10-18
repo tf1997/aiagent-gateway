@@ -35,6 +35,11 @@ func TestMissingStoreInitializesAutomatically(t *testing.T) {
 	if c.Schema != 2 || c.Revision != 1 || len(c.Routes) != 0 || !persistenceHealthy(t, g) {
 		t.Fatal("new store not initialized", c)
 	}
+	for _, name := range []string{"routes.json", "route-logs.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatal("missing store part", name, err)
+		}
+	}
 }
 
 func TestDanglingStoreSymlinkIsNotInitialized(t *testing.T) {
@@ -101,6 +106,10 @@ func TestStoreCRUDRecovery(t *testing.T) {
 	if readRoute(t, g, "test").Enabled {
 		t.Fatal("not disabled")
 	}
+	audit := admin(t, g, "GET", "/admin/v1/audit-logs", "", "", "")
+	if audit.Code != 200 || !strings.Contains(audit.Body.String(), "PATCH") {
+		t.Fatal("missing audit", audit.Body.String())
+	}
 	g.Close()
 	g, err = gateway.Open(o)
 	if err != nil {
@@ -115,6 +124,9 @@ func TestStoreCRUDRecovery(t *testing.T) {
 	}
 	if admin(t, g, "POST", "/admin/v1/routes", body, "", "key").Body.String() != first.Body.String() {
 		t.Fatal("receipt not recovered")
+	}
+	if got := admin(t, g, "GET", "/admin/v1/audit-logs", "", "", ""); got.Code != 200 || got.Body.String() != audit.Body.String() {
+		t.Fatal("audit not recovered", got.Body.String())
 	}
 }
 

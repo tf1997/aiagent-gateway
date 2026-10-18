@@ -1,6 +1,6 @@
 # YAML 启动配置
 
-网关现在只从 YAML 文件读取运行配置。原 `GATEWAY_*` 启动环境变量已移除，不参与覆盖，也不作为缺失配置的回退；上游凭据同样不再从环境变量读取。路由仍通过管理 API 配置，并保存到数据目录的 `config.json`。
+网关现在只从 YAML 文件读取运行配置。原 `GATEWAY_*` 启动环境变量已移除，不参与覆盖，也不作为缺失配置的回退；上游凭据同样不再从环境变量读取。路由仍通过管理 API 配置，并保存到数据目录的 `routes.json`；管理幂等回执和审计记录保存在 `route-logs.json`，`config.json` 只保留版本信息。
 
 ## 快速启动
 
@@ -14,7 +14,21 @@ go build -o bin/aiagent-gateway ./cmd/gateway
 
 不传 `--config` 时读取当前工作目录的 `config.yaml`。配置文件不存在、字段未知/重复、类型不正确、显式 null、多个 YAML 文档或容量非正数都会拒绝启动；解析错误不回显配置值。文件最大 1 MiB。
 
-启动时自动判断路由存储：`data_dir/config.json` 不存在就创建初始存储，存在则读取并校验，损坏或不可读时拒绝启动。首次启动无需额外步骤，`--init` 参数已移除。`--init-only` 保留为可选的初始化或校验后退出命令，不监听端口；`--check-ready` 从同一 YAML 读取监听地址执行就绪检查。
+启动时自动判断路由存储：数据目录中三份文件均不存在时创建初始存储，存在则读取并校验；拆分文件缺失、损坏、不可读或版本不一致时拒绝启动，不自动清空。首次启动无需额外步骤，`--init` 参数已移除。`--init-only` 保留为可选的初始化或校验后退出命令，不监听端口；`--check-ready` 从同一 YAML 读取监听地址执行就绪检查。
+
+## 路由存储文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `config.json` | `storage_version: 1`、`schema_version: 2` 和 `config_revision` |
+| `routes.json` | 相同版本信息及路由列表，内嵌 Endpoint、上游 Token 和消费者 Token 哈希 |
+| `route-logs.json` | 相同版本信息及 `idempotency`、`idempotency_order`、`audit`；幂等回执和审计记录各保留最近 1000 条 |
+
+三份文件由管理 API 一起提交，权限为 0600。`route-logs.json` 保存现有管理调用记录，不记录业务请求正文。写入期间的 `.config.pending.json` 是恢复事务；启动时先完成该事务，再读取三份文件。不要删除未完成的事务文件，也不要直接编辑运行中的存储。
+
+旧版将所有内容放在 `config.json` 的 schema 1/2 文件仍可读取。启动和幂等重放不改写旧文件；首次成功管理修改前，先原样保存为 `config.schema-1.backup.json` 或 `config.schema-2.backup.json`，再拆分写入，保留路由/Endpoint ID、凭据、幂等回执和审计历史。同名备份内容冲突时拒绝迁移。旧单文件与拆分文件混放时拒绝启动，避免不完整恢复丢失路由。备份或恢复应在停止写入后覆盖整个数据目录，不能只复制 `config.json`；旧二进制不支持拆分格式。
+
+前台模式更换二进制后重启即可使用新存储。灰度部署由 `state-server` 维护这些文件，需要按基础组件维护流程更新状态服务；日常 `install` 只发布 worker。新版安装器能从新旧存储推断 HTTP、SSE 和 A2A 验收要求。
 
 最小实用配置：
 
@@ -56,7 +70,7 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 
 更新 Token 通过路由 POST/upsert 或 Endpoint PATCH 动态生效，无需重启。更新已有接口时省略 `token` 保留原值，显式 `null` 或空字符串移除认证；首次创建省略表示无需上游认证。管理响应及幂等回执不返回 Token。
 
-上游 Token 需要原文转发，随路由保存到权限 0600 的 `config.json`，并通过受认证的本机共享配置传给 worker；消费者 Token 仍仅保存哈希。已有 `credential_ref` 必须迁入接口的 `token`，不能将原引用名当成 Token。迁移步骤见下文。
+上游 Token 需要原文转发，随路由保存到权限 0600 的 `routes.json`，并通过受认证的本机共享配置传给 worker；消费者 Token 仍仅保存哈希。已有 `credential_ref` 必须迁入接口的 `token`，不能将原引用名当成 Token。迁移步骤见下文。
 
 ## 字段与默认值
 
@@ -109,7 +123,7 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 - 旧单进程 systemd：先保存 YAML，再在维护窗口执行新二进制的 `install --migrate`。
 - 已有灰度部署：旧入口、状态服务、发布控制器及 worker 都读取环境变量，需一起维护迁移。普通 install 会拒绝旧部署格式，不能只升级 worker。
 
-已有灰度部署在维护窗口迁移时，先结束正在进行的发布、暂停流量并确认请求/后台执行结束。停止服务组，核对所有子进程退出后，保存整套文件和状态备份。保留服务组主 unit，供安装器在重建前再次执行 stop；若旧 state unit 仍引用 `EnvironmentFile=` 或 `gateway.yaml`，将该 unit 归档移出 `/etc/systemd/system`，由安装器重建。将旧 `deployment.json`、入口状态目录 `/var/lib/aiagent-gateway/entry` 和发布日志目录 `/var/lib/aiagent-gateway-rollout` 移入独立备份目录。保留转换后的 `config.yaml`、`/var/lib/aiagent-gateway/config.json` 和 `/var/lib/aiagent-gateway/shared` 原位，再执行新二进制 `install --migrate`，重新建立 YAML 版入口和发布基线。具体备份与重建顺序见 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)；旧控制日志仅用于维护恢复，不写回正在运行的新部署。
+已有灰度部署在维护窗口迁移时，先结束正在进行的发布、暂停流量并确认请求/后台执行结束。停止服务组，核对所有子进程退出后，保存整套文件和状态备份。保留服务组主 unit，供安装器在重建前再次执行 stop；若旧 state unit 仍引用 `EnvironmentFile=` 或 `gateway.yaml`，将该 unit 归档移出 `/etc/systemd/system`，由安装器重建。将旧 `deployment.json`、入口状态目录 `/var/lib/aiagent-gateway/entry` 和发布日志目录 `/var/lib/aiagent-gateway-rollout` 移入独立备份目录。保留转换后的 `config.yaml`、`/var/lib/aiagent-gateway` 下的整套路由存储和 `/var/lib/aiagent-gateway/shared` 原位，再执行新二进制 `install --migrate`，重新建立 YAML 版入口和发布基线。具体备份与重建顺序见 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)；旧控制日志仅用于维护恢复，不写回正在运行的新部署。
 
 这一步会中断连接、重建发布基线，旧 release 仍保留用于维护恢复，但环境变量版本不能作为新版控制器的日常灰度候选。恢复旧部署需要停机并整体恢复先前备份，不能用旧配置覆盖新版已接收的资源数据。当前仍需 Linux/systemd 实机验收。
 

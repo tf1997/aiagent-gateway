@@ -4,7 +4,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -183,23 +182,7 @@ func Open(o Options) (*Gateway, error) {
 			return fail(err)
 		}
 	} else {
-		path := filepath.Join(o.DataDir, "config.json")
-		// Initialize only a missing path; a dangling symlink is an unreadable
-		// existing store and must not be replaced with an empty configuration.
-		if _, err = os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-			c = protocol.Config{Schema: 2, Revision: 1, Routes: []protocol.Route{}, Receipts: map[string]protocol.Receipt{}}
-			_, err = g.save(c)
-		} else if err == nil {
-			var raw []byte
-			raw, err = os.ReadFile(path)
-			if err == nil {
-				var migrated bool
-				c, migrated, err = configuration.Load(raw)
-				if migrated {
-					g.legacyRaw = raw
-				}
-			}
-		}
+		c, g.legacyRaw, err = configuration.LoadStore(o.DataDir)
 	}
 	if err != nil {
 		return fail(err)

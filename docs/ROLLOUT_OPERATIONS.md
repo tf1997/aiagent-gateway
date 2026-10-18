@@ -107,7 +107,7 @@ curl --fail --silent --show-error http://127.0.0.1:8080/readyz
 没有灰度部署文件、仍使用原单进程服务的机器，需要维护窗口：
 
 1. 暂停新业务请求，等待原请求及网关本地后台工作结束；另行安排仍需旧内存映射访问的 Agent 任务。
-2. 保存原二进制、旧 `gateway.env`、新 `config.yaml`、`config.json` 和原 systemd unit 的备份，保留其文件权限。备份配置不能恢复进程内会话。
+2. 保存原二进制、旧 `gateway.env`、新 `config.yaml`、整个数据目录和原 systemd unit 的备份，保留其文件权限。拆分存储不能只备份 `config.json`，备份配置也不能恢复进程内会话。
 3. 在新产物目录执行迁移命令。
 4. 确认发布完成和各组件状态，使用新的会话验证代理后恢复业务流量。
 
@@ -178,7 +178,7 @@ curl --fail --silent --show-error http://127.0.0.1:8080/readyz
 
 确认 `phase == COMPLETED`，且 `stable.release` 与本次安装二进制的 SHA-256 一致。基础组件和新稳定 worker 应在运行，旧 worker 已停止属于正常情况；服务组的 `active (exited)` 也不代表各子服务都健康，需要结合子服务状态和实际请求确认。
 
-使用升级前保留的会话或资源继续请求，核对仍访问原 Agent；再验证新会话、实际启用的流式/A2A 接口。归档发布前后报告、构建包和日志。保留旧版本产物以支持后续降级，不恢复旧 `config.json` 或共享日志覆盖升级期间产生的数据。
+使用升级前保留的会话或资源继续请求，核对仍访问原 Agent；再验证新会话、实际启用的流式/A2A 接口。归档发布前后报告、构建包和日志。保留旧版本产物以支持后续降级，不恢复旧路由存储或共享日志覆盖升级期间产生的数据。
 
 ## 结果确认和异常处理
 
@@ -296,7 +296,8 @@ sudo aiagent-gateway start
 
 - `/opt/aiagent-gateway/releases/<sha256>/gateway`：不可变业务产物。
 - `/opt/aiagent-gateway/infrastructure/<sha256>/gateway`：固定入口、控制器和状态服务使用的基础产物。
-- `/var/lib/aiagent-gateway/config.json`：原管理配置，仍由单个状态服务写入。
+- `/var/lib/aiagent-gateway/config.json`：存储格式、schema 和配置版本。
+- 同目录 `routes.json` 和 `route-logs.json`：分别保存路由与管理幂等回执/审计记录，由单个状态服务一并提交；迁移和备份见 [路由存储文件](CONFIGURATION.md#路由存储文件)。
 - `/var/lib/aiagent-gateway/shared/state.log`：资源、别名、幂等和会话持久日志，内置压缩快照。
 - `/var/lib/aiagent-gateway/entry/state.log`：入口路由、灰度亲和和有界结果证据。
 - `/var/lib/aiagent-gateway-rollout/state.log`：root 管理的发布状态和未完成切流意图。

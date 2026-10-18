@@ -44,9 +44,15 @@ func TestRouteUpstreamTokenPersistenceAndRedaction(t *testing.T) {
 		t.Fatal("idempotent replay exposed upstream token", w.Body.String())
 	}
 	assertUpstreamToken(t, g, "route-secret")
-	stored, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	stored, err := os.ReadFile(filepath.Join(dir, "routes.json"))
 	if err != nil || !strings.Contains(string(stored), `"token": "route-secret"`) {
 		t.Fatal("route token was not persisted", err)
+	}
+	for _, name := range []string{"config.json", "route-logs.json"} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || strings.Contains(string(raw), "route-secret") || strings.Contains(string(raw), "alice-secret") {
+			t.Fatal("non-route file contains credentials", name, err)
+		}
 	}
 	update := fmt.Sprintf(`{"key":"test","endpoints":[{"name":"one","interfaces":{"proxy":{"url":%q},"a2a":{"url":%q,"protocol_version":"1.0"}}}]}`, up.URL, up.URL+"/rpc")
 	w = admin(t, g, "POST", "/admin/v1/routes", update, "", "")

@@ -89,7 +89,7 @@ sudo ./aiagent-gateway-linux-amd64 install
 3. 若没有预置配置，生成 `/etc/aiagent-gateway/config.yaml`：包含随机管理 Token、端口和状态路径。管理 Token 来自 32 字节随机数的十六进制编码，不输出到终端。配置文件权限为 `0600`，新建配置目录为 `0700`。
 4. 另外复制同一二进制到 `/opt/aiagent-gateway/infrastructure/H0/gateway` 和 `/usr/local/bin/aiagent-gateway`。前者运行基础组件，后者用于管理命令。
 5. 写入服务组、初始化、入口、状态和发布控制器的 unit；写入 `deployment.json`，将基础组件路径和初始 worker 路径记录为 `H0`，使用默认发布策略。
-6. 如果路由文件不存在，运行一次性 init unit，创建 `/var/lib/aiagent-gateway/config.json`。初始内容为空路由列表，已有文件不会被空配置覆盖。
+6. 如果 `config.json` 不存在，运行一次性 init unit，在全新数据目录创建 `config.json`、`routes.json` 和 `route-logs.json`。初始路由与记录为空；已有存储缺失部分文件时拒绝初始化，不会被空配置覆盖。
 7. 启用并启动服务组，拉起 `state-server`、`entry`、`rollout-controller`。控制器等待共享状态和入口 Socket 可连接；没有既有发布记录时，从 `deployment.json.initial_release` 开始首次发布。
 8. 控制器生成 `worker-a.service`，启动 A，检查身份、就绪和协议，然后把 A 记为稳定版本。首次没有旧 worker，直接开放服务，不执行 5% 灰度和五分钟全量观察。CLI 等到 `COMPLETED` 后返回 0。
 
@@ -130,7 +130,10 @@ sudoedit /etc/aiagent-gateway/config.yaml
   aiagent-gateway-worker-a.service          槽位 A 的具体产物与参数
   aiagent-gateway-worker-b.service          槽位 B 的具体产物与参数
 /var/lib/aiagent-gateway/
-  config.json                              动态路由配置
+  config.json                              存储格式、schema 和配置版本
+  routes.json                              动态路由、实例与凭据
+  route-logs.json                          管理幂等回执和审计记录
+  .config.pending.json                     写入期间的恢复事务，成功后删除
   gateway.lock                             路由存储独占锁
   shared/state.log                         会话、资源、别名和幂等元数据
   shared/state.lock                        共享状态日志独占锁
@@ -153,7 +156,9 @@ sudoedit /etc/aiagent-gateway/config.yaml
 | --- | --- | --- |
 | `config.yaml` | 安装器首次生成，之后由管理员维护 | 进程设置、管理 Token；各角色启动时读取 |
 | `deployment.json` | 首次安装或维护重建时生成 | `version`、`infrastructure`、`initial_release`、`policy`；日常安装读取其中的策略 |
-| `config.json` | `state-server`，前台模式则由单进程网关维护 | 路由、Endpoint、消费者 ID/Token 哈希、上游 Token、版本和管理幂等回执 |
+| `config.json` | `state-server`，前台模式则由单进程网关维护 | 存储格式、schema 和配置版本 |
+| `routes.json` | 同上 | 路由、Endpoint、消费者 ID/Token 哈希、上游 Token |
+| `route-logs.json` | 同上 | 管理 API 幂等回执和审计记录，各保留最近 1000 条 |
 | `shared/state.log` | `state-server` | 会话到 Agent 的绑定，Hermes/A2A 资源 ID 映射、父子关系、别名和数据幂等信息 |
 | `entry/state.log` | `entry` | 稳定/候选目标、流量 revision、灰度会话归属、有界请求结果及未结束请求记录 |
 | `aiagent-gateway-rollout/state.log` | `rollout-controller` | 当前发布阶段、稳定/候选版本、验证策略与结果、失败原因及未完成切流意图 |
@@ -199,7 +204,7 @@ rollout_data: /var/lib/aiagent-gateway-rollout
 | 灰度比例、验证时长和样本数 | `deployment.json.policy` | 下一次提交的发布；进行中的任务使用已保存的策略 |
 | 正在运行的程序版本 | 新产物的 `install` 或整套组件维护流程 | 新进程启动并完成对应交接后 |
 
-YAML 不读取环境变量，不展开 `$VAR`，也不接受 `callers` / `credentials` 字典。消费者和上游 Token 属于路由配置；上游 Token 需要原文转发，保存在权限受限的 `config.json` 中，消费者 Token 保存哈希。
+YAML 不读取环境变量，不展开 `$VAR`，也不接受 `callers` / `credentials` 字典。消费者和上游 Token 属于路由配置；上游 Token 需要原文转发，保存在权限受限的 `routes.json` 中，消费者 Token 保存哈希。
 
 修改源 YAML 不会使运行中的进程重新读取配置。新 worker 会在启动时获得当时的凭据副本，因此正常灰度期间应保持启动配置一致；需要修改公共配置时安排维护操作。
 
@@ -228,7 +233,7 @@ sudo ./aiagent-gateway-linux-amd64 install
 | `/usr/local/bin/aiagent-gateway` | 保留现有管理 CLI |
 | `aiagent-gateway-worker-b.service` | 由控制器生成或改写，`ExecStart` 指向 `releases/H1/gateway`，槽位设为 B |
 | `aiagent-gateway-worker-a.service` | 本次仍指向 `H0`；完成后停止 A，unit 文件保留 |
-| `config.yaml`、`config.json`、`deployment.json` | 安装器保留已有内容；读取发布策略和配置，不用上传包里的示例覆盖它们 |
+| `config.yaml`、`config.json`、`routes.json`、`route-logs.json`、`deployment.json` | 安装器保留已有内容；读取发布策略和配置，不用上传包里的示例覆盖它们 |
 | `shared/state.log` | 持续提交业务会话和资源状态 |
 | `entry/state.log` | 保存候选、流量比例、归属和请求结果；完成时保存新的稳定目标 |
 | `aiagent-gateway-rollout/state.log` | 保存本次任务、切流意图、验证结果及新的稳定版本 |
@@ -303,7 +308,7 @@ Hermes/A2A 公开资源 ID        → 原 Agent Endpoint、上游 ID、父子关
 切换后：session-123 → B(H1) → Agent X
 ```
 
-worker 不各自改写 `config.json`，也不用在退出时向另一个 worker 复制整份状态文件。资源创建、归属和幂等提交由状态服务确认；旧 worker 退休时释放的是执行租约，会话和资源绑定按自身生命周期保留。
+worker 不各自改写路由存储文件，也不用在退出时向另一个 worker 复制整份状态文件。资源创建、归属和幂等提交由状态服务确认；旧 worker 退休时释放的是执行租约，会话和资源绑定按自身生命周期保留。
 
 持久化保存的是定位和幂等元数据，不包含客户端连接或 Agent 内部的聊天历史。绑定仍有 TTL；原 Agent 故障也不会自动改投另一实例。仅在上游 Agent 内执行的异步任务，可由新 worker 根据映射继续查询或取消，通常不要求等整个 Agent 任务结束后才退出旧 worker。
 
@@ -416,7 +421,7 @@ mv /var/lib/aiagent-gateway-rollout \
   "$gateway_backup_dir/previous-control/rollout"
 ```
 
-保留 `/etc/aiagent-gateway/config.yaml`、`/var/lib/aiagent-gateway/config.json`、`/var/lib/aiagent-gateway/shared` 以及版本产物原位。它们提供管理凭据、路由身份和有效资源归属。
+保留 `/etc/aiagent-gateway/config.yaml`、`/var/lib/aiagent-gateway` 下的整套路由存储（`config.json`、`routes.json`、`route-logs.json`，以及存在时的 `.config.pending.json`）、`/var/lib/aiagent-gateway/shared` 和版本产物原位。它们提供管理凭据、路由身份和有效资源归属。旧单文件配置在首次成功管理修改前仍保持原样，详见 [路由存储文件](CONFIGURATION.md#路由存储文件)。
 
 归档上述三个控制位置，是为了让新入口和新控制器从新版本建立基线。只移走部署清单、却保留原控制器报告，会继续恢复报告中的旧稳定目标。仅移走控制日志也不能替代业务状态迁移。
 
@@ -493,7 +498,7 @@ previous_release='填写目标旧版本的64位SHA256'
 sudo "/opt/aiagent-gateway/releases/${previous_release}/gateway" install
 ```
 
-此时仍要取得真实成功样本，并完成观察和排空。回退和降级不恢复旧 `config.json` / `shared/state.log`，灰度中新建的合法资源继续保留；已执行的上游操作也不会被撤销。
+此时仍要取得真实成功样本，并完成观察和排空。回退和降级不恢复旧路由存储或 `shared/state.log`，灰度中新建的合法资源继续保留；已执行的上游操作也不会被撤销。
 
 服务组重启会中断连接。状态服务重启后，旧 worker 的状态客户端会检测到代次变化，拒绝继续使用旧状态；systemd 依赖和控制器负责停止或恢复对应 worker。元数据恢复不能恢复原 TCP/SSE 连接。
 

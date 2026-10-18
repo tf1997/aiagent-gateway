@@ -30,6 +30,70 @@ func rolloutManager(t *testing.T) (*manager, *fakeSystem) {
 	m.command = fake.run
 	return m, fake
 }
+
+func TestPolicyForConfigStorageFormats(t *testing.T) {
+	for _, tc := range []struct {
+		name, metadata, routes, want string
+	}{
+		{"legacy-schema-1", `{"schema_version":1,"routes":[{"protocol":"proxy"},{"protocol":"a2a","agent_card":{"capabilities":{"streaming":true}}}]}`, "", "http,a2a,a2a_sse"},
+		{"legacy-schema-2", `{"schema_version":2,"routes":[{"agent_type":"hermes","expose":["proxy","a2a"],"agent_card":{"capabilities":{"streaming":true}}}]}`, "", "http,sse,a2a,a2a_sse"},
+		{"split", `{"storage_version":1,"schema_version":2,"config_revision":7}`, `{"storage_version":1,"schema_version":2,"config_revision":7,"routes":[{"agent_type":"hermes","expose":["proxy","a2a"],"agent_card":{"capabilities":{"streaming":true}}}]}`, "http,sse,a2a,a2a_sse"},
+		{"split-disabled", `{"storage_version":1,"schema_version":2,"config_revision":7}`, `{"storage_version":1,"schema_version":2,"config_revision":7,"routes":[{"enabled":false,"agent_type":"hermes","expose":["proxy","a2a"],"agent_card":{"capabilities":{"streaming":true}}},{"enabled":true,"expose":["proxy"]}]}`, "http"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(path, []byte(tc.metadata), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.routes != "" {
+				if err := os.WriteFile(filepath.Join(dir, "routes.json"), []byte(tc.routes), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := policyForConfig(p.DefaultPolicy(), path)
+			if err != nil || strings.Join(got.Profiles, ",") != tc.want {
+				t.Fatalf("profiles = %v, want %s: %v", got.Profiles, tc.want, err)
+			}
+		})
+	}
+}
+
+func TestPolicyForConfigRejectsIncompleteSplitStore(t *testing.T) {
+	for _, tc := range []struct {
+		name, routes string
+	}{
+		{"missing", ""},
+		{"corrupt", "broken"},
+		{"revision", `{"storage_version":1,"schema_version":2,"config_revision":8,"routes":[]}`},
+		{"storage", `{"storage_version":2,"schema_version":2,"config_revision":7,"routes":[]}`},
+		{"schema", `{"storage_version":1,"schema_version":1,"config_revision":7,"routes":[]}`},
+		{"missing-routes", `{"storage_version":1,"schema_version":2,"config_revision":7}`},
+		{"pending", `{"storage_version":1,"schema_version":2,"config_revision":7,"routes":[]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.json")
+			if err := os.WriteFile(path, []byte(`{"storage_version":1,"schema_version":2,"config_revision":7}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.routes != "" {
+				if err := os.WriteFile(filepath.Join(dir, "routes.json"), []byte(tc.routes), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.name == "pending" {
+				if err := os.WriteFile(filepath.Join(dir, ".config.pending.json"), []byte(`{}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := policyForConfig(p.DefaultPolicy(), path); err == nil {
+				t.Fatal("incomplete store silently reduced rollout coverage")
+			}
+		})
+	}
+}
+
 func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 	m, system := rolloutManager(t)
 	for path, body := range map[string]string{configPath: "data_dir: /var/lib/aiagent-gateway\nadmin_token: unchanged-secret\n", dataPath: `{"schema_version":2,"routes":[]}`, binaryPath: "old CLI"} {
