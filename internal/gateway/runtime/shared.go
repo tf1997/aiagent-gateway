@@ -19,6 +19,7 @@ func NewSharedServer(g *Gateway, journal *state.Journal) (*SharedServer, error) 
 	}
 	g.resources.SetFailureHandler(func() { g.healthy.Store(false) })
 	return shared.NewServer(g.opts.AdminToken, shared.Backend{
+		Barrier:      &g.stateBarrier,
 		Discover:     g.discoverShared,
 		Execute:      g.executeShared,
 		Freeze:       g.freezeConfig,

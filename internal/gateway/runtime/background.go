@@ -41,6 +41,14 @@ func (g *Gateway) reconcileLoop(ctx context.Context) {
 }
 
 func (g *Gateway) reconcileResource(ctx context.Context, ref protocol.Resource) {
+	leave, err := g.stateBarrier.TryEnter()
+	if err != nil {
+		return
+	}
+	defer leave()
+	if ctx.Err() != nil {
+		return
+	}
 	var rt *protocol.Route
 	for _, r := range g.current.Load().Routes {
 		if r.ID == ref.RouteID {
@@ -78,20 +86,7 @@ func (g *Gateway) maintenance(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			for j := 0; j < 16; j++ {
-				sh := &g.shards[shardIndex%256]
-				shardIndex++
-				sh.mu.Lock()
-				for k, b := range sh.items {
-					if b.Active == 0 && time.Since(b.Seen) > b.TTL && (k.Interface != "a2a" || !g.hasTask(k.Owner, k.Route, k.ID)) {
-						delete(sh.items, k)
-						g.bindings.Add(-1)
-					}
-				}
-				sh.mu.Unlock()
-			}
-			g.cleanupResources()
-			_ = g.persistSessions()
+			g.maintainState(&shardIndex)
 			if time.Now().After(nextHealth) {
 				g.retireCaches()
 				g.checkHealth(ctx)
@@ -101,8 +96,37 @@ func (g *Gateway) maintenance(ctx context.Context) {
 	}
 }
 
+// Admission covers the complete maintenance batch, including journal writes.
+// A skipped tick does not advance its cursor or extend any resource TTL.
+func (g *Gateway) maintainState(shardIndex *int) {
+	leave, err := g.stateBarrier.TryEnter()
+	if err != nil {
+		return
+	}
+	defer leave()
+	for j := 0; j < 16; j++ {
+		sh := &g.shards[*shardIndex%256]
+		*shardIndex++
+		sh.mu.Lock()
+		for k, b := range sh.items {
+			if b.Active == 0 && time.Since(b.Seen) > b.TTL && (k.Interface != "a2a" || !g.hasTask(k.Owner, k.Route, k.ID)) {
+				delete(sh.items, k)
+				g.bindings.Add(-1)
+			}
+		}
+		sh.mu.Unlock()
+	}
+	g.cleanupResources()
+	_ = g.persistSessions()
+}
+
 // Retire configuration-dependent caches without interrupting active requests.
 func (g *Gateway) retireCaches() {
+	leave, err := g.stateBarrier.TryEnter()
+	if err != nil {
+		return
+	}
+	defer leave()
 	g.lifecycle.RLock()
 	defer g.lifecycle.RUnlock()
 	s := g.current.Load()

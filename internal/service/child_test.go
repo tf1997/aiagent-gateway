@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"net"
 	"net/http"
@@ -16,6 +17,52 @@ import (
 
 	p "aiagent-gateway/internal/releaseprotocol"
 )
+
+func TestChildControlsPropagateSealedState(t *testing.T) {
+	sealed := errors.New("STATE_HANDOFF_SEALED")
+	d := NewChildProcessDriver(ChildOptions{
+		Freeze: func(bool) error { return sealed },
+		Retire: func(string) error { return sealed },
+	})
+	ctx := context.Background()
+	if err := d.Freeze(ctx, false); !errors.Is(err, sealed) {
+		t.Fatal("freeze reported success without changing state", err)
+	}
+	if err := d.Retire(ctx, p.Target{Incarnation: "dead"}); !errors.Is(err, sealed) {
+		t.Fatal("retire reported success without releasing leases", err)
+	}
+	if err := d.Stop(ctx, p.Target{Incarnation: "dead"}); !errors.Is(err, sealed) {
+		t.Fatal("stop discarded failed lease cleanup", err)
+	}
+}
+
+func TestChildRetainsFailedLeaseCleanupForRetry(t *testing.T) {
+	d, artifact, _, _, _ := childFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	target, err := d.Start(ctx, artifact, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := d.children["a"]
+	if err := c.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	<-c.done
+	retire := d.opts.Retire
+	sealed := errors.New("STATE_HANDOFF_SEALED")
+	d.opts.Retire = func(string) error { return sealed }
+	if err := d.Stop(ctx, target); !errors.Is(err, sealed) || d.children["a"] != c {
+		t.Fatal("stop lost the failed lease cleanup", err)
+	}
+	if _, err := d.Start(ctx, artifact, "a"); !errors.Is(err, sealed) || d.children["a"] != c {
+		t.Fatal("replacement bypassed unresolved lease cleanup", err)
+	}
+	d.opts.Retire = retire
+	if err := d.Stop(ctx, target); err != nil || d.children["a"] != nil {
+		t.Fatal("cleanup retry failed", err)
+	}
+}
 
 // A real child executable, with controllable identity and inflight count. It
 // speaks the worker handshake without opening a gateway store or an Agent.
@@ -80,8 +127,8 @@ func childFixture(t *testing.T) (*ChildProcessDriver, string, string, *int64, *[
 	var leases int64
 	var retired []string
 	d := NewChildProcessDriver(ChildOptions{ConfigPath: config, ReleasesDir: root, Token: "child-test",
-		OwnerUID: uint32(os.Geteuid()), Freeze: func(bool) {}, Count: func(string) int64 { return leases },
-		Retire: func(worker string) { retired = append(retired, worker) }})
+		OwnerUID: uint32(os.Geteuid()), Freeze: func(bool) error { return nil }, Count: func(string) int64 { return leases },
+		Retire: func(worker string) error { retired = append(retired, worker); return nil }})
 	t.Cleanup(d.Close)
 	return d, artifact, config, &leases, &retired
 }

@@ -25,18 +25,24 @@ func (g *Gateway) AdminHandler() http.Handler {
 }
 
 func (g *Gateway) beginConfigUpdate() (func(), *configuration.Error) {
+	leave, err := g.stateBarrier.TryEnter()
+	if err != nil {
+		return nil, &configuration.Error{Status: 503, Code: err.Error()}
+	}
 	g.mu.Lock()
 	if g.configFrozen.Load() {
 		g.mu.Unlock()
+		leave()
 		return nil, &configuration.Error{Status: 409, Code: "ROLLOUT_IN_PROGRESS"}
 	}
 	g.lifecycle.Lock()
 	if !g.healthy.Load() {
 		g.lifecycle.Unlock()
 		g.mu.Unlock()
+		leave()
 		return nil, &configuration.Error{Status: 503, Code: "PERSISTENCE_UNAVAILABLE"}
 	}
-	return func() { g.lifecycle.Unlock(); g.mu.Unlock() }, nil
+	return func() { g.lifecycle.Unlock(); g.mu.Unlock(); leave() }, nil
 }
 
 // Called with the configuration and lifecycle write locks held. Publish only
@@ -68,11 +74,20 @@ func (g *Gateway) writeMetrics(w io.Writer) {
 }
 
 func (g *Gateway) endpointDetail(rt *protocol.Route, ep *protocol.Endpoint) any {
-	st := g.state(rt.ID, ep.ID)
+	// Administrative reads must not populate caches on a sealed owner.
+	g.statesMu.Lock()
+	st := g.states[rt.ID+"/"+ep.ID]
+	g.statesMu.Unlock()
+	if st == nil {
+		st = &endpointState{}
+		st.proxy.healthy.Store(true)
+		st.a2a.healthy.Store(true)
+	}
 	interfaces := map[string]any{}
 	for entry := range ep.Interfaces {
 		is := st.iface(entry)
-		interfaces[entry] = map[string]any{"healthy": is.healthy.Load(), "http_inflight": is.active.Load(), "ready": g.interfaceReady(rt, ep, entry), "capabilities": is.discovery.Load()}
+		healthy := is.healthy.Load()
+		interfaces[entry] = map[string]any{"healthy": healthy, "http_inflight": is.active.Load(), "ready": healthy, "capabilities": is.discovery.Load()}
 	}
 	counts := map[string]int{"nonterminal_tasks": 0, "nonterminal_runs": 0, "unknown_resources": 0, "reserved_resources": 0}
 	for _, res := range g.resources.List("", rt.ID, "", ep.ID) {

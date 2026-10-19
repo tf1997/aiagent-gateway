@@ -2,6 +2,7 @@ package shared
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -13,8 +14,50 @@ import (
 type Barrier struct {
 	mu                     sync.Mutex
 	sealed                 bool
+	sealing                bool
 	active, waiting, bytes int
 	changed                chan struct{}
+}
+
+var ErrSealed = errors.New("STATE_HANDOFF_SEALED")
+
+// BarrierStatus reports admission and drain progress without taking any
+// runtime or dispatcher lock. Sealed is true only after all writers leave.
+type BarrierStatus struct {
+	Sealing, Sealed        bool
+	Active, Waiting, Bytes int
+}
+
+func (b *Barrier) Status() BarrierStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes}
+}
+
+// TryEnter admits owner-local work without queueing it for a later owner.
+// Maintenance skips a sealed tick; configuration and control callers return
+// the error to their caller. The returned function covers the whole operation,
+// including network discovery, persistence, and asynchronous cleanup.
+func (b *Barrier) TryEnter() (func(), error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sealed {
+		return nil, ErrSealed
+	}
+	b.active++
+	return b.leave(), nil
+}
+
+func (b *Barrier) leave() func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			b.mu.Lock()
+			b.active--
+			b.signal()
+			b.mu.Unlock()
+		})
+	}
 }
 
 func (b *Barrier) signal() {
@@ -60,12 +103,7 @@ func (b *Barrier) enter(ctx context.Context, size int) (func(), error) {
 	}
 	b.active++
 	b.mu.Unlock()
-	return func() {
-		b.mu.Lock()
-		b.active--
-		b.signal()
-		b.mu.Unlock()
-	}, nil
+	return b.leave(), nil
 }
 
 func (b *Barrier) seal(ctx context.Context) error {
@@ -75,6 +113,8 @@ func (b *Barrier) seal(ctx context.Context) error {
 		return fmt.Errorf("STATE_HANDOFF_ALREADY_SEALED")
 	}
 	b.sealed = true
+	b.sealing = true
+	defer func() { b.sealing = false }()
 	b.signal()
 	for b.active > 0 {
 		changed := b.changed
@@ -98,15 +138,24 @@ func (b *Barrier) seal(ctx context.Context) error {
 	return nil
 }
 
-func (b *Barrier) resume() {
-	b.mu.Lock()
-	b.sealed = false
-	b.signal()
-	b.mu.Unlock()
-}
-
-func (b *Barrier) quiescent() bool {
+func (b *Barrier) resume() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.sealed && b.active == 0
+	if b.sealing {
+		return fmt.Errorf("STATE_HANDOFF_SEAL_IN_PROGRESS")
+	}
+	b.sealed = false
+	b.signal()
+	return nil
+}
+
+// lockSealed pins the frozen state while an import/export accesses the backend.
+// Resume must not reopen owner-local admission in the middle of that access.
+func (b *Barrier) lockSealed() (func(), bool) {
+	b.mu.Lock()
+	if !b.sealed || b.sealing || b.active != 0 {
+		b.mu.Unlock()
+		return nil, false
+	}
+	return b.mu.Unlock, true
 }

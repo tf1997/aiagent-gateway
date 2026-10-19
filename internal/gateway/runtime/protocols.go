@@ -65,13 +65,24 @@ func protocolLease(l *lease, entry string) *protocol.Lease {
 }
 
 func (g *Gateway) registerBackground() (func(), bool) {
+	// Business executors use StateAccess for each mutation and may keep their
+	// upstream streams across adoption. Only owner-local tasks pin this gate.
+	leave := func() {}
+	if g.remote == nil {
+		var err error
+		leave, err = g.stateBarrier.TryEnter()
+		if err != nil {
+			return nil, false
+		}
+	}
 	g.lifecycle.RLock()
 	defer g.lifecycle.RUnlock()
 	if !g.healthy.Load() {
+		leave()
 		return nil, false
 	}
 	g.wg.Add(1)
-	return g.wg.Done, true
+	return func() { leave(); g.wg.Done() }, true
 }
 
 // Resource creation reserves the instance before any upstream request. Replays

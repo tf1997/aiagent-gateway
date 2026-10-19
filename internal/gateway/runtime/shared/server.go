@@ -15,6 +15,9 @@ import (
 )
 
 type Backend struct {
+	// Barrier is shared with all owner-local writers. Nil creates a private
+	// barrier, suitable for a backend with no independent state writers.
+	Barrier *Barrier
 	// Discovery performs network I/O before the state dispatcher is locked.
 	Discover     func(context.Context, Request)
 	Execute      func(Request, *Leases) Response
@@ -25,7 +28,7 @@ type Backend struct {
 // Server serializes shared operations and keeps retries within one generation
 // idempotent. State and ownership remain with the runtime backend.
 type Server struct {
-	barrier       Barrier
+	barrier       *Barrier
 	revision      uint64
 	epoch         string
 	previousEpoch string
@@ -43,7 +46,11 @@ type cachedReply struct {
 }
 
 func NewServer(token string, backend Backend) *Server {
-	return &Server{epoch: releaseprotocol.ID("state_"), token: token, backend: backend, leases: Leases{items: map[string]lease{}}, replies: map[string]cachedReply{}}
+	barrier := backend.Barrier
+	if barrier == nil {
+		barrier = &Barrier{}
+	}
+	return &Server{barrier: barrier, epoch: releaseprotocol.ID("state_"), token: token, backend: backend, leases: Leases{items: map[string]lease{}}, replies: map[string]cachedReply{}}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -132,16 +139,33 @@ func copyResponse(out Response) Response {
 	return copy
 }
 
-func (s *Server) Freeze(frozen bool) {
+func (s *Server) Freeze(frozen bool) error {
+	leave, err := s.barrier.TryEnter()
+	if err != nil {
+		return err
+	}
+	defer leave()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.backend.Freeze(frozen)
+	s.revision++
+	return nil
 }
 
-func (s *Server) Retire(worker string) {
+func (s *Server) Retire(worker string) error {
+	leave, err := s.barrier.TryEnter()
+	if err != nil {
+		return err
+	}
+	defer leave()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.backend.Execute(Request{Action: "retire", Worker: worker}, &s.leases)
+	out := s.backend.Execute(Request{Action: "retire", Worker: worker}, &s.leases)
+	s.revision++
+	if out.Error != "" {
+		return fmt.Errorf("%s", out.Error)
+	}
+	return nil
 }
 
 // Resolve uses the same dispatcher and backend as the authenticated RPC path.

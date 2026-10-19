@@ -20,8 +20,8 @@ import (
 type ChildOptions struct {
 	ConfigPath, ReleasesDir, Token string
 	OwnerUID                       uint32
-	Freeze                         func(bool)
-	Retire                         func(string)
+	Freeze                         func(bool) error
+	Retire                         func(string) error
 	Count                          func(string) int64
 	Output                         io.Writer
 }
@@ -130,7 +130,9 @@ func (d *ChildProcessDriver) Start(ctx context.Context, artifact, slot string) (
 		select {
 		case <-old.done:
 			old.parent.Close()
-			d.opts.Retire(old.target.Incarnation)
+			if err := d.opts.Retire(old.target.Incarnation); err != nil {
+				return p.Target{}, err
+			}
 			delete(d.children, slot)
 		default:
 			if old.target.Artifact != artifact {
@@ -185,14 +187,18 @@ func (d *ChildProcessDriver) Start(ctx context.Context, artifact, slot string) (
 		select {
 		case <-c.done:
 			writer.Close()
-			d.opts.Retire(t.Incarnation)
+			if err := d.opts.Retire(t.Incarnation); err != nil {
+				return t, fmt.Errorf("worker exited before readiness; retire: %w", err)
+			}
 			delete(d.children, slot)
 			return t, fmt.Errorf("worker exited before readiness")
 		case <-readyCtx.Done():
 			_ = cmd.Process.Kill()
 			<-c.done
 			writer.Close()
-			d.opts.Retire(t.Incarnation)
+			if err := d.opts.Retire(t.Incarnation); err != nil {
+				return t, fmt.Errorf("worker readiness: %v; retire: %w", readyCtx.Err(), err)
+			}
 			delete(d.children, slot)
 			return t, fmt.Errorf("worker readiness: %w", readyCtx.Err())
 		case <-tick.C:
@@ -261,10 +267,13 @@ func (d *ChildProcessDriver) Stop(ctx context.Context, target p.Target) error {
 			}
 		}
 		c.parent.Close()
+		if err := d.opts.Retire(target.Incarnation); err != nil {
+			return err
+		}
 		delete(d.children, target.Instance)
+		return nil
 	}
-	d.opts.Retire(target.Incarnation)
-	return nil
+	return d.opts.Retire(target.Incarnation)
 }
 
 func (d *ChildProcessDriver) Retire(ctx context.Context, target p.Target) error {
@@ -279,16 +288,17 @@ func (d *ChildProcessDriver) Retire(ctx context.Context, target p.Target) error 
 			}
 		}
 	}
-	d.opts.Retire(target.Incarnation)
-	return nil
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return d.opts.Retire(target.Incarnation)
 }
 
 func (d *ChildProcessDriver) Freeze(ctx context.Context, frozen bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	d.opts.Freeze(frozen)
-	return nil
+	return d.opts.Freeze(frozen)
 }
 
 // Close is used for host shutdown, not rollout. Closing the parent pipe also
@@ -307,7 +317,9 @@ func (d *ChildProcessDriver) Close() {
 			_ = c.cmd.Process.Kill()
 			<-c.done
 		}
-		d.opts.Retire(c.target.Incarnation)
+		// Shutdown still reaps the process when state admission is sealed.
+		// Lease recovery belongs to the committed owner in that case.
+		_ = d.opts.Retire(c.target.Incarnation)
 		delete(d.children, slot)
 	}
 }

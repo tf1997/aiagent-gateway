@@ -40,14 +40,16 @@ type Options struct {
 }
 
 type Gateway struct {
-	a2aHandler     *a2a.Handler
-	hermesHandler  *hermes.Handler
-	worker         *rollout.Worker
-	resolver       rollout.Resolver
-	remote         *shared.Client
-	journal        *state.Journal
-	sessionPersist sync.Mutex
-	configFrozen   atomic.Bool
+	a2aHandler        *a2a.Handler
+	hermesHandler     *hermes.Handler
+	worker            *rollout.Worker
+	resolver          rollout.Resolver
+	remote            *shared.Client
+	journal           *state.Journal
+	sessionPersist    sync.Mutex
+	configFrozen      atomic.Bool
+	stateBarrier      shared.Barrier
+	backgroundStarted bool // protected by lifecycle
 
 	callerMu     sync.Mutex
 	callerCounts map[string]*atomic.Int64
@@ -241,6 +243,12 @@ func (g *Gateway) StateHealthy() bool {
 }
 
 func (g *Gateway) StartBackground() {
+	g.lifecycle.Lock()
+	defer g.lifecycle.Unlock()
+	if g.remote != nil || !g.healthy.Load() || g.backgroundStarted {
+		return
+	}
+	g.backgroundStarted = true
 	g.wg.Add(2)
 	go g.maintenance(g.background)
 	go g.reconcileLoop(g.background)

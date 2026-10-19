@@ -44,6 +44,14 @@ func (g *Gateway) DataHandler() http.Handler {
 			protocol.WriteJSON(w, code, map[string]bool{"ready": code == 200})
 			return
 		}
+		if g.remote == nil {
+			leave, err := g.stateBarrier.TryEnter()
+			if err != nil {
+				protocol.Problem(w, 503, err.Error())
+				return
+			}
+			defer leave()
+		}
 		g.requests.Add(1)
 		p := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 3)
 		if len(p) < 2 {

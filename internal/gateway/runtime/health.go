@@ -198,6 +198,14 @@ func (g *Gateway) state(route, id string) *endpointState {
 }
 
 func (g *Gateway) checkHealth(ctx context.Context) {
+	leave, err := g.stateBarrier.TryEnter()
+	if err != nil {
+		return
+	}
+	defer leave()
+	if ctx.Err() != nil {
+		return
+	}
 	client := &http.Client{Transport: g.transport(3000), Timeout: 3 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	for _, r := range g.current.Load().Routes {
 		if r.AgentType == "hermes" {

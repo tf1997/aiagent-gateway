@@ -26,14 +26,17 @@ type Transfer struct {
 }
 
 func (s *Server) Seal(ctx context.Context) error { return s.barrier.seal(ctx) }
-func (s *Server) Resume()                        { s.barrier.resume() }
+func (s *Server) Resume() error                  { return s.barrier.resume() }
+func (s *Server) BarrierStatus() BarrierStatus   { return s.barrier.Status() }
 
 func (s *Server) Export() (Transfer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.barrier.quiescent() {
+	unlock, ok := s.barrier.lockSealed()
+	if !ok {
 		return Transfer{}, fmt.Errorf("STATE_NOT_SEALED")
 	}
+	defer unlock()
 	v := Transfer{Epoch: s.epoch, Revision: s.revision}
 	for _, l := range s.leases.items {
 		v.Leases = append(v.Leases, l.record)
@@ -52,7 +55,12 @@ func (s *Server) Export() (Transfer, error) {
 func (s *Server) Import(v Transfer, nextEpoch string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.barrier.quiescent() || s.revision != 0 || len(s.leases.items) != 0 || len(s.replies) != 0 {
+	unlock, ok := s.barrier.lockSealed()
+	if !ok {
+		return fmt.Errorf("STATE_IMPORT_REQUIRES_UNUSED_SEALED_DISPATCHER")
+	}
+	defer unlock()
+	if s.revision != 0 || len(s.leases.items) != 0 || len(s.replies) != 0 {
 		return fmt.Errorf("STATE_IMPORT_REQUIRES_UNUSED_SEALED_DISPATCHER")
 	}
 	if v.Epoch == "" || nextEpoch == "" || nextEpoch == v.Epoch || len(v.Receipts) > 8192 || s.backend.RestoreLease == nil {
