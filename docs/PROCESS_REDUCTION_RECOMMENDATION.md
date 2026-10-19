@@ -8,7 +8,7 @@
 
 host 合并现有 entry、state-server、rollout-controller，承载公共端口、状态单写者、灰度分配与发布控制；worker 保持独立进程。普通业务发布不替换 host，因此不需要转移公共监听 socket、状态写入权或 systemd MainPID。这里保留的是计划业务升级的灰度语义；合并后的故障隔离变化见第 5 节。
 
-已有 [1 → 2 → 1 草案](SINGLE_PROCESS_ROLLOUT_PLAN.md)保留为进一步减少常驻进程的目标。它能够连同宿主功能一起换版，但需要在线状态交接，工程范围明显更大。建议先完成 2 → 3 → 2 的生产验收，再以状态交接原型决定是否继续整合。
+后续目标见 [整个网关灰度发布实施方案](SINGLE_PROCESS_ROLLOUT_PLAN.md)：常驻 1 个、发布时 2 个完整网关，连同宿主功能一起换版。Linux/systemd 交接原型和单进程基础运行时已验证，完整状态与自动灰度交接仍在实现；具体边界见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)，默认安装暂未切换。
 
 | 方案 | 稳定期 | 灰度期 | 每次业务发布需要状态交接 | 评价 |
 | --- | ---: | ---: | --- | --- |

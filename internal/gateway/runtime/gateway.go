@@ -27,6 +27,8 @@ import (
 
 // Options controls gateway startup, storage and runtime capacity.
 type Options struct {
+	// StateClient supplies an in-process dispatcher for a complete gateway.
+	StateClient                                          *shared.Client
 	dialContext                                          func(context.Context, string, string) (net.Conn, error)
 	StateSocket, WorkerID                                string
 	DataDir, AdminToken, PublicURL                       string
@@ -123,7 +125,9 @@ func Open(o Options) (*Gateway, error) {
 	}
 	var f *os.File
 	var remote *shared.Client
-	if o.StateSocket != "" {
+	if o.StateClient != nil {
+		remote = o.StateClient
+	} else if o.StateSocket != "" {
 		remote = shared.NewClient(o.StateSocket, o.AdminToken, o.WorkerID)
 	} else {
 		if err := os.MkdirAll(o.DataDir, 0700); err != nil {
@@ -229,6 +233,12 @@ func (g *Gateway) Close() error {
 
 // BeginShutdown rejects new data requests before listeners drain.
 func (g *Gateway) BeginShutdown() { g.lifecycle.Lock(); g.healthy.Store(false); g.lifecycle.Unlock() }
+
+// StateHealthy includes configuration persistence failures as well as the
+// domain journal. Public readiness must not advertise an unusable state owner.
+func (g *Gateway) StateHealthy() bool {
+	return g.healthy.Load() && (g.journal == nil || g.journal.Healthy() == nil)
+}
 
 func (g *Gateway) StartBackground() {
 	g.wg.Add(2)

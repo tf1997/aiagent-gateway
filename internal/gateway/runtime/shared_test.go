@@ -10,6 +10,7 @@ import (
 
 	"aiagent-gateway/internal/gateway/protocol"
 	configuration "aiagent-gateway/internal/gateway/runtime/config"
+	"aiagent-gateway/internal/gateway/runtime/shared"
 	"aiagent-gateway/internal/state"
 )
 
@@ -89,6 +90,61 @@ func (f *sharedFixture) worker(t *testing.T, id string) *Gateway {
 	}
 	t.Cleanup(func() { g.Close() })
 	return g
+}
+
+func (f *sharedFixture) localWorker(t *testing.T, id string) *Gateway {
+	t.Helper()
+	opts := testOptions("")
+	opts.StateClient = shared.NewLocalClient(f.server, id)
+	opts.WorkerID = id
+	g, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { g.Close() })
+	return g
+}
+
+func TestLocalAndRemoteWorkersShareCapacityAffinityAndIdempotency(t *testing.T) {
+	f := sharedSetup(t)
+	rt := create(t, f.core, "proxy", "http://127.0.0.1:8001", "http://127.0.0.1:8002")
+	a, b := f.localWorker(t, "local"), f.worker(t, "remote")
+	f.core.opts.MaxInflight = 1
+	l, err := a.acquire("alice", "test", "session", "", "proxy", a.current.Load().Routes["test"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.server.Count("local") != 1 {
+		t.Fatal("local execution bypassed shared lease accounting")
+	}
+	if _, err = b.acquire("alice", "test", "other", "", "proxy", b.current.Load().Routes["test"]); err == nil {
+		t.Fatal("remote execution bypassed global capacity")
+	}
+	l.release()
+	l.release()
+	if f.server.Count("local") != 0 || f.core.inflight.Load() != 0 {
+		t.Fatal("local lease not released exactly once")
+	}
+	next, err := b.acquire("alice", "test", "session", "", "proxy", b.current.Load().Routes["test"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ep.ID != l.ep.ID || f.core.bindings.Load() != 1 {
+		t.Fatal("local/remote session affinity split")
+	}
+	next.release()
+	spec := protocol.ResourceCreation{Kind: protocol.HermesSession, Alias: "client-session", Operation: "create", Fingerprint: "body", IdempotencyKey: "once"}
+	first, err := a.reserveResource("alice", a.current.Load().Routes[rt.Key], spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := b.reserveResource("alice", b.current.Load().Routes[rt.Key], spec)
+	if err != nil || second.First || second.Resource.ID != first.Resource.ID {
+		t.Fatalf("idempotency split: %+v %v", second, err)
+	}
+	if _, err = b.resources.Lookup(protocol.ResourceKey{Owner: "bob", Route: rt.ID, Kind: protocol.HermesSession, ID: first.Resource.ID}); err != protocol.ErrResourceNotFound {
+		t.Fatal("caller isolation changed", err)
+	}
 }
 
 func TestSharedBindingsAndGlobalCapacity(t *testing.T) {

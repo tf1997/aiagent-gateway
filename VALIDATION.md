@@ -1,5 +1,18 @@
 # 验证记录
 
+## 完整网关灰度基础实现（2026-10-19）
+
+本轮完成真实 Linux/systemd 交接原型验证，并接通 `process` 单进程开发入口和租约/回执迁移基础接口。完整状态快照、自动交接控制器和默认安装切换尚未完成；详细范围见 [完整网关灰度实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
+
+- `go test ./...`、`go test -race ./...`、`go vet ./...` 通过；新增回执丢失场景另行运行 shared 包竞态测试。
+- macOS 本机构建及 Linux amd64/arm64 静态交叉构建通过。
+- `deploy/rollout-systemd/check.py` 在独立 Debian bookworm 容器内使用真实 systemd、非 root 账户、LoadCredential、MAINPID/READY 屏障和 KillMode=mixed；A→B→C、旧 SSE 排空、提交前后崩溃、控制 socket 继承、双进程 stop/start 和容器重启均通过。该产物是身份探针，不承载完整网关业务状态。
+- `deploy/rollout-process/check.py` 通过，验证实际一个服务 PID、HTTP/鉴权、一次上游执行、SSE 停机排空与同产物持久重启。
+- `deploy/rollout-local/check.py` 重新通过，覆盖原 host/worker 灰度、连续升级、失败 POST 不重放、回退、稳定 worker 崩溃、host 死亡和完整清理。
+- 新增 Go 回归验证本地/远程共用状态和额度、内部结果不泄露、业务结果判定、入口停止后继续提供状态、租约活动计数迁移、跨 epoch 回执、未确认释放重试、慢 discovery/超时排队及导入失败清理。
+
+以上使用临时数据与模拟上游。未执行完整网关自动灰度、真实 Agent 换版、生产容量测量或正式 Linux 安装器验收。
+
 ## 稳定宿主与双槽位子进程（2026-10-19）
 
 部署统一采用 host-worker，正常 2 个进程、灰度 3 个。`deployment.json` 仅包含 `infrastructure`、`initial_release` 和 `policy`。已删除部署版本字段、旧角色 CLI/systemd worker 驱动、旧单进程安装器、`rollout_data` 和旧部署迁移分支。宿主自身更新使用停机后的 `install --update-host`，业务发布仍使用 `install`。

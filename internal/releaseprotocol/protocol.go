@@ -28,6 +28,7 @@ type Identity struct {
 	StateProtocol  int    `json:"state_protocol"`
 }
 type Target struct {
+	Socket      string `json:"socket,omitempty"`
 	Artifact    string `json:"artifact,omitempty"`
 	Release     string `json:"release"`
 	Instance    string `json:"instance"`

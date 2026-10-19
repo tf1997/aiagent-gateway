@@ -27,6 +27,10 @@ func (g *Gateway) WorkerHandler(identity releaseprotocol.Identity) http.Handler 
 	return g.worker.Handler(identity)
 }
 
+func (g *Gateway) ExecuteLocal(w http.ResponseWriter, r *http.Request, done func(releaseprotocol.Result)) {
+	g.worker.ExecuteLocal(w, r, done)
+}
+
 func (g *Gateway) WorkerIdentity(base releaseprotocol.Identity) releaseprotocol.Identity {
 	return g.worker.Identity(base)
 }

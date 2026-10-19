@@ -19,9 +19,10 @@ func NewSharedServer(g *Gateway, journal *state.Journal) (*SharedServer, error) 
 	}
 	g.resources.SetFailureHandler(func() { g.healthy.Store(false) })
 	return shared.NewServer(g.opts.AdminToken, shared.Backend{
-		Discover: g.discoverShared,
-		Execute:  g.executeShared,
-		Freeze:   g.freezeConfig,
+		Discover:     g.discoverShared,
+		Execute:      g.executeShared,
+		Freeze:       g.freezeConfig,
+		RestoreLease: g.restoreSharedLease,
 	}), nil
 }
 
@@ -145,7 +146,7 @@ func (g *Gateway) executeShared(q shared.Request, leases *shared.Leases) (out sh
 				break
 			}
 			out.Endpoint = l.ep
-			out.Lease = leases.Add(q.Worker, l.release)
+			out.Lease = leases.Add(shared.LeaseRecord{Worker: q.Worker, Kind: "acquire", Owner: q.Owner, Route: q.Route, Endpoint: l.ep.ID, Entry: q.Entry, Session: q.Session}, l.release)
 		}
 	case "reserve":
 		if rt == nil || rt.Version != q.Revision {
@@ -162,7 +163,7 @@ func (g *Gateway) executeShared(q shared.Request, leases *shared.Leases) (out sh
 		var release func()
 		out.Resource, release, err = d.Pin(q.Key)
 		if err == nil {
-			out.Lease = leases.Add(q.Worker, release)
+			out.Lease = leases.Add(shared.LeaseRecord{Worker: q.Worker, Kind: "pin", Resource: q.Key}, release)
 		}
 	case "update":
 		err = d.Update(q.Resource, q.State)
@@ -199,7 +200,7 @@ func (g *Gateway) executeShared(q shared.Request, leases *shared.Leases) (out sh
 		var release func()
 		release, err = g.acquireList(q.Entry)
 		if err == nil {
-			out.Lease = leases.Add(q.Worker, release)
+			out.Lease = leases.Add(shared.LeaseRecord{Worker: q.Worker, Kind: "cache_acquire", Entry: q.Entry}, release)
 		}
 	case "cache_get":
 		out.Cache, out.Flag = g.cacheGet(q.Entry, q.Session)

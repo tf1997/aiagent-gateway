@@ -157,7 +157,7 @@ func (w *resultWriter) frame() {
 	}
 }
 
-func (w *resultWriter) finish(ctx context.Context) {
+func (w *resultWriter) finish(ctx context.Context) releaseprotocol.Result {
 	if w.sse {
 		w.scan(nil, true)
 	}
@@ -202,7 +202,5 @@ func (w *resultWriter) finish(ctx context.Context) {
 		verdict = "unknown"
 		reason = "unexpected_status"
 	}
-	w.Header().Set(releaseprotocol.OutcomeTrailer, verdict)
-	w.Header().Set(releaseprotocol.ProfileTrailer, w.profile)
-	w.Header().Set(releaseprotocol.ReasonTrailer, reason)
+	return releaseprotocol.Result{Profile: w.profile, Verdict: verdict, Reason: reason, Status: w.status}
 }

@@ -10,7 +10,7 @@ Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例�
 
 首次安装生成哪些文件、运行几个进程、灰度时如何替换产物和交接请求，以及如何更新全部组件，见 [安装、运行文件与升级全流程](docs/DEPLOYMENT_LIFECYCLE.md)。
 
-已实现 [稳定宿主 + worker](docs/PROCESS_REDUCTION_RECOMMENDATION.md)：新安装平时 2 个、灰度时 3 个进程，入口、状态和发布控制合并为一个非 root host。安装统一采用 host-worker；[单常驻进程、双进程灰度方案](docs/SINGLE_PROCESS_ROLLOUT_PLAN.md)仍是后续草案。
+已实现 [稳定宿主 + worker](docs/PROCESS_REDUCTION_RECOMMENDATION.md)：新安装平时 2 个、灰度时 3 个进程，入口、状态和发布控制合并为一个非 root host。安装统一采用 host-worker；后续 1 → 2 → 1 方案正在实现，Linux/systemd 交接原型、单进程基础运行时及状态迁移基础接口的范围见 [实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)，完整自动灰度尚未接入默认安装。
 
 发版与升级步骤见 [构建打包和上传](docs/ROLLOUT_OPERATIONS.md#构建发版)、[首次安装或宿主更新](docs/ROLLOUT_OPERATIONS.md#首次安装或宿主更新)、[日常灰度升级](docs/ROLLOUT_OPERATIONS.md#日常灰度升级) 和 [异常恢复及降级](docs/ROLLOUT_OPERATIONS.md#结果确认和异常处理)。
 

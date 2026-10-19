@@ -35,44 +35,59 @@ func NewWorker(token string, backend WorkerBackend) *Worker {
 // WorkerHandler emits trusted HTTP trailers only after the handler finishes.
 // The stable entry combines them with its own downstream transport observation.
 func (s *Worker) Handler(identity releaseprotocol.Identity) http.Handler {
-	handler := s.backend.Handler
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !configuration.TokenOK("Bearer "+r.Header.Get(releaseprotocol.AuthHeader), s.token) {
 			protocol.Problem(w, 401, "UNAUTHORIZED_ENTRY")
 			return
 		}
-		if r.URL.Path == "/readyz" || r.URL.Path == "/healthz" {
-			handler.ServeHTTP(w, r)
-			return
-		}
-		if s.backend.Remote == nil || s.backend.Refresh() != nil {
-			protocol.Problem(w, 503, "SHARED_STATE_UNAVAILABLE")
-			return
-		}
-		a := &proxyAttempt{}
-		r = r.WithContext(context.WithValue(r.Context(), attemptKey{}, a))
-		o := &resultWriter{ResponseWriter: w, profile: "http", attempt: a}
 		w.Header().Add("Trailer", releaseprotocol.OutcomeTrailer)
 		w.Header().Add("Trailer", releaseprotocol.ProfileTrailer)
 		w.Header().Add("Trailer", releaseprotocol.ReasonTrailer)
 		w.Header().Set(releaseprotocol.WorkerHeader, identity.Incarnation)
-		s.requests.Add(1)
-		defer s.requests.Add(-1)
-		defer func() {
-			p := recover()
-			if p != nil {
-				o.failure = "handler_aborted"
-				if _, ok := p.(shared.Unavailable); ok && o.status == 0 {
-					protocol.Problem(o, 503, "SHARED_STATE_UNAVAILABLE")
-				} else {
-					panic(p)
-				}
-			}
-			o.finish(r.Context())
-			_ = s.backend.Remote.Call("request_result", shared.Request{ID: r.Header.Get(releaseprotocol.RequestHeader), Flag: o.Header().Get(releaseprotocol.OutcomeTrailer) == "failure"}, nil)
-		}()
-		handler.ServeHTTP(o, r)
+		s.execute(w, r, func(result releaseprotocol.Result) {
+			w.Header().Set(releaseprotocol.OutcomeTrailer, result.Verdict)
+			w.Header().Set(releaseprotocol.ProfileTrailer, result.Profile)
+			w.Header().Set(releaseprotocol.ReasonTrailer, result.Reason)
+		})
 	})
+}
+
+// ExecuteLocal is only installed by the in-process traffic router. It has the
+// same verdict collector as Handler, without internal HTTP headers or trailers.
+func (s *Worker) ExecuteLocal(w http.ResponseWriter, r *http.Request, done func(releaseprotocol.Result)) {
+	s.execute(w, r, done)
+}
+
+func (s *Worker) execute(w http.ResponseWriter, r *http.Request, done func(releaseprotocol.Result)) {
+	if r.URL.Path == "/readyz" || r.URL.Path == "/healthz" {
+		s.backend.Handler.ServeHTTP(w, r)
+		return
+	}
+	if s.backend.Remote == nil || s.backend.Refresh() != nil {
+		protocol.Problem(w, 503, "SHARED_STATE_UNAVAILABLE")
+		done(releaseprotocol.Result{Profile: "http", Verdict: "failure", Reason: "state_unavailable", Status: 503})
+		return
+	}
+	a := &proxyAttempt{}
+	r = r.WithContext(context.WithValue(r.Context(), attemptKey{}, a))
+	o := &resultWriter{ResponseWriter: w, profile: "http", attempt: a}
+	s.requests.Add(1)
+	defer s.requests.Add(-1)
+	defer func() {
+		v := recover()
+		if v != nil {
+			o.failure = "handler_aborted"
+			if _, ok := v.(shared.Unavailable); ok && o.status == 0 {
+				protocol.Problem(o, 503, "SHARED_STATE_UNAVAILABLE")
+			} else {
+				defer func() { panic(v) }()
+			}
+		}
+		result := o.finish(r.Context())
+		done(result)
+		_ = s.backend.Remote.Call("request_result", shared.Request{ID: r.Header.Get(releaseprotocol.RequestHeader), Flag: result.Verdict == "failure"}, nil)
+	}()
+	s.backend.Handler.ServeHTTP(o, r)
 }
 
 func (s *Worker) Identity(base releaseprotocol.Identity) releaseprotocol.Identity {

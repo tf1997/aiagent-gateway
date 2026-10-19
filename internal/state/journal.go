@@ -62,41 +62,18 @@ func Open(dir string) (*Journal, error) {
 	if err != nil {
 		return fail(err)
 	}
-	r := bufio.NewReader(j.f)
-	var offset int64
-	for {
-		raw, e := readLine(r)
-		if e == io.EOF {
-			if len(raw) > 0 {
-				if e = j.f.Truncate(offset); e != nil {
-					return fail(e)
-				}
-				if e = j.f.Sync(); e != nil {
-					return fail(e)
-				}
-			}
-			break
+	values, sequence, offset, partial, err := readSnapshot(j.f)
+	if err != nil {
+		return fail(err)
+	}
+	j.values, j.sequence = values, sequence
+	if partial {
+		if err = j.f.Truncate(offset); err != nil {
+			return fail(err)
 		}
-		if e != nil {
-			return fail(e)
+		if err = j.f.Sync(); err != nil {
+			return fail(err)
 		}
-		var env envelope
-		var f frame
-		if json.Unmarshal(raw, &env) != nil {
-			return fail(fmt.Errorf("invalid journal record at %d", offset))
-		}
-		sum := sha256.Sum256(env.Payload)
-		if hex.EncodeToString(sum[:]) != env.SHA256 || json.Unmarshal(env.Payload, &f) != nil || f.Version != 1 || f.Sequence != j.sequence+1 {
-			return fail(fmt.Errorf("corrupt or unsupported journal record at %d", offset))
-		}
-		for k, v := range f.Values {
-			j.values[k] = bytes.Clone(v)
-		}
-		for _, k := range f.Delete {
-			delete(j.values, k)
-		}
-		j.sequence = f.Sequence
-		offset += int64(len(raw))
 	}
 	if _, err = j.f.Seek(0, io.SeekEnd); err != nil {
 		return fail(err)
@@ -111,6 +88,65 @@ func Open(dir string) (*Journal, error) {
 		return fail(err)
 	}
 	return j, nil
+}
+
+// ReadSnapshot reads a committed journal prefix without taking its writer lock
+// or repairing an incomplete tail. A launcher must recheck its decision after
+// obtaining the owner lock: a concurrent writer may have committed since this
+// read. An already-open file remains valid across atomic journal compaction.
+func ReadSnapshot(dir string) (map[string]json.RawMessage, error) {
+	path := filepath.Join(dir, "state.log")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("state journal must be a regular file")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err = f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	values, _, _, _, err := readSnapshot(io.NewSectionReader(f, 0, info.Size()))
+	return values, err
+}
+
+func readSnapshot(reader io.Reader) (map[string]json.RawMessage, uint64, int64, bool, error) {
+	r := bufio.NewReader(reader)
+	values := map[string]json.RawMessage{}
+	var sequence uint64
+	var offset int64
+	for {
+		raw, e := readLine(r)
+		if e == io.EOF {
+			return values, sequence, offset, len(raw) > 0, nil
+		}
+		if e != nil {
+			return nil, 0, offset, false, e
+		}
+		var env envelope
+		var f frame
+		if json.Unmarshal(raw, &env) != nil {
+			return nil, 0, offset, false, fmt.Errorf("invalid journal record at %d", offset)
+		}
+		sum := sha256.Sum256(env.Payload)
+		if hex.EncodeToString(sum[:]) != env.SHA256 || json.Unmarshal(env.Payload, &f) != nil || f.Version != 1 || f.Sequence != sequence+1 {
+			return nil, 0, offset, false, fmt.Errorf("corrupt or unsupported journal record at %d", offset)
+		}
+		for k, v := range f.Values {
+			values[k] = bytes.Clone(v)
+		}
+		for _, k := range f.Delete {
+			delete(values, k)
+		}
+		sequence = f.Sequence
+		offset += int64(len(raw))
+	}
 }
 func readLine(r *bufio.Reader) ([]byte, error) {
 	var out []byte

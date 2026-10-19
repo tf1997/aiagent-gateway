@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -19,17 +21,20 @@ import (
 
 type Resolver func(context.Context, p.Request) (p.Resolution, error)
 type Entry struct {
-	mu        sync.Mutex
-	j         *state.Journal
-	traffic   p.Traffic
-	bindings  map[string]string
-	results   map[string]p.Result
-	active    map[string]p.Result
-	lost      bool
-	counter   uint64
-	resolve   Resolver
-	transport *http.Transport
-	token     string
+	mu          sync.Mutex
+	j           *state.Journal
+	traffic     p.Traffic
+	bindings    map[string]string
+	results     map[string]p.Result
+	active      map[string]p.Result
+	lost        bool
+	counter     uint64
+	resolve     Resolver
+	transport   *http.Transport
+	token       string
+	localTarget p.Target
+	local       func(http.ResponseWriter, *http.Request, func(p.Result))
+	private     map[string]*http.Transport
 }
 
 func Open(j *state.Journal, token string, resolve Resolver) (*Entry, error) {
@@ -87,7 +92,54 @@ func (e *Entry) save() error {
 func (e *Entry) Traffic() p.Traffic { e.mu.Lock(); defer e.mu.Unlock(); return e.traffic }
 func validTarget(t p.Target) bool {
 	u, err := url.Parse(t.URL)
-	return err == nil && u.Scheme == "http" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "::1") && t.Release != "" && t.Incarnation != ""
+	if err != nil || u.Scheme != "http" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || t.Release == "" || t.Incarnation == "" {
+		return false
+	}
+	if t.Socket != "" {
+		return t.URL == "http://gateway" && filepath.IsAbs(t.Socket) && filepath.Clean(t.Socket) == t.Socket && !strings.ContainsRune(t.Socket, 0)
+	}
+	return u.Hostname() == "127.0.0.1" || u.Hostname() == "::1"
+}
+
+// SetLocal binds an exact process identity. Persisted traffic cannot substitute
+// a different release or incarnation while reusing the local executor.
+func (e *Entry) SetLocal(target p.Target, execute func(http.ResponseWriter, *http.Request, func(p.Result))) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !validTarget(target) || execute == nil || e.local != nil {
+		return fmt.Errorf("invalid or duplicate local executor")
+	}
+	e.localTarget, e.local = target, execute
+	return nil
+}
+
+func (e *Entry) transportFor(target p.Target) http.RoundTripper {
+	if target.Socket == "" {
+		return e.transport
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.private == nil {
+		e.private = map[string]*http.Transport{}
+	}
+	if t := e.private[target.Socket]; t != nil {
+		return t
+	}
+	t := e.transport.Clone()
+	t.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", target.Socket)
+	}
+	e.private[target.Socket] = t
+	return t
+}
+
+func (e *Entry) Close() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.transport.CloseIdleConnections()
+	for _, t := range e.private {
+		t.CloseIdleConnections()
+	}
 }
 func (e *Entry) Apply(expected uint64, next p.Traffic) error {
 	e.mu.Lock()
@@ -264,6 +316,7 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	rw := &responseWriter{ResponseWriter: w}
 	var metadata http.Header
+	var localResult *p.Result
 	failed := ""
 	panicked := false
 	defer func() {
@@ -277,6 +330,9 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result.Profile = "http"
 		result.Verdict = "unknown"
 		result.Reason = "missing_worker_result"
+		if localResult != nil {
+			result.Profile, result.Verdict, result.Reason = localResult.Profile, localResult.Verdict, localResult.Reason
+		}
 		if metadata != nil {
 			result.Profile = metadata.Get(p.ProfileTrailer)
 			result.Verdict = metadata.Get(p.OutcomeTrailer)
@@ -297,8 +353,16 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		e.finish(result)
 	}()
+	e.mu.Lock()
+	local, localTarget := e.local, e.localTarget
+	e.mu.Unlock()
+	if local != nil && target == localTarget {
+		r.Header.Set(p.RequestHeader, result.ID)
+		local(rw, r, func(v p.Result) { localResult = &v })
+		return
+	}
 	u, _ := url.Parse(target.URL)
-	proxy := httputil.ReverseProxy{Transport: e.transport, FlushInterval: -1, Rewrite: func(pr *httputil.ProxyRequest) {
+	proxy := httputil.ReverseProxy{Transport: e.transportFor(target), FlushInterval: -1, Rewrite: func(pr *httputil.ProxyRequest) {
 		pr.SetURL(u)
 		pr.Out.Host = pr.In.Host
 		pr.Out.Header.Set(p.RequestHeader, result.ID)

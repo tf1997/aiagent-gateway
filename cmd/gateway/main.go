@@ -23,6 +23,8 @@ func main() { os.Exit(run()) }
 func run() int {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "process":
+			return runProcess(os.Args[2:])
 		case "host", "worker":
 			return runRole(os.Args[1], os.Args[2:])
 		case "rollout":

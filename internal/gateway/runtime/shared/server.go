@@ -16,21 +16,25 @@ import (
 
 type Backend struct {
 	// Discovery performs network I/O before the state dispatcher is locked.
-	Discover func(context.Context, Request)
-	Execute  func(Request, *Leases) Response
-	Freeze   func(bool)
+	Discover     func(context.Context, Request)
+	Execute      func(Request, *Leases) Response
+	Freeze       func(bool)
+	RestoreLease func(LeaseRecord) (func(), error)
 }
 
 // Server serializes shared operations and keeps retries within one generation
 // idempotent. State and ownership remain with the runtime backend.
 type Server struct {
-	epoch   string
-	token   string
-	backend Backend
-	mu      sync.Mutex
-	leases  Leases
-	replies map[string]cachedReply
-	order   []string
+	barrier       Barrier
+	revision      uint64
+	epoch         string
+	previousEpoch string
+	token         string
+	backend       Backend
+	mu            sync.Mutex
+	leases        Leases
+	replies       map[string]cachedReply
+	order         []string
 }
 
 type cachedReply struct {
@@ -57,40 +61,75 @@ func (s *Server) Handler() http.Handler {
 			protocol.Problem(w, 400, "INVALID_REQUEST")
 			return
 		}
-		if q.Action == "acquire" || q.Action == "reserve" {
-			s.backend.Discover(r.Context(), q)
-		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		key := q.Worker + "/" + q.ID
-		raw, _ := json.Marshal(q)
-		sum := sha256.Sum256(raw)
-		fingerprint := hex.EncodeToString(sum[:])
-		if old, ok := s.replies[key]; ok {
-			if old.fingerprint != fingerprint {
-				protocol.WriteJSON(w, 200, Response{Error: "OPERATION_CONFLICT"})
-				return
-			}
-			protocol.WriteJSON(w, 200, old.response)
-			return
-		}
-		var out Response
-		if q.Epoch != "" && q.Epoch != s.epoch {
-			out.Error = "STATE_GENERATION_CHANGED"
-		} else {
-			out = s.backend.Execute(q, &s.leases)
-		}
-		out.Epoch = s.epoch
-		if q.Action != "config" && q.Action != "status" && q.Action != "resolve" && q.Action != "list" && q.Action != "lookup" && q.Action != "cache_get" {
-			s.replies[key] = cachedReply{fingerprint: fingerprint, response: out}
-			s.order = append(s.order, key)
-			if len(s.order) > 8192 {
-				delete(s.replies, s.order[0])
-				s.order = s.order[1:]
-			}
-		}
-		protocol.WriteJSON(w, 200, out)
+		protocol.WriteJSON(w, 200, s.dispatch(r.Context(), q))
 	})
+}
+
+// dispatch is shared by the local and UDS paths. It returns detached values:
+// callers cannot mutate the owner's live configuration or cached receipts.
+func (s *Server) dispatch(ctx context.Context, q Request) (out Response) {
+	rawRequest, err := json.Marshal(q)
+	if err != nil {
+		return Response{Error: "INVALID_STATE_REQUEST"}
+	}
+	leave, err := s.barrier.enter(ctx, len(rawRequest))
+	if err != nil {
+		return Response{Error: err.Error()}
+	}
+	defer leave()
+	if err := ctx.Err(); err != nil {
+		return Response{Error: err.Error()}
+	}
+	if (q.Action == "acquire" || q.Action == "reserve") && s.backend.Discover != nil {
+		s.backend.Discover(ctx, q)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	defer func() { out = copyResponse(out) }()
+	if err := ctx.Err(); err != nil {
+		return Response{Epoch: s.epoch, Error: err.Error()}
+	}
+	key := q.Worker + "/" + q.ID
+	semantic := q
+	semantic.Epoch = ""
+	raw, _ := json.Marshal(semantic)
+	sum := sha256.Sum256(raw)
+	fingerprint := hex.EncodeToString(sum[:])
+	if q.Epoch != "" && q.Epoch != s.epoch {
+		return Response{Epoch: s.epoch, Error: "STATE_GENERATION_CHANGED"}
+	}
+	if old, ok := s.replies[key]; ok {
+		if old.fingerprint != fingerprint {
+			return Response{Epoch: s.epoch, Error: "OPERATION_CONFLICT"}
+		}
+		out = old.response
+		out.Epoch = s.epoch
+		return out
+	}
+	out = s.backend.Execute(q, &s.leases)
+	s.revision++
+	out.Epoch = s.epoch
+	if q.Action != "config" && q.Action != "status" && q.Action != "resolve" && q.Action != "list" && q.Action != "lookup" && q.Action != "cache_get" {
+		s.replies[key] = cachedReply{fingerprint: fingerprint, response: copyResponse(out)}
+		s.order = append(s.order, key)
+		if len(s.order) > 8192 {
+			delete(s.replies, s.order[0])
+			s.order = s.order[1:]
+		}
+	}
+	return out
+}
+
+func copyResponse(out Response) Response {
+	raw, err := json.Marshal(out)
+	var copy Response
+	if err == nil {
+		err = json.Unmarshal(raw, &copy)
+	}
+	if err != nil {
+		return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
+	}
+	return copy
 }
 
 func (s *Server) Freeze(frozen bool) {
@@ -111,9 +150,7 @@ func (s *Server) Resolve(ctx context.Context, q releaseprotocol.Request) (releas
 	if err := ctx.Err(); err != nil {
 		return releaseprotocol.Resolution{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := s.backend.Execute(Request{Action: "resolve", Request: q}, &s.leases)
+	out := s.dispatch(ctx, Request{Action: "resolve", Request: q})
 	if out.Error != "" {
 		return releaseprotocol.Resolution{}, fmt.Errorf("%s", out.Error)
 	}
@@ -130,20 +167,28 @@ func (s *Server) Count(worker string) int64 {
 type Leases struct{ items map[string]lease }
 
 type lease struct {
-	worker  string
+	record  LeaseRecord
 	release func()
 }
 
-func (l *Leases) Add(worker string, release func()) string {
+// LeaseRecord contains only stable identities; it never serializes closures or
+// retries an upstream operation while restoring the lease on a new owner.
+type LeaseRecord struct {
+	ID, Worker, Kind, Owner, Route, Endpoint, Entry, Session string
+	Resource                                                 protocol.ResourceKey
+}
+
+func (l *Leases) Add(record LeaseRecord, release func()) string {
 	id := releaseprotocol.ID("lease_")
-	l.items[id] = lease{worker: worker, release: release}
+	record.ID = id
+	l.items[id] = lease{record: record, release: release}
 	return id
 }
 
 func (l *Leases) Count(worker string) int64 {
 	var n int64
 	for _, ref := range l.items {
-		if worker == "" || ref.worker == worker {
+		if worker == "" || ref.record.Worker == worker {
 			n++
 		}
 	}
@@ -152,7 +197,7 @@ func (l *Leases) Count(worker string) int64 {
 
 func (l *Leases) Retire(worker string) {
 	for id, ref := range l.items {
-		if ref.worker == worker {
+		if ref.record.Worker == worker {
 			ref.release()
 			delete(l.items, id)
 		}
@@ -164,7 +209,7 @@ func (l *Leases) Release(worker, id string) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if ref.worker != worker {
+	if ref.record.Worker != worker {
 		return false, protocol.ErrResourceConflict
 	}
 	ref.release()
