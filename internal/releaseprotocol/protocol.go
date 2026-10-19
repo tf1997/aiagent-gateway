@@ -17,6 +17,7 @@ const ProfileTrailer = "X-Gateway-Rollout-Profile"
 const ReasonTrailer = "X-Gateway-Rollout-Reason"
 
 type Identity struct {
+	PID            int    `json:"pid,omitempty"`
 	Protocol       int    `json:"protocol"`
 	Release        string `json:"release"`
 	Instance       string `json:"instance"`

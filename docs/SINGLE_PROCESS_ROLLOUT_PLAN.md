@@ -2,7 +2,9 @@
 
 日期：2026-10-14。状态：待评审方案，尚未实现。本文只描述拟议改造；当前安装行为仍以 [部署全流程](DEPLOYMENT_LIFECYCLE.md) 为准。
 
-目标已确认：平时只运行一个网关进程，升级时临时运行新旧两个进程，保留真实流量验证、自动放量和失败回退。发布成功或完成回退后恢复一个进程。
+2026-10-18 补充：[主流设计对照与推荐落地顺序](PROCESS_REDUCTION_RECOMMENDATION.md)采用 2 → 3 → 2，保留状态单写者不变，再验证本文的一体化目标。2026-10-19 已实现 host-worker 并作为新安装默认模式；本文描述的 1 → 2 → 1 仍未实现。
+
+本文目标：平时只运行一个网关进程，升级时临时运行新旧两个进程，保留真实流量验证、自动放量和失败回退。发布成功或完成回退后恢复一个进程。
 
 ## 1. 推荐方案
 
@@ -201,7 +203,7 @@ unit 的 ExecStart 使用稳定的启动入口读取已提交版本记录，校�
 | `/opt/aiagent-gateway/releases/<sha256>/gateway` | root 暂存的不可变产物，运行用户只读 |
 | `/etc/aiagent-gateway/config.yaml` | 启动配置和管理 Token，root 管理 |
 | `/etc/aiagent-gateway/deployment.json` | 新版部署模式与发布策略，root 管理 |
-| `/var/lib/aiagent-gateway/config.json`、`shared/` | 现有配置与业务日志，当前 owner 独占写 |
+| `/var/lib/aiagent-gateway/` 下的 `config.json`、`routes.json`、`route-logs.json`、恢复事务及 `shared/` | 现有配置与业务日志，当前 owner 独占写 |
 | `/var/lib/aiagent-gateway/release/` | 发布报告、交接记录及启动选择，当前 owner 写 |
 | `/run/aiagent-gateway/` | 控制、版本间通信和临时握手 socket |
 
@@ -252,7 +254,7 @@ sudo aiagent-gateway status
 
 1. 结束当前发布，保存版本、配置及状态备份，暂停新业务并排空连接和本地执行。
 2. 停止原服务组，核对 entry/state/controller/worker 全部退出。
-3. 保留管理 Token、消费者、route/Endpoint ID、config.json 和 shared 业务日志；校验能导入完整资源及会话归属。
+3. 保留管理 Token、消费者、route/Endpoint ID、路由三文件（config.json、routes.json、route-logs.json）、存在时的 .config.pending.json 恢复事务和 shared 业务日志；校验能导入完整资源及会话归属。
 4. 归档旧 entry/发布控制日志和部署清单，生成带明确新模式版本号的清单与发布基线；不把旧流量 revision 直接当成新进程状态。
 5. 安装单 service，启动一个完整实例，验证存量公开 ID、幂等和 Agent 归属，再恢复流量。
 6. 用第二份兼容产物演练成功升级与失败回退，确认进程数量为 1→2→1，随后再做一次升级验证可连续交接。

@@ -1,5 +1,27 @@
 # 验证记录
 
+## 稳定宿主与双槽位子进程（2026-10-19）
+
+部署统一采用 host-worker，正常 2 个进程、灰度 3 个。`deployment.json` 仅包含 `infrastructure`、`initial_release` 和 `policy`。已删除部署版本字段、旧角色 CLI/systemd worker 驱动、旧单进程安装器、`rollout_data` 和旧部署迁移分支。宿主自身更新使用停机后的 `install --update-host`，业务发布仍使用 `install`。
+
+执行环境为 macOS arm64、Go 1.24.4，使用临时目录、真实 loopback TCP/Unix Socket 和模拟上游。以下检查已在清理后的实现上执行完成。
+
+| 检查 | 结果 |
+| --- | --- |
+| `go test ./...` | 全部通过，含无版本部署清单、子进程、宿主更新、控制身份和恢复回归 |
+| `go test -race ./...` | 全部通过，含 HTTP/Hermes/A2A、跨 worker 集成测试和启动就绪检查 |
+| `go vet ./...`、macOS `go build` | 通过，含最终就绪检查 |
+| Linux amd64/arm64 静态交叉构建 | 通过，含最终就绪检查；未在 Linux 执行 |
+| `deploy/rollout-local/check.py` | 统一为 host/worker 真实进程验证，通过；详见下文 |
+
+`check.py` 在临时目录构建不同内容的 B/C 版本，实际验证正常 2 → 3 → 2、连续 A → B → C、失败候选回退、失败 POST 不重放、管理配置冻结/解冻、原 Agent 会话归属。长 SSE 阻止旧 worker 退出，排空超时进入 RECOVERY_REQUIRED、拒绝叠加发布；流结束后 resume 正常回收。业务灰度中 host PID、公共端口和共享状态 epoch 不变。
+
+故障验证实际 kill 稳定 worker，确认宿主回收并重启；灰度期间 kill host，确认两个子进程退出，新 host 恢复旧稳定版和持久会话归属，新 epoch 生效。人工停止后没有存活子进程。Go 回归另外覆盖启动幂等、错误 PID/产物/槽位拒绝、状态租约阻止停止、失败启动回收、Unix peer UID、旧切流日志不能提前通过 readiness，以及各发布阶段/丢失回执/冲突日志的恢复。
+
+安装测试使用模拟 systemctl 和临时文件，覆盖新安装（生成并加载无版本部署清单）、unit 恢复、重复安装、卸载保留数据、宿主更新备份、自定义 drop-in 保留、路由三文件/恢复事务/shared 原位保留，及活动服务、未结束发布、缺失配置、systemctl 查询失败/正在停止时拒绝变更。
+
+尚未执行真实 Linux/systemd 安装、LoadCredential/服务用户权限、cgroup 清理、开机恢复或宿主更新失败演练；未执行远程部署、真实 Agent 二进制升级和生产容量测量。交叉构建及本机父进程生命管道验证不等同于这些实机验收。操作步骤见 [部署全流程](docs/DEPLOYMENT_LIFECYCLE.md)。
+
 ## 路由与管理记录拆分存储（2026-10-18）
 
 `config.json` 仅保存存储格式、schema 和配置版本；`routes.json` 保存路由、实例及凭据，`route-logs.json` 保存现有管理 API 幂等回执和审计记录。三份文件通过持久化恢复事务一起提交，重启先完成未结束的写入。旧 schema 1/2 单文件在首次成功管理修改前原样备份后迁移，HTTP API 与共享 worker 配置结构保持兼容。

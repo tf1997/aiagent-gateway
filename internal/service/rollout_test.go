@@ -101,7 +101,7 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d := Deployment{Version: 2, Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
+	d := Deployment{Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
 	raw, _ := json.Marshal(d)
 	atomicWrite(m.path(DeploymentPath), raw, 0600)
 	if err := os.MkdirAll(filepath.Dir(m.path(ControllerSocket)), 0700); err != nil {
@@ -156,17 +156,6 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 		t.Fatal("token exposed")
 	}
 }
-func TestLegacyMigrationIsExplicit(t *testing.T) {
-	m, system := rolloutManager(t)
-	atomicWrite(m.path(configPath), []byte("GATEWAY_ADMIN_TOKEN=secret"), 0600)
-	atomicWrite(m.path(dataPath), []byte(`{"schema_version":2}`), 0600)
-	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "--migrate") {
-		t.Fatal("legacy installation silently restarted", err)
-	}
-	if len(system.calls) != 0 {
-		t.Fatal("legacy service was touched", system.calls)
-	}
-}
 func TestReleaseStagingRejectsHashMutation(t *testing.T) {
 	m, _ := rolloutManager(t)
 	artifact, err := m.stageRelease()
@@ -176,25 +165,6 @@ func TestReleaseStagingRejectsHashMutation(t *testing.T) {
 	os.WriteFile(m.path(artifact), []byte("changed"), 0755)
 	if _, err = m.stageRelease(); err == nil {
 		t.Fatal("mutated release accepted")
-	}
-}
-
-func TestEnvironmentDeploymentRejectedBeforeMutation(t *testing.T) {
-	m, system := rolloutManager(t)
-	if err := atomicWrite(m.path("/etc/aiagent-gateway/gateway.env"), []byte("GATEWAY_ADMIN_TOKEN=old-secret\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "config.yaml") {
-		t.Fatal("environment deployment accepted", err)
-	}
-	if len(system.calls) != 0 {
-		t.Fatal("existing services changed", system.calls)
-	}
-	if _, err := os.Stat(m.path(configPath)); !os.IsNotExist(err) {
-		t.Fatal("old credentials replaced")
-	}
-	if _, err := os.Stat(m.path(ReleasesDir)); !os.IsNotExist(err) {
-		t.Fatal("release staged before migration check")
 	}
 }
 
@@ -216,54 +186,5 @@ func TestSystemYAMLRejectsUnsupportedPaths(t *testing.T) {
 	}
 	if err := validateSystemConfig(m.path(configPath)); err == nil {
 		t.Fatal("installer accepted a path inconsistent with units")
-	}
-}
-
-func TestOldYAMLInfrastructureRequiresMaintenance(t *testing.T) {
-	m, system := rolloutManager(t)
-	if err := atomicWrite(m.path("/etc/systemd/system/aiagent-gateway-state.service"), []byte("LoadCredential=gateway.yaml:/etc/aiagent-gateway/gateway.yaml\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.installRollout(context.Background(), false); err == nil || !strings.Contains(err.Error(), "route tokens") {
-		t.Fatal("accepted incompatible infrastructure", err)
-	}
-	if len(system.calls) != 0 {
-		t.Fatal("existing services changed", system.calls)
-	}
-	if _, err := os.Stat(m.path(ReleasesDir)); !os.IsNotExist(err) {
-		t.Fatal("staged a release before migration check")
-	}
-}
-func TestRolloutUnitsBindImmutableRelease(t *testing.T) {
-	raw, err := units.ReadFile("units/aiagent-gateway-worker.service")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(raw)
-	if !strings.Contains(text, "ExecStart=@BINARY@ worker") || strings.Contains(text, "/usr/local/bin/") || !strings.Contains(text, "BindsTo=aiagent-gateway-state.service") {
-		t.Fatal("worker process identity is not stable")
-	}
-	for _, name := range []string{"entry", "state", "rollout"} {
-		raw, err = units.ReadFile("units/aiagent-gateway-" + name + ".service")
-		if err != nil || !strings.Contains(string(raw), "PartOf=aiagent-gateway.service") {
-			t.Fatal("service group incomplete", name)
-		}
-	}
-}
-func TestUninstallKeepsRecoveryArtifacts(t *testing.T) {
-	m, _ := rolloutManager(t)
-	for path, body := range map[string]string{DeploymentPath: `{"version":1}`, configPath: "secret", dataPath: "config", binaryPath: "CLI", unitPath: masterUnit} {
-		atomicWrite(m.path(path), []byte(body), 0600)
-	}
-	if err := m.uninstallRollout(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range []string{DeploymentPath, configPath, dataPath} {
-		if _, err := os.Stat(m.path(path)); err != nil {
-			t.Fatal("recovery data removed", path)
-		}
-	}
-	if _, err := os.Stat(m.path(binaryPath)); !os.IsNotExist(err) {
-		t.Fatal("CLI retained")
 	}
 }

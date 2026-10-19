@@ -28,7 +28,7 @@ go build -o bin/aiagent-gateway ./cmd/gateway
 
 旧版将所有内容放在 `config.json` 的 schema 1/2 文件仍可读取。启动和幂等重放不改写旧文件；首次成功管理修改前，先原样保存为 `config.schema-1.backup.json` 或 `config.schema-2.backup.json`，再拆分写入，保留路由/Endpoint ID、凭据、幂等回执和审计历史。同名备份内容冲突时拒绝迁移。旧单文件与拆分文件混放时拒绝启动，避免不完整恢复丢失路由。备份或恢复应在停止写入后覆盖整个数据目录，不能只复制 `config.json`；旧二进制不支持拆分格式。
 
-前台模式更换二进制后重启即可使用新存储。灰度部署由 `state-server` 维护这些文件，需要按基础组件维护流程更新状态服务；日常 `install` 只发布 worker。新版安装器能从新旧存储推断 HTTP、SSE 和 A2A 验收要求。
+前台模式更换二进制后重启即可使用新存储。灰度部署由 host 维护这些文件，需要按宿主维护流程更新 host；日常 `install` 只发布 worker。新版安装器能从新旧存储推断 HTTP、SSE 和 A2A 验收要求。
 
 最小实用配置：
 
@@ -93,11 +93,8 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 | `entry_socket` | `/run/aiagent-gateway/entry.sock` | 入口控制 Socket |
 | `control_socket` | `/run/aiagent-gateway-control/controller.sock` | 发布控制 Socket |
 | `deployment` | `/etc/aiagent-gateway/deployment.json` | 部署清单与发布策略 |
-| `rollout_data` | `/var/lib/aiagent-gateway-rollout` | 发布日志目录 |
 
-`entry`、`state-server`、`worker`、`rollout-controller` 都接受角色名后的 `--config PATH`。worker 的 `--slot`、`--release`、`--listen` 和 `--admin` 是发布控制器传入的实例参数；显式监听参数仍使用 `host:port`，覆盖该角色由 YAML 端口生成的监听地址。
-
-旧环境变量到 YAML 的对应关系：去掉 `GATEWAY_` 前缀并改为小写，例如 `GATEWAY_ADMIN_TOKEN` → `admin_token`、`GATEWAY_MAX_INFLIGHT` → `max_inflight`。`GATEWAY_LISTEN` 和 `GATEWAY_ADMIN_LISTEN` 分别迁入 `port` 和 `admin_port`，只保留端口号。`GATEWAY_CALLERS` 不迁入 YAML，应为每个路由通过管理 API 登记 `consumers`；`GATEWAY_INIT` 改为一次性 CLI 选项；上游 Token 放进路由接口的 `token`。
+`host` 和内部 `worker` 命令接受角色名后的 `--config PATH`。host 额外接受 `--deployment PATH`，worker 的 `--incarnation` 和 `--parent-fd` 由宿主管理，不能手工伪造。worker 的 `--slot`、`--release`、`--listen` 和 `--admin` 是发布控制器传入的实例参数；显式监听参数仍使用 `host:port`，覆盖该角色由 YAML 端口生成的监听地址。
 
 ## systemd 安装
 
@@ -107,24 +104,10 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 
 服务 unit 使用 `LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml` 和 `--config=%d/config.yaml`，由 systemd 将 root 文件提供给服务用户读取。需要支持该机制的 systemd（247+），详情见 [systemd 凭据文档](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#LoadCredential=)。不再使用 EnvironmentFile，也不需要放宽原文件权限。
 
+安装统一使用 host-worker 拓扑。host 与子 worker 共用同一份 systemd YAML 凭据副本，修改源 YAML 后须维护重启 host 才生效；普通 worker 灰度不会重新加载源 YAML。host 发布日志固定在 `data_dir/release`。部署清单只包含 `infrastructure`、`initial_release` 和 `policy`，没有拓扑版本字段。
+
 安装器生成的 `data_dir` 是 `/var/lib/aiagent-gateway`。内置 systemd unit/driver 使用固定的状态目录、Socket、部署清单及发布日志路径，预置 YAML 也必须使用上述绝对默认路径；不兼容的路径配置会在启动/升级前拒绝。监听端口、公开 URL 和容量可调整。消费者及上游凭据通过路由 API 动态调整，无需重启。需要自定义内部路径时，使用前台角色启动或自行维护 unit。
 
-### 从 gateway.yaml / credentials 版本迁移
+### 宿主更新
 
-在维护窗口停止网关并备份启动配置、路由文件和服务 unit。将原 `gateway.yaml` 改名为 `config.yaml`，将原 `listen`、`admin_listen` 分别改名为 `port`、`admin_port`，值仅保留端口号；对 `config.json` 的每个接口，将原 `credential_ref` 在旧 YAML `credentials` 中对应的值写入 `token`，删除 `credential_ref`，再删除 YAML 的整个 `credentials` 字段。保留管理 Token、路由 ID、Endpoint ID、版本及消费者数据。启动配置和路由文件均保持 0600。
-
-前台进程更新 `--config` 路径后启动。systemd 部署需同时替换所有基础组件及 worker 的二进制和 unit，将 `LoadCredential` 和 `--config` 改为本文的 `config.yaml` 路径；普通 worker 灰度升级会拒绝仍使用 `gateway.yaml` 的基础组件，避免混用两种上游认证配置。启动前可用 `--config ... --init-only` 校验现有路由文件。旧的 `credential_ref` 会被拒绝，不会静默丢弃认证。
-
-### 从环境变量版本迁移
-
-这是进程配置格式变更，旧二进制不能读取新的 YAML；新版也不会 source 旧 `gateway.env`。先将原地址和管理 Token 转入 YAML，将上游凭据填入路由接口的 `token` 并删除 `credential_ref`，保留原文件及二进制备份。删除 YAML 中的 `callers`，新进程启动后按原 routes 权限为每条路由提交 `consumers:[{"id":"原调用方ID","token":"原调用方Token"}]`。迁移后续接资源必须保留原调用方 ID、路由文件、Endpoint ID 和上游凭据；没有消费者的旧路由会拒绝业务请求。此认证配置变更需基础组件与 worker 一起维护升级，不应混跑旧的静态认证进程。
-
-- 前台单进程：停止旧进程，用新二进制和 `--config` 启动；原进程内资源映射仍会丢失。
-- 旧单进程 systemd：先保存 YAML，再在维护窗口执行新二进制的 `install --migrate`。
-- 已有灰度部署：旧入口、状态服务、发布控制器及 worker 都读取环境变量，需一起维护迁移。普通 install 会拒绝旧部署格式，不能只升级 worker。
-
-已有灰度部署在维护窗口迁移时，先结束正在进行的发布、暂停流量并确认请求/后台执行结束。停止服务组，核对所有子进程退出后，保存整套文件和状态备份。保留服务组主 unit，供安装器在重建前再次执行 stop；若旧 state unit 仍引用 `EnvironmentFile=` 或 `gateway.yaml`，将该 unit 归档移出 `/etc/systemd/system`，由安装器重建。将旧 `deployment.json`、入口状态目录 `/var/lib/aiagent-gateway/entry` 和发布日志目录 `/var/lib/aiagent-gateway-rollout` 移入独立备份目录。保留转换后的 `config.yaml`、`/var/lib/aiagent-gateway` 下的整套路由存储和 `/var/lib/aiagent-gateway/shared` 原位，再执行新二进制 `install --migrate`，重新建立 YAML 版入口和发布基线。具体备份与重建顺序见 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)；旧控制日志仅用于维护恢复，不写回正在运行的新部署。
-
-这一步会中断连接、重建发布基线，旧 release 仍保留用于维护恢复，但环境变量版本不能作为新版控制器的日常灰度候选。恢复旧部署需要停机并整体恢复先前备份，不能用旧配置覆盖新版已接收的资源数据。当前仍需 Linux/systemd 实机验收。
-
-本机 Hermes 工具将管理 Token 写入 `.runtime/gateway/config.yaml`，显式传 `--config` 启动，再通过路由 POST 登记上游 Token 和消费者。`client.env` 仅供 curl 客户端使用，不再是网关启动配置。
+普通 `install` 只灰度发布 worker。需要更新 host 和管理 CLI 时，先暂停新业务、排空并停止服务，再执行新产物的 `install --update-host`。更新前自动备份配置、状态与 unit，保留业务数据和自定义 drop-in，以新产物建立初始稳定版本。步骤见 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)。

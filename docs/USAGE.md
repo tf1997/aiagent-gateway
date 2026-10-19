@@ -366,7 +366,7 @@ curl -fsS "$GATEWAY_ADMIN_URL/admin/v1/routes/research" \
 
 POST 更新和按 key 删除默认无需 `If-Match`，并发提交以最后一次成功提交为准。需要乐观锁时带上路由最新 ETag；过期返回 412，对不存在的 key 携带 If-Match 也返回 412。首次创建需提供 `expose` 等完整必要字段，单独提交 key 和超时不能创建新路由。`id`、`version` 是只读字段，不要把 GET 响应原样作为 POST 正文。
 
-部署到已有灰度架构时，公共管理接口由 state-server 承载，需要按基础组件维护流程更新它才能启用此功能。仅通过 install 升级业务 worker 不会更新管理接口；前台模式重启为新二进制即可。
+部署到已有灰度架构时，公共管理接口由 host 承载，需要按宿主维护流程更新它才能启用此功能。仅通过 install 升级业务 worker 不会更新管理接口；前台模式重启为新二进制即可。
 
 ### 动态配置消费者
 
@@ -523,7 +523,7 @@ sudo journalctl -u aiagent-gateway-rollout -f
 
 `stop/start/restart` 操作整套服务，可能中断连接。日常升级使用**新上传二进制**的 `install`，由发布控制器启动候选 worker，验证真实流量并自动切流或回退。默认灰度分配 5% 新会话，验证至少 60 秒、每类必需请求至少 10 个成功样本，全量后再观察 300 秒；无业务流量可能因样本不足回退。
 
-旧单进程 systemd 安装首次迁入灰度架构，需要在维护窗口执行 `install --migrate`。`rollout resume` 用于处理 `RECOVERY_REQUIRED`；`rollout rollback` 用于尚保留候选和旧稳定目标的发布任务。完整打包上传、端口、升级、回退及降级流程见 [灰度升级操作说明](ROLLOUT_OPERATIONS.md)。
+安装统一使用 host-worker；宿主自身更新在停机后执行 `install --update-host`。`rollout resume` 用于处理 `RECOVERY_REQUIRED`；`rollout rollback` 用于尚保留候选和旧稳定目标的发布任务。完整打包上传、端口、升级、回退及降级流程见 [灰度升级操作说明](ROLLOUT_OPERATIONS.md)。
 
 ### 数据与重启行为
 

@@ -149,3 +149,14 @@ P4 的本地协议实现已完成；后续已补齐第 12 节所列单实例 Her
 YAML callers 和 Options.Callers 已移除。POST 创建/upsert 及兼容 PATCH 接受 consumers；省略保留、数组整体替换、空数组撤销。每项 id 为稳定 owner，token 仅为写入字段；保存 SHA-256 哈希，管理响应和幂等回执只包含 ID。新建无消费者路由默认拒绝业务访问。
 
 数据面与共享状态入口基于目标路由快照认证，worker 每次请求刷新配置；配置成功提交后新 Token 立即生效。轮换保持 owner，不迁移会话/任务；动态并发计数保留活跃请求并在归零时回收。撤销不取消既有执行，后台核查可继续使用持久资源的 owner，但不会恢复其公开访问权限。
+
+
+## 17. 稳定宿主与业务子进程（2026-10-19）
+
+`internal/host` 将 entry、共享状态及 rollout 控制器组装为同一个非 root 宿主；入口解析、freeze/retire/lease count 使用本地适配器，worker 继续使用既有状态 UDS 协议。`internal/service/child.go` 管理两个槽位的真实子进程，验证只读产物 SHA-256、PID 与 incarnation，等待 readiness，排空后停止并 Wait 回收。父进程生命管道关闭后 worker 退出，避免脱离宿主管理。
+
+安装统一采用 host-worker，稳定期 2 个、灰度期 3 个进程。部署清单仅包含 infrastructure、initial_release 和 policy，没有拓扑版本字段。已移除旧角色 CLI、systemd worker driver、旧单进程安装器及 rollout_data。宿主更新命令为停机后的 `install --update-host`：先备份配置、状态、CLI、unit 和 drop-in，保留业务归属及 drop-in，归档旧进程身份，建立新基线。root 安装器暂存产物，host 控制 UDS 校验 peer UID 和管理 Token。
+
+宿主启动先核对发布报告与 entry 切流意图；未提交灰度回到旧稳定版，COMMITTING 恢复已选定的新版本。旧日志不能直接使入口 ready，必须等新子进程恢复。人工停机先排空入口，systemd KillMode=mixed 为最终 cgroup 清理兜底；正常 worker 发布不改变 host PID、状态 epoch 或公共端口。
+
+验证涵盖真实 2 → 3 → 2、A → B → C、失败回退、SSE 排空超时与恢复、worker/host 崩溃、父进程退出、原会话归属、重复提交、宿主更新备份和拒绝条件。具体结果及 Linux/systemd 实机边界见 [VALIDATION](VALIDATION.md)，当前运维步骤见 [部署全流程](docs/DEPLOYMENT_LIFECYCLE.md)。

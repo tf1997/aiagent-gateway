@@ -10,9 +10,9 @@ Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例�
 
 首次安装生成哪些文件、运行几个进程、灰度时如何替换产物和交接请求，以及如何更新全部组件，见 [安装、运行文件与升级全流程](docs/DEPLOYMENT_LIFECYCLE.md)。
 
-减少常驻进程的拟议改造见 [单常驻进程、双进程灰度升级方案](docs/SINGLE_PROCESS_ROLLOUT_PLAN.md)：目标为平时 1 个网关进程、升级期间 2 个，采用监听 socket 继承和进程内灰度分配。该方案尚未实现，不改变当前安装行为。
+已实现 [稳定宿主 + worker](docs/PROCESS_REDUCTION_RECOMMENDATION.md)：新安装平时 2 个、灰度时 3 个进程，入口、状态和发布控制合并为一个非 root host。安装统一采用 host-worker；[单常驻进程、双进程灰度方案](docs/SINGLE_PROCESS_ROLLOUT_PLAN.md)仍是后续草案。
 
-发版与升级步骤见 [构建打包和上传](docs/ROLLOUT_OPERATIONS.md#构建发版)、[首次安装或维护迁移](docs/ROLLOUT_OPERATIONS.md#首次安装或维护迁移)、[日常灰度升级](docs/ROLLOUT_OPERATIONS.md#日常灰度升级) 和 [异常恢复及降级](docs/ROLLOUT_OPERATIONS.md#结果确认和异常处理)。
+发版与升级步骤见 [构建打包和上传](docs/ROLLOUT_OPERATIONS.md#构建发版)、[首次安装或宿主更新](docs/ROLLOUT_OPERATIONS.md#首次安装或宿主更新)、[日常灰度升级](docs/ROLLOUT_OPERATIONS.md#日常灰度升级) 和 [异常恢复及降级](docs/ROLLOUT_OPERATIONS.md#结果确认和异常处理)。
 
 Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原始来源和版本对照见 [会话接口调研](docs/HERMES_SESSION_API_RESEARCH.md)。
 
@@ -126,16 +126,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 
 安装命令完成以下工作：
 
-- 首次安装或维护迁移将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
+- 首次安装或宿主更新将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
 - 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/config.yaml`，权限 0600；Token 不输出到终端。
 - 安装时预先创建数据目录中的 `config.json`、`routes.json` 和 `route-logs.json`；前台和状态服务启动时也会自动初始化全新的路由存储。
-- 启动服务，通过 `/readyz` 检查后启用开机自启动；异常退出由 systemd 自动重启。
+- 新安装生成部署清单和单个 host service，由 host 启动/回收业务 worker；正常运行 2 个进程，灰度 3 个。通过 `/readyz` 检查，启用开机自启动；host 异常退出由 systemd 清理子进程后重启。
 - 已迁入灰度架构后，安装不同版本会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；同一 SHA-256 版本已健康运行时直接成功返回，正在发布时接续等待原任务。配置、资源归属和并发额度由共享状态服务统一管理。
-- 旧单进程安装须在维护窗口执行 `install --migrate`，首次迁移无法保留旧进程内存中的会话/任务映射。Linux systemd 实机部署尚待验收，具体策略、恢复和限制见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
+- 宿主自身升级在停机后执行 `install --update-host`，先完整备份，保留业务状态，并以新产物建立发布基线。Linux systemd 实机部署尚待验收，见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
 默认数据面为 `:8080`，管理面为 `:9090`，均监听所有网卡。远程管理使用 `http://<网关IP或域名>:9090`，请求携带管理 Token；自定义 `admin_port` 时同步调整访问端口。
 
-消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token 和 `public_url`；后者应改为客户端实际可访问的地址。上游 Token 在路由各接口的 `token` 中动态配置。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。旧版需按 [迁移说明](docs/CONFIGURATION.md) 做维护迁移。
+消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token 和 `public_url`；后者应改为客户端实际可访问的地址。上游 Token 在路由各接口的 `token` 中动态配置。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。启动字段见 [配置说明](docs/CONFIGURATION.md)。
 
 ```sh
 sudo aiagent-gateway status
@@ -190,7 +190,7 @@ curl -fsS -X DELETE http://127.0.0.1:9090/admin/v1/routes/research \
 
 上述部分更新示例要求 `research` 已存在；首次创建还需提供 `expose` 等必要配置。启动参数只从 YAML 读取，环境变量已弃用。管理 API 自动维护三份存储：`config.json` 只保留版本信息，`routes.json` 保存路由和内嵌实例，`route-logs.json` 保存管理幂等回执和审计记录，后两类记录各保留最近 1000 条。文件布局及兼容说明见 [路由存储文件](docs/CONFIGURATION.md#路由存储文件)。
 
-前台模式使用新二进制启动即可启用本次管理接口。灰度部署的管理接口由 state-server 提供，现有部署需按基础组件维护流程更新该组件；日常 install 只替换业务 worker，不会自动升级管理接口。
+前台模式使用新二进制启动即可启用本次管理接口。灰度部署的管理接口由 host 提供，现有部署需按基础组件维护流程更新宿主；日常 install 只替换业务 worker，不会自动升级管理接口。
 
 配置先提交 `.config.pending.json` 恢复事务，再逐份原子替换三份文件并同步目录，清理事务后发布内存快照。文件和目录权限默认 0600 / 0700。前台单进程模式下，多个进程不能同时打开同一数据目录；灰度模式由单个状态服务独占目录，worker 通过本机 Socket 访问；恢复事务提交后任何写入失败都会使 ready 失败，需排查存储并重启完成恢复。
 

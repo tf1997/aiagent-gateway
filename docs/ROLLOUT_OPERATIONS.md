@@ -1,12 +1,12 @@
 # 自动灰度升级操作说明
 
-状态：代码已实现，已通过本机真实多进程 HTTP 切流和自动发布状态机测试；Linux systemd 实机部署、真实模型升级联调及生产压力验收尚未完成。以下命令是当前实现的接口。
+状态：新安装默认使用 host-worker（2 → 3 → 2），已通过真实进程连续发布、SSE 排空、回退与崩溃恢复测试；Linux systemd 实机部署、真实模型升级联调及生产压力验收尚未完成。以下命令是当前实现的接口。
 
 组件改造、会话到原 Agent 的映射持久化、代码位置及测试范围见 [实现过程记录](ROLLOUT_IMPLEMENTATION_RECORD.md)。
 
 首次安装、配置与运行文件、进程交接的完整解释见 [安装与升级全流程](DEPLOYMENT_LIFECYCLE.md)；入口、管理/状态服务、控制器和 CLI 一起更新时，见其中的 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)。
 
-操作顺序：[构建发版](#构建发版) → [上传与安装前检查](#上传与安装前检查) → [首次安装或维护迁移](#首次安装或维护迁移) / [日常灰度升级](#日常灰度升级) → [结果确认和异常处理](#结果确认和异常处理)。
+操作顺序：[构建发版](#构建发版) → [上传与安装前检查](#上传与安装前检查) → [首次安装或宿主更新](#首次安装或宿主更新) / [日常灰度升级](#日常灰度升级) → [结果确认和异常处理](#结果确认和异常处理)。
 
 ## 构建发版
 
@@ -77,14 +77,14 @@ uname -m
 安装前确认：
 
 - 服务器运行 systemd 247+（支持 LoadCredential），具备 `systemctl`、`getent`、`groupadd`、`useradd`，操作账号可使用 sudo。
-- 首次安装时外部端口及内部 A/B 端口可用；已有部署升级时，稳定槽位已占用自己的端口属正常情况，候选槽位端口不能被其他程序占用。端口表见下文，可用 `sudo ss -ltnp` 核对监听进程。
+- 首次安装时公共数据/管理端口可用。worker 使用动态 loopback 端口。可用 `sudo ss -ltnp` 核对监听进程。
 - 已有灰度部署的 `rollout status --json` 可读取，当前没有未结束发布；处于 `RECOVERY_REQUIRED` 时先处理该任务。
 - 新版兼容当前基础组件的控制/状态协议，且灰度中新建资源仍可被旧版读取。需要升级基础组件或变更不兼容状态格式时，安排独立维护迁移。
 - 灰度窗口内有足够的新会话和相应 HTTP/SSE/A2A 请求。只有存量会话或没有流量，可能无法取得候选成功样本；先确定发布策略，不在验证中修改配置。
 
-## 首次安装或维护迁移
+## 首次安装或宿主更新
 
-新版默认读取 config.yaml，YAML 不再配置 callers 或 credentials；上游 Token 位于路由接口的 token，消费者随路由 POST 的 consumers 动态写入。旧环境变量版本的基础组件和 worker 必须一起维护迁移，普通 install 会拒绝旧部署清单；先按 [YAML 配置迁移](CONFIGURATION.md#从环境变量版本迁移) 准备文件和基线。
+程序从 config.yaml 读取启动配置。上游 Token 位于路由接口的 token，消费者随路由 POST 的 consumers 动态写入。部署清单只维护基础产物路径、初始业务产物路径和发布策略。
 
 ### 全新服务器
 
@@ -98,30 +98,26 @@ sudo systemctl list-units --all 'aiagent-gateway*'
 curl --fail --silent --show-error http://127.0.0.1:8080/readyz
 ```
 
-安装器创建系统用户、凭据、配置及服务，启动基础组件和初始 worker，并启用服务组开机启动。管理凭据保存在 `/etc/aiagent-gateway/config.yaml`，不输出到终端。首次没有旧版本，就绪后直接开放服务，不执行双版本真实流量验证。
+安装器创建系统用户、凭据、配置、部署清单和单个 host service，由 host 启动初始 worker，并启用开机启动。管理凭据保存在 `/etc/aiagent-gateway/config.yaml`，不输出到终端。首次没有旧版本，就绪后直接开放服务，不执行双版本真实流量验证。
 
 确认 `phase` 为 `COMPLETED`，再按 [README](../README.md) 配置路由、路由消费者和 Agent 凭据，验证实际代理与会话续接。`/readyz` 只提供入口就绪信号，不能证明业务调用成功；使用非默认监听地址时替换命令中的地址。首次部署如果还需要修改启动文件和监听配置，应在正式接入流量前完成并验证。
 
-### 旧单进程部署首次迁移
+### 宿主更新
 
-没有灰度部署文件、仍使用原单进程服务的机器，需要维护窗口：
-
-1. 暂停新业务请求，等待原请求及网关本地后台工作结束；另行安排仍需旧内存映射访问的 Agent 任务。
-2. 保存原二进制、旧 `gateway.env`、新 `config.yaml`、整个数据目录和原 systemd unit 的备份，保留其文件权限。拆分存储不能只备份 `config.json`，备份配置也不能恢复进程内会话。
-3. 在新产物目录执行迁移命令。
-4. 确认发布完成和各组件状态，使用新的会话验证代理后恢复业务流量。
+需要更新 host 与管理 CLI 时，先完成当前发布并暂停外部流量，排空请求后执行：
 
 ```sh
-sudo ./aiagent-gateway-linux-amd64 install --migrate
+sudo aiagent-gateway stop
+sudo systemctl status aiagent-gateway.service
+sudo ./aiagent-gateway-linux-amd64 install --update-host
 sudo aiagent-gateway rollout status --json
-sudo systemctl list-units --all 'aiagent-gateway*'
 ```
 
-迁移保留凭据、路由及 Endpoint ID，但当前旧版本的内存 session/task 映射不能导出，会按原有重启边界失效。不能把首次迁移当成无中断升级。迁移启动失败时需根据服务日志恢复，当前没有完整的旧部署自动快照回滚；不要手动覆盖已经产生新资源的共享状态。
+安装器确认服务已停止，备份配置、完整状态、CLI、unit 和 drop-in，保留业务状态及自定义 drop-in，归档 entry/release 进程身份，再用新产物启动 host 和初始 worker。备份位置和失败恢复边界见 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)。
 
 ## 日常灰度升级
 
-适用于已经完成上述安装或迁移的机器。以下命令在新产物解压目录执行，不需要先停止或重启现有服务。
+适用于已经完成上述安装的机器。以下命令在新产物解压目录执行，不需要先停止或重启现有服务。
 
 ### 1. 保存发布前信息
 
@@ -160,8 +156,8 @@ sudo ./aiagent-gateway-linux-amd64 install
 
 ```sh
 sudo aiagent-gateway rollout status --json
-sudo journalctl -u aiagent-gateway-rollout.service -n 100 --no-pager
-sudo journalctl -u aiagent-gateway-worker-a.service -u aiagent-gateway-worker-b.service -f
+sudo journalctl -u aiagent-gateway.service -n 100 --no-pager
+sudo journalctl -u aiagent-gateway.service -f
 ```
 
 两槽位交替使用，不固定 B 为新版；以报告中的 `candidate.instance` 为准。日志用于定位问题，转正判定使用结构化代理结果。
@@ -226,7 +222,7 @@ sudo "/opt/aiagent-gateway/releases/${previous_release}/gateway" install
 sudo aiagent-gateway rollout status --json
 ```
 
-仅适用于已具备灰度能力且兼容当前共享状态的历史 worker 版本；回到首次迁移前的单进程版本属于维护恢复。不可通过覆盖运行中二进制、修改基础组件路径或恢复旧状态文件完成灰度降级。
+仅适用于已具备灰度能力且兼容当前共享状态的历史 worker 版本。不可通过覆盖运行中二进制、修改基础组件路径或恢复旧状态文件完成灰度降级。
 
 ## 默认发布规则
 
@@ -272,43 +268,31 @@ generic SSE 需要可识别的结束信号，例如 `[DONE]`；没有结束定�
 
 ## 服务、端口与数据
 
-| 角色 | systemd unit | 默认端口 |
+| 角色 | systemd 管理 | 监听 |
 | --- | --- | --- |
-| 服务组 | aiagent-gateway.service | 无 |
-| 固定入口 | aiagent-gateway-entry.service | :8080 |
-| 配置及共享状态 | aiagent-gateway-state.service | 公共管理 :9090（所有网卡）；状态 Unix Socket |
-| 发布控制器 | aiagent-gateway-rollout.service | 受保护的 Unix Socket |
-| A/B 业务实例 | aiagent-gateway-worker-a.service / worker-b.service | 18080/18081；内部管理 19090/19091，均为 loopback |
+| host：入口、管理、状态、发布控制 | aiagent-gateway.service，非 root MainPID | 数据 :8080、管理 :9090；内部控制 UDS |
+| worker A/B | host 的一至两个直接子进程，同一 cgroup | 动态分配的 loopback 数据/内部管理端口 |
 
-YAML 的 `port`、`admin_port` 只配置端口号：数据面和公共管理面均监听所有网卡；`public_url` 配置对外完整 URL。公共管理 API 由 `state-server` 提供，远程访问 `http://<网关IP或域名>:9090/admin/v1/...`，请求携带管理 Token；自定义 `admin_port` 时使用对应端口。内置 systemd driver 的 A/B 端口目前固定并显式绑定本机，部署前须确保空闲，端口冲突会拒绝候选启动。前台 worker 模式允许使用 `--listen`、`--admin` 指定其他内部端口。
+公共管理 API 由 host 提供，请求携带管理 Token。发布/入口控制 UDS 还校验本机 root 安装身份；普通业务管理 Token 不能通过远程公共 API 启动二进制。
 
 ```sh
-sudo journalctl -u aiagent-gateway-rollout -f
-sudo journalctl -u aiagent-gateway-worker-b -f
+sudo journalctl -u aiagent-gateway.service -f
+sudo systemctl show aiagent-gateway.service -p MainPID -p ControlGroup
 sudo aiagent-gateway status
-sudo aiagent-gateway stop
-sudo aiagent-gateway start
 ```
 
-`stop/start/restart` 是整套服务的运维操作，可能中断连接；升级使用 install。控制器会在服务组恢复后启动已确认的稳定版本并更新进程身份，正在进行的发布若遇到 worker 重启则进入回退/恢复流程。
+`stop/start/restart` 是整套服务维护操作，可能中断连接；业务升级使用 install。host 崩溃后子进程退出，新 host 校验日志，未提交的灰度回退旧稳定版，已进入提交阶段的恢复新稳定版。业务升级期间 host PID 和状态 epoch 不变。
 
 关键路径：
 
-- `/opt/aiagent-gateway/releases/<sha256>/gateway`：不可变业务产物。
-- `/opt/aiagent-gateway/infrastructure/<sha256>/gateway`：固定入口、控制器和状态服务使用的基础产物。
-- `/var/lib/aiagent-gateway/config.json`：存储格式、schema 和配置版本。
-- 同目录 `routes.json` 和 `route-logs.json`：分别保存路由与管理幂等回执/审计记录，由单个状态服务一并提交；迁移和备份见 [路由存储文件](CONFIGURATION.md#路由存储文件)。
-- `/var/lib/aiagent-gateway/shared/state.log`：资源、别名、幂等和会话持久日志，内置压缩快照。
-- `/var/lib/aiagent-gateway/entry/state.log`：入口路由、灰度亲和和有界结果证据。
-- `/var/lib/aiagent-gateway-rollout/state.log`：root 管理的发布状态和未完成切流意图。
+- `/opt/aiagent-gateway/releases/<sha256>/gateway`：root 暂存的只读业务产物。
+- `/opt/aiagent-gateway/infrastructure/<sha256>/gateway`：固定 host 产物。
+- `/var/lib/aiagent-gateway/config.json`、`routes.json`、`route-logs.json` 和恢复事务：配置与管理记录。
+- 同目录 `shared/state.log`：资源、别名、幂等和会话；`entry/state.log`：切流、亲和与结果；`release/state.log`：发布报告与切流意图。
 
-worker 不再打开配置目录写锁，资源创建和公开 ID 提交由状态服务串行确认。两版共享并发额度及列表快照；短期列表游标支持切换 worker，但目前不跨状态服务重启恢复。状态服务改变运行代次时，旧 worker 会被拒绝继续写入并退出，避免迟到写入覆盖新状态。
+所有 worker 共用 host 的状态、额度和列表快照。状态 epoch 变化后旧客户端停止写入，资源定位和幂等元数据可从持久日志恢复；TCP 连接、短期分页游标和上游执行本身不能靠这些日志恢复。未知结果保留归属，不重新创建有副作用的操作。
 
-共享状态保存的是资源定位和幂等元数据，不恢复 TCP 连接或上游工具执行。结果未知的创建操作保持归属，不因 worker 失联直接重新创建。资源空闲时间的持久化按分钟合并，恢复时可能多保留不到一分钟。
-
-基础组件升级、状态协议不兼容迁移仍需独立维护流程；普通 install 不自动替换它们。当前资源日志提交和入口证据均有同步落盘成本，需要在目标机器测量容量后再确定生产并发参数。
-
-卸载停止服务并移除 unit 和 CLI，保留凭据、共享状态、发布记录和版本产物以便重新安装。安装过程不得通过旧配置快照覆盖灰度中新建的合法资源。
+卸载移除服务和 CLI，保留凭据、状态、发布报告、清单和产物，供重装使用。host 自身升级与不兼容状态变更要安排维护流程，不能用旧状态覆盖灰度中新建资源。完整文件布局和恢复步骤见 [部署全流程](DEPLOYMENT_LIFECYCLE.md)。
 
 ## 本机验证
 
@@ -320,6 +304,6 @@ go build -o /tmp/aiagent-rollout-check ./cmd/gateway
 python3 deploy/rollout-local/check.py /tmp/aiagent-rollout-check
 ```
 
-Python 检查只启动临时端口、临时数据目录下的 state、entry 和两个独立 worker，以及模拟 HTTP 上游，退出时清理。覆盖实际 5% 分配、全量切换、原会话归属、失败 POST 不重放和回退。自动发布状态机的通过、失败、观察期故障、排空和丢失切流回执恢复由 Go 测试验证。
+`check.py` 在临时目录构建两个不同版本，验证 host 的 2 → 3 → 2、连续 A → B → C、失败回退、长 SSE 排空超时/resume、宿主 PID/epoch、稳定 worker 崩溃、父进程死亡、重启恢复、原 Agent 绑定及无孤儿。脚本只使用本机临时端口和模拟上游，退出时清理。Go 测试另外覆盖子进程身份/租约/回收、控制 UDS 身份、重复安装幂等、宿主更新备份及发布日志冲突恢复。
 
 这些检查不修改本机既有 Hermes 部署，也不替代 Linux systemd 实机、真实模型或生产压力验证。

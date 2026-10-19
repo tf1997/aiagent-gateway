@@ -37,7 +37,6 @@ type Config struct {
 	EntrySocket        string `yaml:"entry_socket"`
 	ControlSocket      string `yaml:"control_socket"`
 	Deployment         string `yaml:"deployment"`
-	RolloutData        string `yaml:"rollout_data"`
 }
 
 func Defaults() Config {
@@ -48,7 +47,7 @@ func Defaults() Config {
 		MaxResourceAliases: 200000, MaxDataIdempotency: 100000,
 		StateSocket: "/run/aiagent-gateway/state.sock", EntrySocket: "/run/aiagent-gateway/entry.sock",
 		ControlSocket: "/run/aiagent-gateway-control/controller.sock",
-		Deployment:    "/etc/aiagent-gateway/deployment.json", RolloutData: "/var/lib/aiagent-gateway-rollout",
+		Deployment:    "/etc/aiagent-gateway/deployment.json",
 	}
 }
 
@@ -74,7 +73,7 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	for _, p := range []*string{&c.DataDir, &c.StateSocket, &c.EntrySocket, &c.ControlSocket, &c.Deployment, &c.RolloutData} {
+	for _, p := range []*string{&c.DataDir, &c.StateSocket, &c.EntrySocket, &c.ControlSocket, &c.Deployment} {
 		if !filepath.IsAbs(*p) {
 			*p = filepath.Join(base, *p)
 		}
@@ -138,7 +137,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("%s must be a positive integer", name)
 		}
 	}
-	for name, path := range map[string]string{"data_dir": c.DataDir, "state_socket": c.StateSocket, "entry_socket": c.EntrySocket, "control_socket": c.ControlSocket, "deployment": c.Deployment, "rollout_data": c.RolloutData} {
+	for name, path := range map[string]string{"data_dir": c.DataDir, "state_socket": c.StateSocket, "entry_socket": c.EntrySocket, "control_socket": c.ControlSocket, "deployment": c.Deployment} {
 		if strings.TrimSpace(path) == "" || strings.ContainsRune(path, 0) {
 			return fmt.Errorf("%s must be a nonempty path", name)
 		}

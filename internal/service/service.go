@@ -91,13 +91,10 @@ func Manage(action string, output io.Writer) error {
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	switch action {
-	case "install", "migrate":
-		return m.installRollout(ctx, action == "migrate")
+	case "install", "update-host":
+		return m.installRollout(ctx, action == "update-host")
 	case "uninstall":
-		if _, err := os.Stat(m.path(DeploymentPath)); err == nil {
-			return m.uninstallRollout(ctx)
-		}
-		return m.uninstall(ctx)
+		return m.uninstallRollout(ctx)
 	case "start", "stop", "restart":
 		return m.run(ctx, "systemctl", action, Name+".service")
 	default:
@@ -105,14 +102,6 @@ func Manage(action string, output io.Writer) error {
 	}
 }
 
-// A newly installed unit may not yet be loaded, so reset-failed is only
-// appropriate when systemd actually reports a failed unit.
-func (m *manager) clearFailed(ctx context.Context) error {
-	if _, err := m.command(ctx, "systemctl", "is-failed", "--quiet", Name+".service"); err != nil {
-		return nil
-	}
-	return m.run(ctx, "systemctl", "reset-failed", Name+".service")
-}
 func exists(path string) (bool, error) {
 	_, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -150,30 +139,6 @@ func (m *manager) account(ctx context.Context) error {
 	return nil
 }
 
-type savedFile struct {
-	path   string
-	data   []byte
-	mode   os.FileMode
-	exists bool
-}
-
-func snapshot(path string) (savedFile, error) {
-	s := savedFile{path: path}
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
-		return s, err
-	}
-	if !info.Mode().IsRegular() {
-		return s, fmt.Errorf("refusing to replace non-regular file: %s", path)
-	}
-	s.mode = info.Mode().Perm()
-	s.exists = true
-	s.data, err = os.ReadFile(path)
-	return s, err
-}
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -216,179 +181,4 @@ func credentials() ([]byte, error) {
 	c.PublicURL = "http://localhost:8080"
 	c.AdminToken = hex.EncodeToString(b[:])
 	return yaml.Marshal(c)
-}
-func (m *manager) install(ctx context.Context) (result error) {
-	configExists, err := exists(m.path(configPath))
-	if err != nil {
-		return err
-	}
-	dataExists, err := exists(m.path(dataPath))
-	if err != nil {
-		return err
-	}
-	binExists, err := exists(m.path(binaryPath))
-	if err != nil {
-		return err
-	}
-	fresh := !configExists
-	if fresh && (dataExists || binExists) {
-		return fmt.Errorf("existing installation has no %s; restore it before upgrading", configPath)
-	}
-	if !fresh && !dataExists {
-		return fmt.Errorf("existing installation has no %s; restore it before upgrading", dataPath)
-	}
-	if configExists {
-		if _, err := snapshot(m.path(configPath)); err != nil {
-			return err
-		}
-	}
-	binary, err := os.ReadFile(m.executable)
-	if err != nil {
-		return err
-	}
-	saved := []savedFile{}
-	for _, path := range []string{binaryPath, unitPath, initPath} {
-		s, err := snapshot(m.path(path))
-		if err != nil {
-			return err
-		}
-		saved = append(saved, s)
-	}
-	mainUnit, err := units.ReadFile("units/aiagent-gateway.service")
-	if err != nil {
-		return err
-	}
-	initUnit, err := units.ReadFile("units/aiagent-gateway-init.service")
-	if err != nil {
-		return err
-	}
-	if err = m.account(ctx); err != nil {
-		return err
-	}
-	_, activeErr := m.command(ctx, "systemctl", "is-active", "--quiet", Name+".service")
-	wasActive := activeErr == nil
-	_, enabledErr := m.command(ctx, "systemctl", "is-enabled", "--quiet", Name+".service")
-	wasEnabled := enabledErr == nil
-	changed := false
-	defer func() {
-		if result == nil || !changed {
-			return
-		}
-		rollbackCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		rollbackErrors := []error{}
-		// Surface stop failures along with any file restoration errors.
-		if err := m.run(rollbackCtx, "systemctl", "stop", Name+".service"); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
-		}
-		if !wasEnabled {
-			if present, _ := exists(m.path(unitPath)); present {
-				if err := m.run(rollbackCtx, "systemctl", "disable", Name+".service"); err != nil {
-					rollbackErrors = append(rollbackErrors, err)
-				}
-			}
-		}
-		for _, s := range saved {
-			var err error
-			if s.exists {
-				err = atomicWrite(s.path, s.data, s.mode)
-			} else {
-				err = os.Remove(s.path)
-				if errors.Is(err, os.ErrNotExist) {
-					err = nil
-				}
-			}
-			if err != nil {
-				rollbackErrors = append(rollbackErrors, err)
-			}
-		}
-		if fresh {
-			if present, err := exists(m.path(dataPath)); err == nil && !present {
-				if err := os.Remove(m.path(configPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
-					rollbackErrors = append(rollbackErrors, err)
-				}
-			}
-		}
-		if err := m.run(rollbackCtx, "systemctl", "daemon-reload"); err != nil {
-			rollbackErrors = append(rollbackErrors, err)
-		}
-		if wasActive {
-			if err := m.clearFailed(rollbackCtx); err != nil {
-				rollbackErrors = append(rollbackErrors, err)
-			}
-			if err := m.run(rollbackCtx, "systemctl", "restart", Name+".service"); err != nil {
-				rollbackErrors = append(rollbackErrors, err)
-			}
-		}
-		if len(rollbackErrors) > 0 {
-			result = errors.Join(result, fmt.Errorf("rollback errors: %w", errors.Join(rollbackErrors...)))
-		} else {
-			result = fmt.Errorf("%w (previous binary and units restored; existing data retained)", result)
-		}
-	}()
-	if fresh {
-		raw, err := credentials()
-		if err != nil {
-			return err
-		}
-		if err = os.MkdirAll(filepath.Dir(m.path(configPath)), 0700); err != nil {
-			return err
-		}
-		changed = true
-		if err = atomicWrite(m.path(configPath), raw, 0600); err != nil {
-			return err
-		}
-	}
-	if wasActive {
-		if err = m.run(ctx, "systemctl", "stop", Name+".service"); err != nil {
-			return err
-		}
-	}
-	changed = true
-	for i, data := range [][]byte{binary, mainUnit, initUnit} {
-		mode := os.FileMode(0644)
-		if i == 0 {
-			mode = 0755
-		}
-		if err = atomicWrite(saved[i].path, data, mode); err != nil {
-			return err
-		}
-	}
-	if err = m.run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return err
-	}
-	if err = m.clearFailed(ctx); err != nil {
-		return err
-	}
-	if fresh {
-		if err = m.run(ctx, "systemctl", "start", Name+"-init.service"); err != nil {
-			return err
-		}
-	}
-	if err = m.run(ctx, "systemctl", "restart", Name+".service"); err != nil {
-		return err
-	}
-	if err = m.run(ctx, "systemctl", "is-active", "--quiet", Name+".service"); err != nil {
-		return err
-	}
-	if err = m.run(ctx, "systemctl", "enable", Name+".service"); err != nil {
-		return err
-	}
-	fmt.Fprintf(m.output, "Installed and enabled %s.service\nConfiguration and credentials: %s (root only)\nState: /var/lib/aiagent-gateway\nLogs: journalctl -u %s -f\n", Name, configPath, Name)
-	return nil
-}
-func (m *manager) uninstall(ctx context.Context) error {
-	if err := m.run(ctx, "systemctl", "disable", "--now", Name+".service"); err != nil {
-		return err
-	}
-	for _, path := range []string{unitPath, initPath, binaryPath} {
-		if err := os.Remove(m.path(path)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
-	if err := m.run(ctx, "systemctl", "daemon-reload"); err != nil {
-		return err
-	}
-	fmt.Fprintln(m.output, "Service removed; credentials, route data, and service account retained.")
-	return nil
 }

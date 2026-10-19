@@ -1,10 +1,10 @@
 # Agent 网关同机灰度升级实现过程
 
-记录日期：2026-10-06。
+记录日期：2026-10-06。本文保留当时的实现过程；旧角色、旧安装器和迁移入口现已移除，当前 host-worker 的代码与操作以 [部署全流程](DEPLOYMENT_LIFECYCLE.md) 为准。
 
 本次将 `install` 接入同机双 worker 自动发布：旧版本继续服务，新版本在另一端口启动，通过真实代理请求验证后切换后续流量，失败则回退。会话、任务及资源到原 Agent Endpoint 的映射由独立状态服务保存，避免随旧 worker 退出丢失。
 
-核心代码和本机验证已完成；Linux systemd 实机、真实 Agent 升级/回退联调及生产压力验收仍待完成。本文按实现依赖关系记录改造过程，描述当前代码中的行为。原始方案中的拟议接口和验收目标不全部代表已交付能力。
+核心代码和本机验证已完成；Linux systemd 实机、真实 Agent 升级/回退联调及生产压力验收仍待完成。本文按实现依赖关系记录改造过程，描述当时代码中的行为。原始方案中的拟议接口和验收目标不全部代表已交付能力。
 
 相关文档：[通用设计](HTTP_GATEWAY_ROLLOUT_DESIGN.md)、[原实施计划](AGENT_GATEWAY_ROLLOUT_IMPLEMENTATION_PLAN.md)、[操作说明](ROLLOUT_OPERATIONS.md)、[验证记录](../VALIDATION.md)。
 
@@ -306,13 +306,13 @@ python3 deploy/rollout-local/check.py /tmp/aiagent-rollout-check
 | --- | --- | --- |
 | 1. 构建发版 | 从已提交代码运行测试、竞态及静态检查，编译 Linux amd64/arm64，生成构建信息、SHA-256 和压缩包 | 产物可追溯到源码 commit，目标平台验收通过 |
 | 2. 上传检查 | 上传新包，在服务器新目录解压并校验哈希，选择正确架构，检查服务、候选端口、状态兼容性和流量窗口 | 校验通过，无未结束发布，基础组件和旧版可用 |
-| 3. 安装或迁移 | 新机器执行新产物的 install；旧单进程部署在维护窗口执行 install --migrate | 初始发布完成，路由及实际代理可用；迁移不继承旧内存会话 |
+| 3. 安装或宿主更新 | 新机器执行 install；宿主自身更新在停机后执行 install --update-host | 初始发布完成，路由及实际代理可用 |
 | 4. 保存基线 | 保存当前 rollout 报告、旧 stable.release/artifact 和本次新产物哈希，必要时调整下一次发布策略 | 能明确核对升级目标及后续降级产物 |
 | 5. 灰度升级 | 从新产物目录执行新二进制的 install，保持业务请求进入固定入口 | 后台经过验证、切流、观察和排空；CLI 断开仍可查询 |
 | 6. 发布验收 | 保存结束报告，核对新稳定版哈希、子服务和实际业务；使用原会话续接原 Agent | COMPLETED，旧 worker 已排空停止，会话归属保持 |
 | 7. 异常恢复 | 已回退则修复后重新发布；待恢复先处理原因再 resume；活动发布可主动 rollback | 状态、实际流量和运行实例一致 |
 
-日常升级最小命令序列如下，在已校验的新产物目录执行；首次安装/维护迁移按 [操作说明](ROLLOUT_OPERATIONS.md#首次安装或维护迁移) 的分支执行。
+日常升级最小命令序列如下，在已校验的新产物目录执行；首次安装/维护迁移按 [操作说明](ROLLOUT_OPERATIONS.md#首次安装或宿主更新) 的分支执行。
 
 ```sh
 sudo aiagent-gateway rollout status --json > rollout-before.json

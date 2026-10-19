@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
 
@@ -102,6 +103,27 @@ func (s *Server) Retire(worker string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.backend.Execute(Request{Action: "retire", Worker: worker}, &s.leases)
+}
+
+// Resolve uses the same dispatcher and backend as the authenticated RPC path.
+// It is only exposed to the in-process entry, never to an external handler.
+func (s *Server) Resolve(ctx context.Context, q releaseprotocol.Request) (releaseprotocol.Resolution, error) {
+	if err := ctx.Err(); err != nil {
+		return releaseprotocol.Resolution{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.backend.Execute(Request{Action: "resolve", Request: q}, &s.leases)
+	if out.Error != "" {
+		return releaseprotocol.Resolution{}, fmt.Errorf("%s", out.Error)
+	}
+	return out.Resolution, nil
+}
+
+func (s *Server) Count(worker string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.leases.Count(worker)
 }
 
 // Leases is used only while Server holds the dispatcher lock.

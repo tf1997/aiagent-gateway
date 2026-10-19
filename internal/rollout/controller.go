@@ -68,6 +68,58 @@ func (c *Controller) Report() Report {
 	_ = json.Unmarshal(raw, &r)
 	return r
 }
+
+// RecoverHost is only for a freshly started host whose previous children cannot
+// be reused. Validate the two journals before discarding old process identities.
+// An uncommitted rollout returns to its stable release; COMMITTING has already
+// durably selected the new stable release. No in-flight request is replayed.
+func (c *Controller) RecoverHost(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r := &c.report
+	current, err := c.entry.Traffic(ctx)
+	if err != nil {
+		return err
+	}
+	if r.Intent != nil {
+		if current.Revision == r.Intent.Revision {
+			a, _ := json.Marshal(current)
+			b, _ := json.Marshal(r.Intent)
+			if string(a) != string(b) {
+				return fmt.Errorf("host recovery: traffic intent conflict")
+			}
+		} else if current.Revision+1 != r.Intent.Revision || current.Revision != r.Revision {
+			return fmt.Errorf("host recovery: traffic revision diverged")
+		}
+	} else if current.Revision != r.Revision {
+		return fmt.Errorf("host recovery: traffic revision diverged")
+	}
+	if r.Phase == "" {
+		return nil
+	}
+	phase := r.Phase
+	if phase == "RECOVERY_REQUIRED" {
+		phase = r.ResumePhase
+	}
+	r.Intent = nil
+	r.Revision = current.Revision
+	r.ResumePhase = ""
+	r.Retiring = nil
+	if r.Stable.Artifact == "" {
+		// Initial installation has no prior business release to return to.
+		r.Candidate = nil
+		c.phase("PREPARING")
+	} else if terminal(phase) || phase == "COMMITTING" || phase == "RECOVERING" || r.Stable.Artifact == r.Artifact {
+		r.Candidate = nil
+		c.phase("RECOVERING")
+	} else {
+		c.rollback("host_restarted_before_commit")
+	}
+	if err = c.driver.Freeze(ctx, true); err != nil {
+		return err
+	}
+	return c.save()
+}
 func terminal(phase string) bool {
 	return phase == "COMPLETED" || phase == "ROLLED_BACK" || phase == "FAILED" || phase == ""
 }
@@ -477,6 +529,9 @@ func (c *Controller) recoverStable(ctx context.Context) error {
 	}
 	c.report.Stable = next
 	if err = c.route(ctx, 0, true); err != nil {
+		return c.recoverRequired(err.Error(), "RECOVERING")
+	}
+	if err = c.driver.Freeze(ctx, false); err != nil {
 		return c.recoverRequired(err.Error(), "RECOVERING")
 	}
 	c.phase("COMPLETED")

@@ -40,7 +40,7 @@ func TestYAMLCLIInitializationAndEnvironmentRemoval(t *testing.T) {
 	if code := runForeground([]string{"--config", config, "--init-only"}); code != 1 {
 		t.Fatal("corrupt route store overwritten", code)
 	}
-	for _, role := range []string{"worker", "state-server", "entry", "rollout-controller"} {
+	for _, role := range []string{"host", "worker"} {
 		err := serveRole(role, []string{"--config", filepath.Join(dir, "absent.yaml")})
 		if err == nil || !strings.Contains(err.Error(), "open YAML config") {
 			t.Fatal("role ignored config path", role, err)

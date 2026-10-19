@@ -1,5 +1,5 @@
 [Unit]
-Description=AI Agent Gateway
+Description=AI Agent Gateway host and business workers
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=60
@@ -10,23 +10,29 @@ Type=simple
 User=aiagent-gateway
 Group=aiagent-gateway
 LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml
-WorkingDirectory=/var/lib/aiagent-gateway
+LoadCredential=deployment.json:/etc/aiagent-gateway/deployment.json
+ExecStart=@BINARY@ host --config=%d/config.yaml --deployment=%d/deployment.json
+ExecStartPost=@BINARY@ --check-ready --config=%d/config.yaml
+Restart=on-failure
+RestartSec=2
+# Let the host drain ingress before stopping its workers. systemd still kills
+# every remaining cgroup member if the host exits or the stop timeout expires.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStartSec=60
+TimeoutStopSec=35
+RuntimeDirectory=aiagent-gateway aiagent-gateway-control
+RuntimeDirectoryMode=0700
 StateDirectory=aiagent-gateway
 StateDirectoryMode=0700
-ExecStart=/usr/local/bin/aiagent-gateway --config=%d/config.yaml
-ExecStartPost=/usr/local/bin/aiagent-gateway --check-ready --config=%d/config.yaml
-TimeoutStartSec=20
-Restart=on-failure
-RestartSec=3
-TimeoutStopSec=30
-KillSignal=SIGTERM
-LimitNOFILE=65536
+WorkingDirectory=/var/lib/aiagent-gateway
 UMask=0077
 NoNewPrivileges=true
-PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+ReadWritePaths=/var/lib/aiagent-gateway /run/aiagent-gateway /run/aiagent-gateway-control
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

@@ -48,7 +48,7 @@ func TestInstallSameRelease(t *testing.T) {
 				}
 				m.executable = renamed
 			}
-			d := Deployment{Version: 2, Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
+			d := Deployment{Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
 			raw, _ := json.Marshal(d)
 			for path, body := range map[string][]byte{
 				configPath: []byte("data_dir: /var/lib/aiagent-gateway\nadmin_token: unchanged-secret\n"),
