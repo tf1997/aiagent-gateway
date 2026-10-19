@@ -10,19 +10,21 @@ import (
 )
 
 type (
-	Gateway           = runtime.Gateway
-	Options           = runtime.Options
-	SharedServer      = runtime.SharedServer
-	Timeout           = protocol.Timeout
-	SessionPolicy     = protocol.SessionPolicy
-	Endpoint          = protocol.Endpoint
-	EndpointInterface = protocol.EndpointInterface
-	Route             = protocol.Route
-	Audit             = protocol.Audit
-	Receipt           = protocol.Receipt
-	Config            = protocol.Config
-	Caller            = protocol.Caller
-	Consumer          = protocol.Consumer
+	Gateway            = runtime.Gateway
+	Options            = runtime.Options
+	SharedServer       = runtime.SharedServer
+	StateView          = runtime.StateView
+	StateImageMetadata = runtime.StateImageMetadata
+	Timeout            = protocol.Timeout
+	SessionPolicy      = protocol.SessionPolicy
+	Endpoint           = protocol.Endpoint
+	EndpointInterface  = protocol.EndpointInterface
+	Route              = protocol.Route
+	Audit              = protocol.Audit
+	Receipt            = protocol.Receipt
+	Config             = protocol.Config
+	Caller             = protocol.Caller
+	Consumer           = protocol.Consumer
 )
 
 func Open(options Options) (*Gateway, error) { return runtime.Open(options) }
@@ -31,6 +33,10 @@ func ValidateOptions(options Options) error { return runtime.ValidateOptions(opt
 
 func NewSharedServer(g *Gateway, journal *state.Journal) (*SharedServer, error) {
 	return runtime.NewSharedServer(g, journal)
+}
+
+func OpenStateView(raw []byte, digest string, maxBytes int, options Options) (*StateView, error) {
+	return runtime.OpenStateView(raw, digest, maxBytes, options)
 }
 
 func ResolveShared(socket, token string, request releaseprotocol.Request) (releaseprotocol.Resolution, error) {

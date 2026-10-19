@@ -49,7 +49,8 @@ type Gateway struct {
 	sessionPersist    sync.Mutex
 	configFrozen      atomic.Bool
 	stateBarrier      shared.Barrier
-	backgroundStarted bool // protected by lifecycle
+	dispatcher        *shared.Server // assigned before state service starts
+	backgroundStarted bool           // protected by lifecycle
 
 	callerMu     sync.Mutex
 	callerCounts map[string]*atomic.Int64
@@ -94,10 +95,7 @@ func ValidateOptions(o Options) error {
 	return nil
 }
 
-func Open(o Options) (*Gateway, error) {
-	if err := ValidateOptions(o); err != nil {
-		return nil, err
-	}
+func defaultOptions(o Options) Options {
 	if o.MaxSessions <= 0 {
 		o.MaxSessions = 100000
 	}
@@ -125,6 +123,14 @@ func Open(o Options) (*Gateway, error) {
 	if o.HealthInterval <= 0 {
 		o.HealthInterval = 10 * time.Second
 	}
+	return o
+}
+
+func Open(o Options) (*Gateway, error) {
+	if err := ValidateOptions(o); err != nil {
+		return nil, err
+	}
+	o = defaultOptions(o)
 	var f *os.File
 	var remote *shared.Client
 	if o.StateClient != nil {

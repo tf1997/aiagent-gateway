@@ -30,11 +30,20 @@ func (s *Server) Resume() error                  { return s.barrier.resume() }
 func (s *Server) BarrierStatus() BarrierStatus   { return s.barrier.Status() }
 
 func (s *Server) Export() (Transfer, error) {
+	var v Transfer
+	err := s.Capture(func(captured Transfer) error { v = captured; return nil })
+	return v, err
+}
+
+// Capture keeps the backend and dispatcher frozen through a complete image.
+// The callback may inspect backend state, but must not reenter this server.
+// Waiting RPCs can still observe their own queue budget and deadline.
+func (s *Server) Capture(capture func(Transfer) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, ok := s.barrier.lockSealed()
 	if !ok {
-		return Transfer{}, fmt.Errorf("STATE_NOT_SEALED")
+		return fmt.Errorf("STATE_NOT_SEALED")
 	}
 	defer unlock()
 	v := Transfer{Epoch: s.epoch, Revision: s.revision}
@@ -46,7 +55,7 @@ func (s *Server) Export() (Transfer, error) {
 		r := s.replies[key]
 		v.Receipts = append(v.Receipts, Receipt{Key: key, Fingerprint: r.fingerprint, Response: copyResponse(r.response)})
 	}
-	return v, nil
+	return capture(v)
 }
 
 // Import is called on an unused, sealed dispatcher after its backend has been
@@ -63,23 +72,11 @@ func (s *Server) Import(v Transfer, nextEpoch string) error {
 	if s.revision != 0 || len(s.leases.items) != 0 || len(s.replies) != 0 {
 		return fmt.Errorf("STATE_IMPORT_REQUIRES_UNUSED_SEALED_DISPATCHER")
 	}
-	if v.Epoch == "" || nextEpoch == "" || nextEpoch == v.Epoch || len(v.Receipts) > 8192 || s.backend.RestoreLease == nil {
+	if nextEpoch == "" || nextEpoch == v.Epoch || s.backend.RestoreLease == nil {
 		return fmt.Errorf("INVALID_STATE_TRANSFER")
 	}
-	seen := map[string]bool{}
-	for _, l := range v.Leases {
-		if l.ID == "" || l.Worker == "" || seen[l.ID] {
-			return fmt.Errorf("INVALID_TRANSFER_LEASE")
-		}
-		seen[l.ID] = true
-	}
-	seen = map[string]bool{}
-	for _, r := range v.Receipts {
-		fingerprint, err := hex.DecodeString(r.Fingerprint)
-		if r.Key == "" || seen[r.Key] || err != nil || len(fingerprint) != sha256.Size || r.Response.Epoch != v.Epoch {
-			return fmt.Errorf("INVALID_TRANSFER_RECEIPT")
-		}
-		seen[r.Key] = true
+	if err := ValidateTransfer(v); err != nil {
+		return err
 	}
 	leases := map[string]lease{}
 	for _, record := range v.Leases {
@@ -101,6 +98,30 @@ func (s *Server) Import(v Transfer, nextEpoch string) error {
 	s.leases.items = leases
 	s.previousEpoch = v.Epoch
 	s.epoch, s.revision = nextEpoch, v.Revision
+	return nil
+}
+
+// ValidateTransfer checks transport identity without reconstructing leases or
+// advancing epoch. Runtime image validation also checks its resource counters.
+func ValidateTransfer(v Transfer) error {
+	if v.Epoch == "" || len(v.Receipts) > 8192 || uint64(len(v.Receipts)) > v.Revision {
+		return fmt.Errorf("INVALID_STATE_TRANSFER")
+	}
+	seen := map[string]bool{}
+	for _, l := range v.Leases {
+		if l.ID == "" || l.Worker == "" || seen[l.ID] {
+			return fmt.Errorf("INVALID_TRANSFER_LEASE")
+		}
+		seen[l.ID] = true
+	}
+	seen = map[string]bool{}
+	for _, r := range v.Receipts {
+		fingerprint, err := hex.DecodeString(r.Fingerprint)
+		if r.Key == "" || seen[r.Key] || err != nil || len(fingerprint) != sha256.Size || r.Response.Epoch != v.Epoch {
+			return fmt.Errorf("INVALID_TRANSFER_RECEIPT")
+		}
+		seen[r.Key] = true
+	}
 	return nil
 }
 

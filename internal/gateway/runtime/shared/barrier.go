@@ -15,6 +15,7 @@ type Barrier struct {
 	mu                     sync.Mutex
 	sealed                 bool
 	sealing                bool
+	captures               int
 	active, waiting, bytes int
 	changed                chan struct{}
 }
@@ -26,12 +27,13 @@ var ErrSealed = errors.New("STATE_HANDOFF_SEALED")
 type BarrierStatus struct {
 	Sealing, Sealed        bool
 	Active, Waiting, Bytes int
+	Captures               int
 }
 
 func (b *Barrier) Status() BarrierStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes}
+	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes, b.captures}
 }
 
 // TryEnter admits owner-local work without queueing it for a later owner.
@@ -144,6 +146,9 @@ func (b *Barrier) resume() error {
 	if b.sealing {
 		return fmt.Errorf("STATE_HANDOFF_SEAL_IN_PROGRESS")
 	}
+	if b.captures != 0 {
+		return fmt.Errorf("STATE_HANDOFF_SNAPSHOT_IN_PROGRESS")
+	}
 	b.sealed = false
 	b.signal()
 	return nil
@@ -157,5 +162,11 @@ func (b *Barrier) lockSealed() (func(), bool) {
 		b.mu.Unlock()
 		return nil, false
 	}
-	return b.mu.Unlock, true
+	b.captures++
+	b.mu.Unlock()
+	return sync.OnceFunc(func() {
+		b.mu.Lock()
+		b.captures--
+		b.mu.Unlock()
+	}), true
 }

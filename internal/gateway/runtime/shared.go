@@ -14,17 +14,21 @@ import (
 type SharedServer = shared.Server
 
 func NewSharedServer(g *Gateway, journal *state.Journal) (*SharedServer, error) {
+	if g.remote != nil || g.dispatcher != nil {
+		return nil, fmt.Errorf("shared server requires an unused state owner")
+	}
 	if err := g.EnableDurability(journal); err != nil {
 		return nil, err
 	}
 	g.resources.SetFailureHandler(func() { g.healthy.Store(false) })
-	return shared.NewServer(g.opts.AdminToken, shared.Backend{
+	g.dispatcher = shared.NewServer(g.opts.AdminToken, shared.Backend{
 		Barrier:      &g.stateBarrier,
 		Discover:     g.discoverShared,
 		Execute:      g.executeShared,
 		Freeze:       g.freezeConfig,
 		RestoreLease: g.restoreSharedLease,
-	}), nil
+	})
+	return g.dispatcher, nil
 }
 
 func (g *Gateway) discoverShared(ctx context.Context, q shared.Request) {
