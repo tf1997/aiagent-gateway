@@ -57,7 +57,13 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("open YAML config: %w", err)
 	}
 	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	return LoadReader(f, path)
+}
+
+// LoadReader supports a read-only inherited configuration descriptor. path is
+// the original configuration filename, used only to resolve relative paths.
+func LoadReader(r io.Reader, path string) (Config, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, (1<<20)+1))
 	if err != nil {
 		return Config{}, fmt.Errorf("read YAML config: %w", err)
 	}

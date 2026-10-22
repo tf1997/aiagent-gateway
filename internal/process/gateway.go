@@ -28,6 +28,12 @@ type Gateway struct {
 	shared                *shared.Server
 	entry                 *entry.Entry
 	journal, entryJournal *state.Journal
+	releaseJournal        *state.Journal
+	handoffMu             sync.Mutex
+	candidate             *CandidateProcess
+	dataDir               string
+	config                appconfig.Config
+	privateRoot           string
 	target                p.Target
 	identity              p.Identity
 	ingress               atomic.Bool
@@ -43,7 +49,7 @@ func OpenGateway(cfg appconfig.Config, target p.Target, identity p.Identity) (_ 
 	if identity.Incarnation != target.Incarnation || identity.Release != target.Release || identity.Instance != target.Instance {
 		return nil, fmt.Errorf("process identity differs from traffic target")
 	}
-	n := &Gateway{target: target, identity: identity}
+	n := &Gateway{target: target, identity: identity, dataDir: cfg.DataDir, config: cfg, privateRoot: filepath.Join(filepath.Dir(cfg.StateSocket), "p")}
 	defer func() {
 		if err != nil {
 			n.Close()
@@ -75,6 +81,9 @@ func OpenGateway(cfg appconfig.Config, target p.Target, identity p.Identity) (_ 
 	if err != nil {
 		return nil, err
 	}
+	if err = n.shared.InitializeEpoch(n.owner.Decision().Epoch); err != nil {
+		return nil, err
+	}
 	opts.StateClient = shared.NewLocalClient(n.shared, identity.Incarnation)
 	opts.WorkerID = identity.Incarnation
 	n.business, err = gateway.Open(opts)
@@ -89,6 +98,7 @@ func OpenGateway(cfg appconfig.Config, target p.Target, identity p.Identity) (_ 
 	if err != nil {
 		return nil, err
 	}
+	n.entry.SetAdmission(n.shared.Admit)
 	if err = n.entry.SetLocal(target, n.execute); err != nil {
 		return nil, err
 	}
@@ -96,6 +106,11 @@ func OpenGateway(cfg appconfig.Config, target p.Target, identity p.Identity) (_ 
 	if err = n.entry.Apply(revision, p.Traffic{Revision: revision + 1, Stable: target}); err != nil {
 		return nil, err
 	}
+	n.releaseJournal, err = state.Open(filepath.Join(cfg.DataDir, "release"))
+	if err != nil {
+		return nil, err
+	}
+	n.releaseJournal.SetAdmission(n.shared.Admit)
 	n.execution.Store(true)
 	n.ingress.Store(true)
 	n.core.StartBackground()
@@ -116,7 +131,7 @@ func (n *Gateway) Ready() bool {
 }
 
 func (n *Gateway) StorageHealthy() bool {
-	return n.core.StateHealthy() && n.journal.Healthy() == nil && n.entryJournal.Healthy() == nil
+	return n.core.StateHealthy() && n.journal.Healthy() == nil && n.entryJournal.Healthy() == nil && n.releaseJournal.Healthy() == nil
 }
 
 func (n *Gateway) DataHandler() http.Handler {
@@ -156,6 +171,9 @@ func (n *Gateway) Close() error {
 		}
 		if n.entryJournal != nil {
 			n.closeErr = errors.Join(n.closeErr, n.entryJournal.Close())
+		}
+		if n.releaseJournal != nil {
+			n.closeErr = errors.Join(n.closeErr, n.releaseJournal.Close())
 		}
 		if n.journal != nil {
 			n.closeErr = errors.Join(n.closeErr, n.journal.Close())

@@ -16,9 +16,32 @@ type Barrier struct {
 	sealed                 bool
 	sealing                bool
 	captures               int
+	revision               uint64
+	limits                 QueueLimits
+	timeouts, rejected     uint64
 	active, waiting, bytes int
 	changed                chan struct{}
 }
+
+// QueueLimits applies to calls waiting for a state handoff. Zero values select
+// the production defaults; configuration is fixed before admission starts.
+type QueueLimits struct {
+	Requests int
+	Bytes    int
+	Wait     time.Duration
+}
+
+func (b *Barrier) Configure(limits QueueLimits) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.active != 0 || b.waiting != 0 || b.revision != 0 || b.sealed || limits.Requests < 0 || limits.Bytes < 0 || limits.Wait < 0 {
+		return fmt.Errorf("INVALID_STATE_QUEUE_CONFIGURATION")
+	}
+	b.limits = limits
+	return nil
+}
+
+func (b *Barrier) Revision() uint64 { b.mu.Lock(); defer b.mu.Unlock(); return b.revision }
 
 var ErrSealed = errors.New("STATE_HANDOFF_SEALED")
 
@@ -28,12 +51,14 @@ type BarrierStatus struct {
 	Sealing, Sealed        bool
 	Active, Waiting, Bytes int
 	Captures               int
+	Revision               uint64
+	Timeouts, Rejected     uint64
 }
 
 func (b *Barrier) Status() BarrierStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes, b.captures}
+	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes, b.captures, b.revision, b.timeouts, b.rejected}
 }
 
 // TryEnter admits owner-local work without queueing it for a later owner.
@@ -56,6 +81,9 @@ func (b *Barrier) leave() func() {
 		once.Do(func() {
 			b.mu.Lock()
 			b.active--
+			// Every admitted operation may change memory, even a cache lookup.
+			// Advance only after persistence and cleanup have both completed.
+			b.revision++
 			b.signal()
 			b.mu.Unlock()
 		})
@@ -75,13 +103,24 @@ func (b *Barrier) enter(ctx context.Context, size int) (func(), error) {
 		b.changed = make(chan struct{})
 	}
 	if b.sealed {
-		if b.waiting >= 1024 || size > (16<<20)-b.bytes {
+		limits := b.limits
+		if limits.Requests == 0 {
+			limits.Requests = 1024
+		}
+		if limits.Bytes == 0 {
+			limits.Bytes = 16 << 20
+		}
+		if limits.Wait == 0 {
+			limits.Wait = 2 * time.Second
+		}
+		if size < 0 || b.waiting >= limits.Requests || size > limits.Bytes-b.bytes {
+			b.rejected++
 			b.mu.Unlock()
 			return nil, fmt.Errorf("STATE_HANDOFF_QUEUE_FULL")
 		}
 		b.waiting++
 		b.bytes += size
-		waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		waitCtx, cancel := context.WithTimeout(ctx, limits.Wait)
 		defer cancel()
 		for b.sealed && waitCtx.Err() == nil {
 			changed := b.changed
@@ -95,6 +134,7 @@ func (b *Barrier) enter(ctx context.Context, size int) (func(), error) {
 		b.waiting--
 		b.bytes -= size
 		if waitCtx.Err() != nil {
+			b.timeouts++
 			b.mu.Unlock()
 			return nil, fmt.Errorf("STATE_HANDOFF_WAIT_TIMEOUT: %w", waitCtx.Err())
 		}

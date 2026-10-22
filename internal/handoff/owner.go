@@ -116,6 +116,7 @@ type Owner struct {
 	lock     *os.File
 	journal  *state.Journal
 	decision Decision
+	dir      string
 }
 
 func Acquire(dir string, identity Identity) (*Owner, error) {
@@ -134,7 +135,7 @@ func Acquire(dir string, identity Identity) (*Owner, error) {
 		lock.Close()
 		return nil, fmt.Errorf("state owner already active: %w", err)
 	}
-	o := &Owner{identity: identity, lock: lock}
+	o := &Owner{identity: identity, lock: lock, dir: dir}
 	fail := func(err error) (*Owner, error) { o.Close(); return nil, err }
 	if o.journal, err = state.Open(filepath.Join(dir, "handoff")); err != nil {
 		return fail(err)

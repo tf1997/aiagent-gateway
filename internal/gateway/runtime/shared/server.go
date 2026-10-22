@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"aiagent-gateway/internal/gateway/protocol"
@@ -38,6 +39,7 @@ type Server struct {
 	leases        Leases
 	replies       map[string]cachedReply
 	order         []string
+	retired       map[string]uint64
 }
 
 type cachedReply struct {
@@ -50,12 +52,42 @@ func NewServer(token string, backend Backend) *Server {
 	if barrier == nil {
 		barrier = &Barrier{}
 	}
-	return &Server{barrier: barrier, epoch: releaseprotocol.ID("state_"), token: token, backend: backend, leases: Leases{items: map[string]lease{}}, replies: map[string]cachedReply{}}
+	return &Server{barrier: barrier, epoch: releaseprotocol.ID("state_"), token: token, backend: backend, leases: Leases{items: map[string]lease{}}, replies: map[string]cachedReply{}, retired: map[string]uint64{}}
 }
 
+// InitializeEpoch binds an unused dispatcher to the process owner decision.
+func (s *Server) InitializeEpoch(epoch string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if epoch == "" || s.barrier.Revision() != 0 || len(s.replies) != 0 {
+		return fmt.Errorf("STATE_EPOCH_ALREADY_ACTIVE")
+	}
+	s.epoch = epoch
+	return nil
+}
+
+// Admit extends the owner barrier to entry and release writes in this process.
+func (s *Server) Admit() (func(), error)                  { return s.barrier.TryEnter() }
+func (s *Server) ConfigureQueue(limits QueueLimits) error { return s.barrier.Configure(limits) }
+
 func (s *Server) Handler() http.Handler {
+	return s.handler(s.token, "")
+}
+
+// HandlerFor binds a private channel credential to one execution holder.
+// A candidate cannot claim another holder or invoke owner lifecycle controls.
+func (s *Server) HandlerFor(token, worker string) http.Handler {
+	if token == "" || worker == "" {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			protocol.Problem(w, 403, "INVALID_STATE_PEER")
+		})
+	}
+	return s.handler(token, worker)
+}
+
+func (s *Server) handler(token, worker string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.token)) != 1 {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
 			protocol.Problem(w, 401, "UNAUTHORIZED")
 			return
 		}
@@ -66,6 +98,10 @@ func (s *Server) Handler() http.Handler {
 		var q Request
 		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<20)).Decode(&q) != nil {
 			protocol.Problem(w, 400, "INVALID_REQUEST")
+			return
+		}
+		if worker != "" && (q.Worker != worker || q.Action == "retire" || q.Action == "freeze") {
+			protocol.Problem(w, 403, "STATE_PEER_FORBIDDEN")
 			return
 		}
 		protocol.WriteJSON(w, 200, s.dispatch(r.Context(), q))
@@ -113,13 +149,24 @@ func (s *Server) dispatch(ctx context.Context, q Request) (out Response) {
 		out.Epoch = s.epoch
 		return out
 	}
+	readOnly := q.Action == "config" || q.Action == "status" || q.Action == "resolve" || q.Action == "list" || q.Action == "lookup" || q.Action == "cache_get"
+	stream, sequence := operationSequence(q.ID)
+	if floor, retired := s.retired[q.Worker+"/"+stream]; retired && !readOnly {
+		if sequence <= floor {
+			return Response{Epoch: s.epoch, Error: "OPERATION_RESULT_UNKNOWN"}
+		}
+	}
 	out = s.backend.Execute(q, &s.leases)
 	s.revision++
 	out.Epoch = s.epoch
-	if q.Action != "config" && q.Action != "status" && q.Action != "resolve" && q.Action != "list" && q.Action != "lookup" && q.Action != "cache_get" {
+	if !readOnly {
 		s.replies[key] = cachedReply{fingerprint: fingerprint, response: copyResponse(out)}
 		s.order = append(s.order, key)
 		if len(s.order) > 8192 {
+			worker, id, _ := strings.Cut(s.order[0], "/")
+			stream, sequence := operationSequence(id)
+			boundary := worker + "/" + stream
+			s.retired[boundary] = max(s.retired[boundary], sequence)
 			delete(s.replies, s.order[0])
 			s.order = s.order[1:]
 		}

@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,6 +30,8 @@ type Client struct {
 	client                *http.Client
 	failed                atomic.Bool
 	active                atomic.Int64
+	sequence              atomic.Uint64
+	stream                string
 	pendingMu             sync.Mutex
 	pending               map[string]*pendingRelease
 }
@@ -39,7 +43,7 @@ type pendingRelease struct {
 }
 
 func NewClient(socket, token, worker string) *Client {
-	return &Client{socket: socket, token: token, worker: worker, client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+	return &Client{socket: socket, token: token, worker: worker, stream: releaseprotocol.ID(""), client: &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	}}}}
 }
@@ -47,7 +51,7 @@ func NewClient(socket, token, worker string) *Client {
 // NewLocalClient uses the same dispatcher and value-copy boundary as a UDS
 // client. It owns no network connections and never closes the shared server.
 func NewLocalClient(server *Server, worker string) *Client {
-	return &Client{local: server, worker: worker}
+	return &Client{local: server, worker: worker, stream: releaseprotocol.ID("")}
 }
 
 func (c *Client) Call(action string, q Request, out *Response) error {
@@ -66,7 +70,7 @@ func (c *Client) CallContext(ctx context.Context, action string, q Request, out 
 	q.Action = action
 	q.Worker = c.worker
 	if q.ID == "" {
-		q.ID = releaseprotocol.ID("op_")
+		q.ID = c.operationID()
 	}
 	raw, err := json.Marshal(q)
 	if err != nil {
@@ -149,7 +153,7 @@ func (c *Client) Release(id string) func() {
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			op := &pendingRelease{request: Request{ID: releaseprotocol.ID("op_"), Lease: id}}
+			op := &pendingRelease{request: Request{ID: c.operationID(), Lease: id}}
 			c.pendingMu.Lock()
 			if c.pending == nil {
 				c.pending = map[string]*pendingRelease{}
@@ -159,6 +163,29 @@ func (c *Client) Release(id string) func() {
 			_ = c.retryRelease(context.Background(), op)
 		})
 	}
+}
+
+// Sequence is part of operation identity and therefore survives every retry.
+// Arbitrary caller-supplied IDs remain valid while their receipt is retained;
+// after eviction they fail closed instead of silently executing again.
+func (c *Client) operationID() string {
+	return fmt.Sprintf("op_%s_%020d", c.stream, c.sequence.Add(1))
+}
+
+func operationSequence(id string) (string, uint64) {
+	if len(id) != 56 || !strings.HasPrefix(id, "op_") || id[35] != '_' {
+		return "", 0
+	}
+	for _, ch := range id[3:35] {
+		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			return "", 0
+		}
+	}
+	n, err := strconv.ParseUint(id[36:], 10, 64)
+	if err != nil || n == 0 {
+		return "", 0
+	}
+	return id[3:35], n
 }
 
 func (c *Client) retryRelease(ctx context.Context, op *pendingRelease) error {
@@ -233,6 +260,37 @@ func (c *Client) AdoptLocal(ctx context.Context, previousEpoch, nextEpoch string
 		c.client.CloseIdleConnections()
 	}
 	c.local, c.epoch = server, nextEpoch
+	c.failed.Store(false)
+	return nil
+}
+
+// RestoreRemote is only called after the coordinator has durably aborted a
+// yielded handoff and restored its original epoch. It cannot accept an
+// unexpected generation or change the authenticated remote endpoint.
+func (c *Client) RestoreRemote(ctx context.Context, epoch string) error {
+	for !c.accessMu.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	defer c.accessMu.Unlock()
+	c.epochMu.Lock()
+	defer c.epochMu.Unlock()
+	if epoch == "" || c.epoch != epoch || c.local != nil || c.client == nil {
+		return fmt.Errorf("STATE_RESTORATION_MISMATCH")
+	}
+	probe := NewClient(c.socket, c.token, c.worker)
+	defer probe.Close()
+	var response Response
+	if err := probe.CallContext(ctx, "config", Request{}, &response); err != nil {
+		return err
+	}
+	if response.Epoch != epoch {
+		return fmt.Errorf("STATE_RESTORATION_MISMATCH")
+	}
+	c.client.CloseIdleConnections()
 	c.failed.Store(false)
 	return nil
 }

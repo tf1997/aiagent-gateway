@@ -127,6 +127,10 @@ func defaultOptions(o Options) Options {
 }
 
 func Open(o Options) (*Gateway, error) {
+	return open(o, nil)
+}
+
+func open(o Options, image *stateImage) (*Gateway, error) {
 	if err := ValidateOptions(o); err != nil {
 		return nil, err
 	}
@@ -193,6 +197,8 @@ func Open(o Options) (*Gateway, error) {
 			}
 			return fail(err)
 		}
+	} else if image != nil {
+		c, g.legacyRaw = image.Config, image.LegacyConfig
 	} else {
 		c, g.legacyRaw, err = configuration.LoadStore(o.DataDir)
 	}

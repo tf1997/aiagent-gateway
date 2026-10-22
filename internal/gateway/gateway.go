@@ -39,6 +39,14 @@ func OpenStateView(raw []byte, digest string, maxBytes int, options Options) (*S
 	return runtime.OpenStateView(raw, digest, maxBytes, options)
 }
 
+func OpenStateOwner(options Options, view *StateView, journal *state.Journal, epoch string) (*Gateway, *SharedServer, error) {
+	return runtime.OpenStateOwner(options, view, journal, epoch)
+}
+
+func RestoreStateOwner(options Options, view *StateView, journal *state.Journal) (*Gateway, *SharedServer, error) {
+	return runtime.RestoreStateOwner(options, view, journal)
+}
+
 func ResolveShared(socket, token string, request releaseprotocol.Request) (releaseprotocol.Resolution, error) {
 	return runtime.ResolveShared(socket, token, request)
 }

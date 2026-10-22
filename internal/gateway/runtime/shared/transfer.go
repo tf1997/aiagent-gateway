@@ -19,10 +19,11 @@ type Receipt struct {
 // handoff. Runtime state is supplied by the backend in the same sealed section.
 // It is not a cold-start image: dead process leases must not be resurrected.
 type Transfer struct {
-	Epoch    string        `json:"epoch"`
-	Revision uint64        `json:"logical_revision"`
-	Leases   []LeaseRecord `json:"leases"`
-	Receipts []Receipt     `json:"receipts"`
+	Epoch    string            `json:"epoch"`
+	Revision uint64            `json:"logical_revision"`
+	Leases   []LeaseRecord     `json:"leases"`
+	Receipts []Receipt         `json:"receipts"`
+	Retired  map[string]uint64 `json:"receipt_retirement_floors,omitempty"`
 }
 
 func (s *Server) Seal(ctx context.Context) error { return s.barrier.seal(ctx) }
@@ -46,7 +47,13 @@ func (s *Server) Capture(capture func(Transfer) error) error {
 		return fmt.Errorf("STATE_NOT_SEALED")
 	}
 	defer unlock()
-	v := Transfer{Epoch: s.epoch, Revision: s.revision}
+	v := Transfer{Epoch: s.epoch, Revision: s.barrier.Revision()}
+	if len(s.retired) > 0 {
+		v.Retired = make(map[string]uint64, len(s.retired))
+		for worker, floor := range s.retired {
+			v.Retired[worker] = floor
+		}
+	}
 	for _, l := range s.leases.items {
 		v.Leases = append(v.Leases, l.record)
 	}
@@ -62,6 +69,16 @@ func (s *Server) Capture(capture func(Transfer) error) error {
 // restored. The caller must hold the process owner lock, verify the sealed
 // snapshot, commit ownership, then explicitly activate clients and Resume.
 func (s *Server) Import(v Transfer, nextEpoch string) error {
+	return s.importState(v, nextEpoch, false)
+}
+
+// RestoreSource rebuilds the original epoch after a yielded handoff is durably
+// aborted. The coordinator must reacquire every writer lock before resuming.
+func (s *Server) RestoreSource(v Transfer) error {
+	return s.importState(v, v.Epoch, true)
+}
+
+func (s *Server) importState(v Transfer, nextEpoch string, restoreSource bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, ok := s.barrier.lockSealed()
@@ -72,7 +89,7 @@ func (s *Server) Import(v Transfer, nextEpoch string) error {
 	if s.revision != 0 || len(s.leases.items) != 0 || len(s.replies) != 0 {
 		return fmt.Errorf("STATE_IMPORT_REQUIRES_UNUSED_SEALED_DISPATCHER")
 	}
-	if nextEpoch == "" || nextEpoch == v.Epoch || s.backend.RestoreLease == nil {
+	if nextEpoch == "" || (!restoreSource && nextEpoch == v.Epoch) || s.backend.RestoreLease == nil {
 		return fmt.Errorf("INVALID_STATE_TRANSFER")
 	}
 	if err := ValidateTransfer(v); err != nil {
@@ -96,8 +113,14 @@ func (s *Server) Import(v Transfer, nextEpoch string) error {
 		s.order = append(s.order, r.Key)
 	}
 	s.leases.items = leases
+	for worker, floor := range v.Retired {
+		s.retired[worker] = floor
+	}
 	s.previousEpoch = v.Epoch
 	s.epoch, s.revision = nextEpoch, v.Revision
+	s.barrier.mu.Lock()
+	s.barrier.revision = v.Revision
+	s.barrier.mu.Unlock()
 	return nil
 }
 
@@ -106,6 +129,11 @@ func (s *Server) Import(v Transfer, nextEpoch string) error {
 func ValidateTransfer(v Transfer) error {
 	if v.Epoch == "" || len(v.Receipts) > 8192 || uint64(len(v.Receipts)) > v.Revision {
 		return fmt.Errorf("INVALID_STATE_TRANSFER")
+	}
+	for worker := range v.Retired {
+		if worker == "" {
+			return fmt.Errorf("INVALID_RECEIPT_RETIREMENT_FLOOR")
+		}
 	}
 	seen := map[string]bool{}
 	for _, l := range v.Leases {

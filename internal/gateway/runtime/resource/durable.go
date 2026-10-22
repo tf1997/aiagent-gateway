@@ -97,6 +97,19 @@ func (d *Directory) EnableDurability(j *state.Journal, validEndpoint func(route,
 			r.operationRefs++
 		}
 	}
+	d.attachDurability(j)
+	return nil
+}
+
+// AttachDurability attaches an already locked journal to an exact imported
+// image. It neither reads the cold-start representation nor commits anything.
+func (d *Directory) AttachDurability(j *state.Journal) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.attachDurability(j)
+}
+
+func (d *Directory) attachDurability(j *state.Journal) {
 	d.persist = func() error {
 		resources := map[string]json.RawMessage{}
 		operations := map[string]json.RawMessage{}
@@ -121,7 +134,6 @@ func (d *Directory) EnableDurability(j *state.Journal, validEndpoint func(route,
 		}
 		return j.Replace("runtime/", values)
 	}
-	return nil
 }
 
 func (d *Directory) commit(err *error) {

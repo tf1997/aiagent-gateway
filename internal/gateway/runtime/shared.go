@@ -20,6 +20,10 @@ func NewSharedServer(g *Gateway, journal *state.Journal) (*SharedServer, error) 
 	if err := g.EnableDurability(journal); err != nil {
 		return nil, err
 	}
+	return g.newDispatcher(), nil
+}
+
+func (g *Gateway) newDispatcher() *SharedServer {
 	g.resources.SetFailureHandler(func() { g.healthy.Store(false) })
 	g.dispatcher = shared.NewServer(g.opts.AdminToken, shared.Backend{
 		Barrier:      &g.stateBarrier,
@@ -28,7 +32,7 @@ func NewSharedServer(g *Gateway, journal *state.Journal) (*SharedServer, error) 
 		Freeze:       g.freezeConfig,
 		RestoreLease: g.restoreSharedLease,
 	})
-	return g.dispatcher, nil
+	return g.dispatcher
 }
 
 func (g *Gateway) discoverShared(ctx context.Context, q shared.Request) {

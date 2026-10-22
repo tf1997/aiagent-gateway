@@ -121,6 +121,16 @@ func (d *Directory) Pin(k protocol.ResourceKey) (protocol.Resource, func(), erro
 		}
 		return out.Resource, d.remote.Release(out.Lease), nil
 	}
+	return d.pin(k, true)
+}
+
+// RestorePin rebuilds a lease without refreshing the resource's exact TTL.
+func (d *Directory) RestorePin(k protocol.ResourceKey) (func(), error) {
+	_, release, err := d.pin(k, false)
+	return release, err
+}
+
+func (d *Directory) pin(k protocol.ResourceKey, touch bool) (protocol.Resource, func(), error) {
 	d.mu.Lock()
 	r := d.lookupLocked(k)
 	if r == nil {
@@ -128,7 +138,9 @@ func (d *Directory) Pin(k protocol.ResourceKey) (protocol.Resource, func(), erro
 		return protocol.Resource{}, nil, protocol.ErrResourceNotFound
 	}
 	r.ActiveRefs++
-	d.touchLocked(r, d.now())
+	if touch {
+		d.touchLocked(r, d.now())
+	}
 	out := r.Resource
 	d.mu.Unlock()
 	var once sync.Once

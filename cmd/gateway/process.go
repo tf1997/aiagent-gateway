@@ -22,19 +22,15 @@ import (
 func runProcess(args []string) int {
 	fs := flag.NewFlagSet("process", flag.ContinueOnError)
 	config := fs.String("config", appconfig.DefaultPath, "YAML configuration file")
+	candidateFD := fs.Int("candidate-fd", 0, "inherited complete-process handshake descriptor")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
 		}
 		return 2
 	}
-	if fs.NArg() != 0 {
+	if fs.NArg() != 0 || (*candidateFD != 0 && *candidateFD != 7) {
 		return 2
-	}
-	cfg, err := appconfig.Load(*config)
-	if err != nil {
-		slog.Error("process config failed", "error", err)
-		return 1
 	}
 	path, err := os.Executable()
 	if err != nil {
@@ -54,10 +50,22 @@ func runProcess(args []string) int {
 		return 1
 	}
 	identity := p.Identity{PID: os.Getpid(), Release: hex.EncodeToString(h.Sum(nil)), Instance: "a", Incarnation: p.ID("process_")}
-	target := p.Target{Artifact: path, Release: identity.Release, Instance: identity.Instance, Incarnation: identity.Incarnation,
-		URL: "http://gateway", Socket: filepath.Join(filepath.Dir(cfg.StateSocket), "p", identity.Incarnation, "business.sock")}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if *candidateFD != 0 {
+		if err = process.ServeCandidate(ctx, identity.Release); err != nil {
+			slog.Error("candidate process failed", "error", err)
+			return 1
+		}
+		return 0
+	}
+	cfg, err := appconfig.Load(*config)
+	if err != nil {
+		slog.Error("process config failed", "error", err)
+		return 1
+	}
+	target := p.Target{Artifact: path, Release: identity.Release, Instance: identity.Instance, Incarnation: identity.Incarnation,
+		URL: "http://gateway", Socket: filepath.Join(filepath.Dir(cfg.StateSocket), "p", identity.Incarnation, "business.sock")}
 	if err = process.ServeGateway(ctx, cfg, target, identity); err != nil {
 		slog.Error("complete process failed", "error", err)
 		return 1

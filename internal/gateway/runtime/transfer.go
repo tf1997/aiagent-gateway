@@ -13,8 +13,7 @@ import (
 func (g *Gateway) restoreSharedLease(record shared.LeaseRecord) (func(), error) {
 	switch record.Kind {
 	case "pin":
-		_, release, err := g.resources.Pin(record.Resource)
-		return release, err
+		return g.resources.RestorePin(record.Resource)
 	case "cache_acquire":
 		if record.Entry != "tasks" && record.Entry != "sessions" {
 			return nil, fmt.Errorf("invalid list lease")

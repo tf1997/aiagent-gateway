@@ -85,7 +85,7 @@ func (s *Worker) execute(w http.ResponseWriter, r *http.Request, done func(relea
 		}
 		result := o.finish(r.Context())
 		done(result)
-		_ = s.backend.Remote.Call("request_result", shared.Request{ID: r.Header.Get(releaseprotocol.RequestHeader), Flag: result.Verdict == "failure"}, nil)
+		_ = s.backend.Remote.Call("request_result", shared.Request{Flag: result.Verdict == "failure"}, nil)
 	}()
 	s.backend.Handler.ServeHTTP(o, r)
 }

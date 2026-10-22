@@ -35,6 +35,10 @@ type Entry struct {
 	localTarget p.Target
 	local       func(http.ResponseWriter, *http.Request, func(p.Result))
 	private     map[string]*http.Transport
+	peerTokens  map[p.Target]string
+	sealed      bool
+	changed     chan struct{}
+	admission   func() (func(), error)
 }
 
 func Open(j *state.Journal, token string, resolve Resolver) (*Entry, error) {
@@ -113,6 +117,21 @@ func (e *Entry) SetLocal(target p.Target, execute func(http.ResponseWriter, *htt
 	return nil
 }
 
+// SetPeer installs an ephemeral credential for an exact candidate identity.
+// It is never persisted with routing metadata or exposed in status.
+func (e *Entry) SetPeer(target p.Target, token string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !validTarget(target) || token == "" {
+		return fmt.Errorf("invalid private executor")
+	}
+	if e.peerTokens == nil {
+		e.peerTokens = map[p.Target]string{}
+	}
+	e.peerTokens[target] = token
+	return nil
+}
+
 func (e *Entry) transportFor(target p.Target) http.RoundTripper {
 	if target.Socket == "" {
 		return e.transport
@@ -142,8 +161,16 @@ func (e *Entry) Close() {
 	}
 }
 func (e *Entry) Apply(expected uint64, next p.Traffic) error {
+	leave, err := e.admit()
+	if err != nil {
+		return err
+	}
+	defer leave()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.sealed {
+		return fmt.Errorf("ENTRY_HANDOFF_SEALED")
+	}
 	if e.j.Healthy() != nil {
 		return fmt.Errorf("entry persistence unavailable")
 	}
@@ -204,8 +231,16 @@ func (e *Entry) Stats(since time.Time, worker string) p.Statistics {
 	return out
 }
 func (e *Entry) start(key, preferred string) (p.Target, p.Result, error) {
+	leave, err := e.admit()
+	if err != nil {
+		return p.Target{}, p.Result{}, err
+	}
+	defer leave()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.sealed {
+		return p.Target{}, p.Result{}, fmt.Errorf("ENTRY_HANDOFF_SEALED")
+	}
 	if e.j.Healthy() != nil {
 		return p.Target{}, p.Result{}, fmt.Errorf("entry storage unavailable")
 	}
@@ -251,9 +286,18 @@ func (e *Entry) start(key, preferred string) (p.Target, p.Result, error) {
 	return t, r, nil
 }
 func (e *Entry) finish(r p.Result) {
+	leave, err := e.admit()
+	if err != nil {
+		return
+	} // Seal requires the entry to have drained first.
+	defer leave()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.active, r.ID)
+	if e.changed != nil {
+		close(e.changed)
+		e.changed = nil
+	}
 	if e.traffic.Rollout != "" {
 		if len(e.results) < 8192 {
 			e.results[r.ID] = r
@@ -355,6 +399,7 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 	e.mu.Lock()
 	local, localTarget := e.local, e.localTarget
+	peerToken := e.peerTokens[target]
 	e.mu.Unlock()
 	if local != nil && target == localTarget {
 		r.Header.Set(p.RequestHeader, result.ID)
@@ -367,6 +412,10 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		pr.Out.Host = pr.In.Host
 		pr.Out.Header.Set(p.RequestHeader, result.ID)
 		pr.Out.Header.Set(p.AuthHeader, e.token)
+		if peerToken != "" {
+			pr.Out.Header.Set(p.AuthHeader, peerToken)
+			pr.Out.Header.Set(p.WorkerHeader, target.Incarnation)
+		}
 	}, ModifyResponse: func(res *http.Response) error {
 		if res.Header.Get(p.WorkerHeader) != target.Incarnation {
 			return fmt.Errorf("unexpected worker incarnation")

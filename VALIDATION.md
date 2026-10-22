@@ -1,5 +1,21 @@
 # 验证记录
 
+## 完整网关状态交接与候选恢复（2026-10-22）
+
+环境：macOS arm64、Go 1.24.4。使用临时数据目录、真实 loopback TCP/Unix Socket、实际候选子进程与模拟上游。
+
+- `go test ./...`、`go test -race ./...`、`go vet ./...` 通过；最后的恢复输入校验改动另行通过 process 包竞态检查及 vet。
+- 跨域快照包含共享业务、entry 分配/证据和 release journal，先持久化快照再写 SEALED；校验失败保留旧 owner。租约、回执和淘汰边界经显式 epoch 接管迁移。
+- 实际候选 SSE 跨 COMMITTED 继续输出并释放租约；让锁后恢复源也保留原流与最新会话状态，后续入口仍可转发到原候选。
+- 分别丢弃验证、提交和激活回执：验证失败恢复旧 owner；提交/激活回执丢失经原私有凭据核对持久决定和实际子进程身份，恢复新版激活，不回滚、不重放业务。
+- 提交与源恢复并发争锁，只有一个可写运行时成功；COMMITTED 后拒绝源恢复和旧源停止新版。恢复通知取消后仍记录原候选、拒绝第三实例，允许明确重试。
+- `Gateway.TransferHandoff` / `ResolveHandoff` 验证上述协调路径；HTTP 激活与整个发布 COMPLETED 分别处理，尚不宣称已完成 MainPID/控制权移交。
+- macOS 构建及 `deploy/rollout-process/check.py` 通过，覆盖单 PID HTTP/鉴权、上游一次执行、SSE 停机排空与持久重启。
+- Linux amd64/arm64 静态交叉构建通过，本轮未在 Linux 运行这些产物。
+- `deploy/rollout-local/check.py` 通过，覆盖现有 host/worker 的 A→B→C、失败回退、长流排空、无 POST 重放和崩溃清理。
+
+完整自动灰度仍缺有界增量追赶、双入口分配与直接入口样本、常驻发布控制器和正式安装/控制/systemd 接管。本轮未运行真实 systemd、实际 Agent 换版或容量验收；默认 install 保持现有行为。当前进度见 [实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
+
 ## 完整网关灰度基础实现（2026-10-19）
 
 本轮完成真实 Linux/systemd 交接原型验证，并接通 `process` 单进程开发入口和租约/回执迁移基础接口。完整状态快照、自动交接控制器和默认安装切换尚未完成；详细范围见 [完整网关灰度实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。

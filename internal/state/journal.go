@@ -30,13 +30,14 @@ type envelope struct {
 // Journal is exclusively locked for its lifetime. A failed commit poisons the
 // handle: callers must fail closed and reopen rather than guess what committed.
 type Journal struct {
-	mu       sync.Mutex
-	f, lock  *os.File
-	path     string
-	sequence uint64
-	values   map[string]json.RawMessage
-	failed   error
-	commits  int
+	mu        sync.Mutex
+	f, lock   *os.File
+	path      string
+	sequence  uint64
+	values    map[string]json.RawMessage
+	failed    error
+	commits   int
+	admission func() (func(), error)
 }
 
 const maxFrame = 256 << 20
@@ -172,8 +173,26 @@ func (j *Journal) Snapshot() map[string]json.RawMessage {
 }
 func (j *Journal) Healthy() error { j.mu.Lock(); defer j.mu.Unlock(); return j.failed }
 
+// SetAdmission connects domain commits to their process owner's write barrier.
+// It is configured before the domain controller begins serving requests.
+func (j *Journal) SetAdmission(admit func() (func(), error)) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.admission = admit
+}
+
 // Replace commits only changes in prefix. It never overwrites another domain.
 func (j *Journal) Replace(prefix string, values map[string]json.RawMessage) error {
+	j.mu.Lock()
+	admit := j.admission
+	j.mu.Unlock()
+	if admit != nil {
+		leave, err := admit()
+		if err != nil {
+			return err
+		}
+		defer leave()
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.failed != nil {

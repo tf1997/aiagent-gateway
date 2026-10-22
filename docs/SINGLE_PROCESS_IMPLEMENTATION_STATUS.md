@@ -1,16 +1,16 @@
 # 完整网关灰度实现进度
 
-更新日期：2026-10-19。目标与验收标准见 [实施方案](SINGLE_PROCESS_ROLLOUT_PLAN.md)。
+更新日期：2026-10-22。目标与验收标准见 [实施方案](SINGLE_PROCESS_ROLLOUT_PLAN.md)。
 
-已接通单进程基础运行时，完成真实 Linux/systemd 进程交接原型，并加入状态租约、回执迁移、共享业务状态统一写入屏障，以及精确共享状态镜像、只读导入和分块校验。**完整网关自动灰度尚未完成；默认 install 仍采用 host + worker。**
+已接通单进程基础运行时、跨域持久快照、真实候选进程与可恢复写入权交接，验证了候选 SSE 跨提交、提交/激活回执丢失和让锁后恢复。此前已完成真实 Linux/systemd 生命周期原型。**完整网关自动灰度尚未完成；默认 install 仍采用 host + worker。**
 
 ## 当前交付
 
 | 阶段 | 已实现和验证 | 尚未完成 |
 | --- | --- | --- |
 | P0 | 独占 owner 锁；PREPARED/SEALED/COMMITTED/ABORTED 决定；只读启动选择；监听 FD 继承；MainPID 与 READY 屏障；真实 systemd A→B→C | 原型是身份探针，业务状态交接需另行验收；未声明最低支持 systemd 版本 |
-| P1 | `process` 开发入口；同一 PID 内入口、本地业务处理、状态 owner；本地 dispatcher 与 UDS 共用语义；入口接纳和状态服务分离；持久状态恢复 | 发布控制器、候选启动与私有进程端点尚未合入此入口 |
-| P2 | 可序列化租约；共享业务状态统一屏障与有界等待；精确共享镜像/只读导入/1 MiB 分块校验；租约/回执迁移；显式 AdoptLocal；未确认释放保留原操作 ID 重试 | 统一增量序列、entry/release 全域镜像与交接协调、候选通道与持久快照、回执淘汰边界、与 owner 提交记录联动及完整故障矩阵 |
+| P1 | `process` 开发入口；本地 dispatcher 与 UDS 共用语义；接纳与状态服务分离；候选子进程、继承 FD 和私有执行/恢复端点 | 常驻发布控制器、全量阶段新版直接入口与统一分配器、控制 listener 和正式 systemd 接管尚未合入此入口 |
+| P2 | 共享/entry/release 跨域快照与持久发布；唯一 owner 锁和可写导入；候选分块校验；活动租约/回执/淘汰边界迁移；提交与恢复协调；真实跨进程故障测试 | 有界增量记录与重放、Policy 交接预算、完整持久化故障矩阵与容量测量 |
 | P3–P5 | 沿用现有业务结果收集器与旧灰度回归测试 | 完整网关灰度闭环、默认安装切换、实际 Agent 和容量验收 |
 
 ### Linux/systemd 原型
@@ -41,6 +41,25 @@ go build -o /tmp/gateway-process ./cmd/gateway
 
 本地和远程业务路径使用同一个结果收集器。本地结果以回调交给入口，不通过内部 HTTP 头或 trailer；正常 HTTP/SSE、断流、500、鉴权和取消仍采用现有判据。状态持久化不可用会使公共 readiness 失败。StopIngress 只停止新入口请求，不关闭状态服务。
 
+### 跨域交接与候选恢复（2026-10-22）
+
+`Gateway.PrepareHandoff` 要求源进程入口和业务排空，然后封存 entry 和共享状态，捕获配置/会话/资源/租约/回执、入口分配与结果证据、发布 journal。快照文件及目录先 fsync，随后持久化绑定源/目标身份、rollout、revision 和摘要的 SEALED 决定。重复准备同一交接返回原决定；准备失败只有在 ABORTED 写入成功后才恢复接纳。
+
+`AdoptGateway` 和 `RestoreGateway` 分别重建候选 owner 与让锁后的源 owner。两者均先取得 owner.lock、重读决定并取得领域写锁，再按精确镜像重建。提交候选使用新 epoch；恢复源使用原 epoch 和最新封存镜像，保留候选活动租约。COMMITTED 后禁止通过源恢复入口回退。
+
+`StartCandidate` 校验不可变产物，传递数据/管理/控制 listener、只读配置和专用 socketpair。握手绑定实际子 PID、产物摘要、incarnation、配置 revision、协议和快照格式。凭据不进入命令行或持久报告，候选状态请求限定为自己的持有者身份；当前候选公共 listener 仅在提交后激活。分块帧和总快照均有容量上限。
+
+`Gateway.TransferHandoff` 将验证、让锁、提交、激活与异常核对串联。`ResolveHandoff` 可用新 deadline 重试；返回的 `Source` 仅表示仍持有或已重新取得写锁的源运行时，`Activated` 仅确认候选 HTTP 激活，不能据此标记整个发布 COMPLETED。
+
+- 提交前通道 EOF 使候选退出；提交后的 EOF 不终止新版。
+- 提交或激活回执丢失时，经候选原私有凭据重新核对持久决定和进程身份，再重试激活；不重发 COMMIT、不重放业务请求。
+- 源恢复后，候选状态客户端显式恢复原 epoch，重试未确认释放；入口同时恢复候选的临时凭据。
+- 恢复通知失败也保留候选进程记录，继续阻止第三实例；只有确认候选退出且租约清理成功后才能替换。
+- 提交与回退同时争锁，只允许一方成为可写 owner。目标已提交时，旧源不能停止该进程或恢复自身写入。
+- 回执淘汰边界按持有者和客户端操作序列迁移；未知旧操作拒绝重执行，新客户端使用独立序列。
+
+真实子进程测试覆盖长 SSE 跨提交及源恢复、提交前 EOF、提交/激活/验证回执丢失、恢复通知取消、第三实例拒绝和重复恢复。共享状态测试继续覆盖租约对账与释放幂等。当前采用封存后的完整镜像传输，尚未实现在线增量追赶；以上不等同于 P2 完整故障矩阵或 P3 自动灰度验收。
+
 ### 已验证的状态迁移基础
 
 `shared.Transfer` 仅包含 dispatcher epoch、逻辑序号、租约描述符和操作回执，**单独使用时不是完整业务快照**。新增 `Gateway.ExportState` 将它与共享业务镜像一起捕获。既有 dispatcher Import 仍要求一个未使用、已封存的 dispatcher；运行时必须已恢复对应会话与资源，调用方必须另行完成 owner 锁、快照校验和持久 COMMITTED 决定。新增只读 StateView 不执行这一步，也不授予写入权。
@@ -52,7 +71,7 @@ go build -o /tmp/gateway-process ./cmd/gateway
 - 释放操作在超时或回执丢失时保留不确定状态，接管后 RetryReleases 用原 ID 重试，不重放业务请求。
 - dispatcher 屏障覆盖状态调用内的 discovery 与执行；排队上限目前固定为 1024 项、16 MiB 请求序列化字节、2 秒且不超原 deadline。超时请求恢复后不再执行。
 
-这些预算尚未接入发布 Policy。共享业务状态的后台维护、管理配置写入和直接控制方法已使用同一屏障，具体范围见下节；entry/release 领域及 owner 提交记录仍未合入交接协调器，因此不能用单次 Seal/Export 宣称整个网关状态已冻结。新增镜像已包含列表内容、精确 TTL/活动引用、健康与调度状态、共享配置和资源幂等；entry 的流量归属/结果证据、发布控制数据和回执淘汰边界仍待接入。当前 logical_revision 仍只覆盖 dispatcher 与直接控制操作，尚未形成包含管理和后台变化的统一增量序列。
+这些预算尚未接入发布 Policy。共享业务后台维护、管理配置、直接控制和 entry/release 写入已纳入 owner 屏障与 logical_revision；各接纳操作在持久化及收尾完成后推进序号。完整网关交接必须通过上述跨域协调器，不能仅调用共享 dispatcher 的 Seal/Export。序号尚未连接有界增量记录与重放。
 
 ### 共享业务状态统一屏障（2026-10-19）
 
@@ -65,7 +84,7 @@ go build -o /tmp/gateway-process ./cmd/gateway
 
 封存开始后，后台任务跳过新调度，管理写入及直接控制返回 `STATE_HANDOFF_SEALED`；状态 RPC 继续使用有界等待。Seal 等待所有已接纳操作完成，超时自动恢复接纳且禁止导出。正在 Seal 时 Resume 返回 `STATE_HANDOFF_SEAL_IN_PROGRESS`；导入/导出期间禁止并发解封。只读管理查询仍可用，Endpoint 详情不会为缺失项创建健康缓存。后台循环只允许启动一次，业务执行器不启动 owner 维护循环。
 
-这些是共享业务状态的冻结保证，并非完整快照、持久提交或写锁交接。旧 owner 注册的不可迁移长任务仍可能使 Seal 超时；调用方必须保留原 owner，不能据此释放写锁或宣布交接成功。子进程退出后的租约回收失败会保留记录供重试，不能跳过清理直接启动替代实例。
+共享屏障本身只提供冻结保证，完整快照、持久提交和写锁交接由上述 process 协调器负责。旧 owner 注册的不可迁移长任务仍可能使 Seal 超时；调用方必须保留原 owner，不能据此释放写锁或宣布交接成功。子进程退出后的租约回收失败会保留记录供重试，不能跳过清理直接启动替代实例。
 
 ### 精确共享状态镜像与只读导入（2026-10-19）
 
@@ -80,21 +99,22 @@ go build -o /tmp/gateway-process ./cmd/gateway
 
 `shared.NewSnapshot` / `SnapshotReceiver` 提供内存中的分块传输原语：每块不超过 1 MiB，校验 snapshot_id、序号、偏移、精确长度、块摘要和最终摘要。截断不能发布镜像，坏块使接收器失效。Capture 期间接纳门保持关闭但不持其互斥锁执行编码，排队请求仍受原 deadline 约束；并发 Resume 返回 `STATE_HANDOFF_SNAPSHOT_IN_PROGRESS`。
 
-当前输出是**共享业务状态镜像和只读验证视图**，尚未连接候选进程通道、快照文件/目录 fsync、owner 决定或可写 runtime 激活。分块上限指解码后载荷；内存镜像大小预算不等于进程峰值内存限制，尚未完成容量测量。统一增量重放、跨域完整快照和提交恢复继续列为 P2 未完成项。
+共享镜像与只读视图现已连接上述候选通道、跨域持久快照和可写接管。分块上限指解码后载荷；内存镜像大小预算不等于进程峰值内存限制，尚未完成容量测量。有界增量重放和完整持久化故障矩阵仍为 P2 未完成项。
 
 ## 本轮验证
 
-本轮在 Windows 工作区通过 WSL2 Ubuntu、Go 1.26.2 执行 Linux 测试：
+本轮在 macOS arm64、Go 1.24.4 执行：
 
 | 检查 | 结果 |
 | --- | --- |
-| `go test ./...` | 通过，新增精确镜像、只读导入、引用/租约对账、容量、坏块/截断/摘要、Capture 期间 deadline 测试 |
-| `go test -race ./...` | 通过；分块→StateView 串联测试另行通过 runtime 包竞态测试 |
+| `go test ./...` | 通过，包含跨域快照、源恢复、真实候选子进程和交接协调测试 |
+| `go test -race ./...` | 通过，含提交/回退争锁、活动候选流、回执丢失与恢复 |
 | `go vet ./...` | 通过 |
+| macOS 构建、Linux amd64/arm64 静态交叉构建 | 通过；Linux 产物未在本轮执行 |
 | `python3 deploy/rollout-process/check.py /path/to/gateway` | 单 PID HTTP、鉴权、一次上游执行、SSE 排空、持久重启通过 |
 | `python3 deploy/rollout-local/check.py /path/to/gateway` | 原 host/worker 连续 A→B→C、回退、长流排空、崩溃与重启恢复通过 |
 
-本轮未重新执行真实 systemd 原型、macOS 构建或实际 Agent/容量验收。以下保留此前基础实现的验证记录，不表示本轮重新执行。
+本轮构建并运行了 macOS 二进制。未重新执行真实 systemd 原型或实际 Agent/容量验收。以下保留此前基础实现的验证记录，不表示本轮重新执行。
 
 ### 此前基础实现验证
 
@@ -112,8 +132,8 @@ go build -o /tmp/gateway-process ./cmd/gateway
 
 ## 下一实施顺序
 
-1. 在已验证共享业务镜像之上统一记录管理和后台变化的 logical_revision，实现有界增量重放；把 entry/release 领域、快照持久化和候选通道纳入同一交接协调器。
-2. 把快照、租约/回执、候选身份和 handoff 决定组合成一个可恢复协议，覆盖提交/fsync/回执丢失与回退并发，持久化回执淘汰边界。
-3. 合入候选进程、统一分配器、直接入口样本、监听/控制交接和配置解冻；只有旧进程退出且新版独立可用时报告 COMPLETED。
+1. 实现与统一 logical_revision 绑定的有界增量记录、只读追赶和缺口拒绝；将快照、屏障及状态等待预算接入 Policy，并补齐持久化/fsync 故障注入矩阵。
+2. 接入常驻发布控制器和两入口共用的唯一分配器，采集新版直接入口样本；实现 5%→全量观察→源入口排空→TransferHandoff 的自动流程。
+3. 合入控制 listener 与 systemd MainPID 交接、配置解冻、连续 A→B→C；只有旧进程实际退出且新版独立可用时报告 COMPLETED。
 4. 实现正式 launch、唯一新部署清单和 Type=notify 安装器，按方案移除 infrastructure、host/worker 部署分支及 --update-host，不增加部署版本或历史兼容分支。
 5. 完成 Linux 安装/重启、实际 Agent、长期 SSE 与容量验收，再切换默认 install。
