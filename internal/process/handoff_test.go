@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -194,6 +195,45 @@ func TestGatewayFailedPreparationRestoresSource(t *testing.T) {
 	defer client.Close()
 	if err = client.Call("config", shared.Request{}, nil); err != nil {
 		t.Fatal("source state unavailable after abort", err)
+	}
+}
+
+func TestSnapshotStorageFailureAbortsAndAllowsFreshHandoff(t *testing.T) {
+	a, cfg, _, _ := completeGateway(t, t.TempDir(), "A")
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{}`)) }))
+	defer up.Close()
+	configureGateway(t, a, up.URL)
+	path := filepath.Join(cfg.DataDir, "handoff", "snapshots")
+	if err := os.WriteFile(path, []byte("unavailable snapshot directory"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	target := handoff.Identity{Incarnation: "B", Release: strings.Repeat("b", 64)}
+	if _, err := a.PrepareHandoff(context.Background(), "failed", "r", target, 4<<20); err == nil {
+		t.Fatal("snapshot storage failure allowed sealing")
+	}
+	d, err := handoff.ReadDecision(cfg.DataDir)
+	if err != nil || d.Phase != handoff.Aborted || d.Snapshot != (handoff.Snapshot{}) || a.shared.BarrierStatus().Sealed || !a.Ready() {
+		t.Fatal("snapshot failure did not restore source admission", d, err)
+	}
+	if w := processRequest(a, "/agents/test/ok", "after-storage-failure"); w.Code != http.StatusOK {
+		t.Fatal("source could not mutate state after abort", w.Code)
+	}
+	if err = os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	d, err = a.PrepareHandoff(context.Background(), "retry", "r2", target, 4<<20)
+	if err != nil || d.Phase != handoff.Sealed {
+		t.Fatal("fresh handoff could not seal the latest state", d, err)
+	}
+	raw, err := a.owner.LoadSnapshot("retry", 4<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = ValidateHandoff(raw, d, 4<<20, cfg.Options()); err != nil {
+		t.Fatal("fresh handoff published invalid state", err)
+	}
+	if err = a.AbortHandoff("retry"); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -33,6 +33,7 @@ type Gateway struct {
 	candidate             *CandidateProcess
 	dataDir               string
 	config                appconfig.Config
+	policy                p.HandoffPolicy
 	privateRoot           string
 	target                p.Target
 	identity              p.Identity
@@ -46,10 +47,18 @@ type Gateway struct {
 // Cold recovery must only run after the service manager has removed old
 // incarnations. Live adoption uses a different protocol, never this function.
 func OpenGateway(cfg appconfig.Config, target p.Target, identity p.Identity) (_ *Gateway, err error) {
+	return OpenGatewayWithPolicy(cfg, target, identity, p.DefaultHandoffPolicy())
+}
+
+func OpenGatewayWithPolicy(cfg appconfig.Config, target p.Target, identity p.Identity, policy p.HandoffPolicy) (_ *Gateway, err error) {
+	policy = policy.Effective()
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
 	if identity.Incarnation != target.Incarnation || identity.Release != target.Release || identity.Instance != target.Instance {
 		return nil, fmt.Errorf("process identity differs from traffic target")
 	}
-	n := &Gateway{target: target, identity: identity, dataDir: cfg.DataDir, config: cfg, privateRoot: filepath.Join(filepath.Dir(cfg.StateSocket), "p")}
+	n := &Gateway{target: target, identity: identity, dataDir: cfg.DataDir, config: cfg, policy: policy, privateRoot: filepath.Join(filepath.Dir(cfg.StateSocket), "p")}
 	defer func() {
 		if err != nil {
 			n.Close()
@@ -67,7 +76,7 @@ func OpenGateway(cfg appconfig.Config, target p.Target, identity p.Identity) (_ 
 	if err != nil {
 		return nil, err
 	}
-	opts := cfg.Options()
+	opts := ownerOptions(cfg, policy)
 	opts.DeferBackground = true
 	n.core, err = gateway.Open(opts)
 	if err != nil {
@@ -131,7 +140,7 @@ func (n *Gateway) Ready() bool {
 }
 
 func (n *Gateway) StorageHealthy() bool {
-	return n.core.StateHealthy() && n.journal.Healthy() == nil && n.entryJournal.Healthy() == nil && n.releaseJournal.Healthy() == nil
+	return n.owner.Healthy() == nil && n.core.StateHealthy() && n.journal.Healthy() == nil && n.entryJournal.Healthy() == nil && n.releaseJournal.Healthy() == nil
 }
 
 func (n *Gateway) DataHandler() http.Handler {

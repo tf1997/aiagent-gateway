@@ -31,6 +31,19 @@ type QueueLimits struct {
 	Wait     time.Duration
 }
 
+func (limits QueueLimits) effective() QueueLimits {
+	if limits.Requests == 0 {
+		limits.Requests = 1024
+	}
+	if limits.Bytes == 0 {
+		limits.Bytes = 16 << 20
+	}
+	if limits.Wait == 0 {
+		limits.Wait = 2 * time.Second
+	}
+	return limits
+}
+
 func (b *Barrier) Configure(limits QueueLimits) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -53,12 +66,13 @@ type BarrierStatus struct {
 	Captures               int
 	Revision               uint64
 	Timeouts, Rejected     uint64
+	Limits                 QueueLimits
 }
 
 func (b *Barrier) Status() BarrierStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes, b.captures, b.revision, b.timeouts, b.rejected}
+	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes, b.captures, b.revision, b.timeouts, b.rejected, b.limits.effective()}
 }
 
 // TryEnter admits owner-local work without queueing it for a later owner.
@@ -103,16 +117,7 @@ func (b *Barrier) enter(ctx context.Context, size int) (func(), error) {
 		b.changed = make(chan struct{})
 	}
 	if b.sealed {
-		limits := b.limits
-		if limits.Requests == 0 {
-			limits.Requests = 1024
-		}
-		if limits.Bytes == 0 {
-			limits.Bytes = 16 << 20
-		}
-		if limits.Wait == 0 {
-			limits.Wait = 2 * time.Second
-		}
+		limits := b.limits.effective()
 		if size < 0 || b.waiting >= limits.Requests || size > limits.Bytes-b.bytes {
 			b.rejected++
 			b.mu.Unlock()

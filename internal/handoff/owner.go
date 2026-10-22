@@ -175,6 +175,14 @@ func ReadDecision(dir string) (Decision, error) {
 
 func (o *Owner) Decision() Decision { o.mu.Lock(); defer o.mu.Unlock(); return o.decision }
 
+// Healthy reports whether this owner still holds a usable decision journal.
+// A failed durable write requires locked recovery before admitting new work.
+func (o *Owner) Healthy() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.ready()
+}
+
 func (o *Owner) ready() error {
 	if o.journal == nil {
 		return fmt.Errorf("state owner closed")

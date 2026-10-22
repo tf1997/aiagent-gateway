@@ -37,24 +37,28 @@ type Target struct {
 	AdminURL    string `json:"admin_url"`
 }
 type Policy struct {
-	AutoProfiles         bool     `json:"auto_profiles"`
-	CanaryPercent        int      `json:"canary_percent"`
-	ReadinessSeconds     int      `json:"readiness_timeout_seconds"`
-	VerifyMinSeconds     int      `json:"verify_min_seconds"`
-	VerifyTimeoutSeconds int      `json:"verify_timeout_seconds"`
-	MinSuccess           int      `json:"min_success_per_profile"`
-	MaxFailures          int      `json:"max_effective_failures"`
-	Profiles             []string `json:"required_profiles"`
-	ObserveSeconds       int      `json:"observe_seconds"`
-	ObserveMinSuccess    int      `json:"observe_min_success_per_profile"`
-	DrainSeconds         int      `json:"drain_timeout_seconds"`
+	Handoff              HandoffPolicy `json:"handoff"`
+	AutoProfiles         bool          `json:"auto_profiles"`
+	CanaryPercent        int           `json:"canary_percent"`
+	ReadinessSeconds     int           `json:"readiness_timeout_seconds"`
+	VerifyMinSeconds     int           `json:"verify_min_seconds"`
+	VerifyTimeoutSeconds int           `json:"verify_timeout_seconds"`
+	MinSuccess           int           `json:"min_success_per_profile"`
+	MaxFailures          int           `json:"max_effective_failures"`
+	Profiles             []string      `json:"required_profiles"`
+	ObserveSeconds       int           `json:"observe_seconds"`
+	ObserveMinSuccess    int           `json:"observe_min_success_per_profile"`
+	DrainSeconds         int           `json:"drain_timeout_seconds"`
 }
 
 func DefaultPolicy() Policy {
-	return Policy{AutoProfiles: true, CanaryPercent: 5, ReadinessSeconds: 30, VerifyMinSeconds: 60, VerifyTimeoutSeconds: 300, MinSuccess: 10, MaxFailures: 0, Profiles: []string{"http"}, ObserveSeconds: 300, ObserveMinSuccess: 10, DrainSeconds: 600}
+	return Policy{Handoff: DefaultHandoffPolicy(), AutoProfiles: true, CanaryPercent: 5, ReadinessSeconds: 30, VerifyMinSeconds: 60, VerifyTimeoutSeconds: 300, MinSuccess: 10, MaxFailures: 0, Profiles: []string{"http"}, ObserveSeconds: 300, ObserveMinSuccess: 10, DrainSeconds: 600}
 }
 
 func (p Policy) Validate() error {
+	if err := p.Handoff.Validate(); err != nil {
+		return err
+	}
 	if p.CanaryPercent < 1 || p.CanaryPercent > 50 || p.ReadinessSeconds < 1 || p.VerifyMinSeconds < 0 || p.VerifyTimeoutSeconds < 1 || p.VerifyMinSeconds > p.VerifyTimeoutSeconds || p.MinSuccess < 1 || p.MaxFailures < 0 || p.ObserveSeconds < 1 || p.ObserveMinSuccess < 1 || p.DrainSeconds < 1 || len(p.Profiles) == 0 {
 		return fmt.Errorf("invalid rollout policy")
 	}

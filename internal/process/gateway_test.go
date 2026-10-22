@@ -152,3 +152,17 @@ func TestIngressDrainKeepsStateAvailable(t *testing.T) {
 		t.Fatal("unavailable state owner still advertised readiness")
 	}
 }
+
+func TestOwnerUnavailableRejectsNewIngress(t *testing.T) {
+	g, _, _, _ := completeGateway(t, t.TempDir(), "owner-unavailable")
+	if err := g.owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if g.StorageHealthy() || g.Ready() {
+		t.Fatal("unavailable ownership journal still advertised readiness")
+	}
+	g.ResumeIngress()
+	if w := processRequest(g, "/agents/test/ok", ""); w.Code != http.StatusServiceUnavailable {
+		t.Fatal("resuming ingress bypassed ownership health", w.Code)
+	}
+}

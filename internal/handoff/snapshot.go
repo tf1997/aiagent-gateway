@@ -10,10 +10,34 @@ import (
 	"syscall"
 )
 
+type snapshotFile interface {
+	io.Writer
+	Name() string
+	Sync() error
+	Close() error
+}
+
+type snapshotIO struct {
+	createTemp func(string, string) (snapshotFile, error)
+	link       func(string, string) error
+	syncDir    func(string) error
+}
+
+func systemSnapshotIO() snapshotIO {
+	return snapshotIO{
+		createTemp: func(dir, pattern string) (snapshotFile, error) { return os.CreateTemp(dir, pattern) },
+		link:       os.Link, syncDir: syncDirectory,
+	}
+}
+
 // PersistSnapshot publishes the immutable image before SEALED can reference
 // it. The filename comes from the verified content digest, never from a peer.
 // A failed sync leaves the decision unchanged and must be treated as failure.
 func (o *Owner) PersistSnapshot(id string, raw []byte, revision uint64, maxBytes int) (Snapshot, error) {
+	return o.persistSnapshot(id, raw, revision, maxBytes, systemSnapshotIO())
+}
+
+func (o *Owner) persistSnapshot(id string, raw []byte, revision uint64, maxBytes int, storage snapshotIO) (Snapshot, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	var snapshot Snapshot
@@ -41,15 +65,19 @@ func (o *Owner) PersistSnapshot(id string, raw []byte, revision uint64, maxBytes
 		return Snapshot{}, fmt.Errorf("INVALID_SNAPSHOT_DIRECTORY")
 	}
 	// Persist creation of the snapshots directory itself.
-	if err = syncDirectory(filepath.Dir(dir)); err != nil {
+	if err = storage.syncDir(filepath.Dir(dir)); err != nil {
 		return Snapshot{}, err
 	}
-	file, err := os.CreateTemp(dir, ".incoming-*")
+	file, err := storage.createTemp(dir, ".incoming-*")
 	if err != nil {
 		return Snapshot{}, err
 	}
 	defer os.Remove(file.Name())
-	if _, err = file.Write(raw); err == nil {
+	written, err := file.Write(raw)
+	if err == nil && written != len(raw) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
 		err = file.Sync()
 	}
 	closeErr := file.Close()
@@ -61,7 +89,7 @@ func (o *Owner) PersistSnapshot(id string, raw []byte, revision uint64, maxBytes
 	}
 	path := filepath.Join(dir, snapshot.Digest+".snapshot")
 	// Link publishes without replacing any already referenced immutable image.
-	if err = os.Link(file.Name(), path); err != nil {
+	if err = storage.link(file.Name(), path); err != nil {
 		if !os.IsExist(err) {
 			return Snapshot{}, err
 		}
@@ -69,7 +97,7 @@ func (o *Owner) PersistSnapshot(id string, raw []byte, revision uint64, maxBytes
 			return Snapshot{}, err
 		}
 	}
-	if err = syncDirectory(dir); err != nil {
+	if err = storage.syncDir(dir); err != nil {
 		return Snapshot{}, err
 	}
 	return snapshot, nil

@@ -47,7 +47,15 @@ func TestCandidateProcessHelper(t *testing.T) {
 	}
 }
 
-func candidateFixture(t *testing.T, upstream string) (*Gateway, *CandidateProcess, CandidateOptions, string) {
+func candidateFixture(t *testing.T, upstream string, deltaBudget ...int) (*Gateway, *CandidateProcess, CandidateOptions, string) {
+	policy := p.DefaultHandoffPolicy()
+	if len(deltaBudget) > 0 {
+		policy.DeltaBytes = deltaBudget[0]
+	}
+	return candidateFixtureWithPolicy(t, upstream, policy)
+}
+
+func candidateFixtureWithPolicy(t *testing.T, upstream string, policy p.HandoffPolicy, configure ...func(*CandidateOptions)) (*Gateway, *CandidateProcess, CandidateOptions, string) {
 	t.Helper()
 	// Unix paths must fit sockaddr_un on both supported operating systems.
 	base, err := os.MkdirTemp("/tmp", "gw-peer-")
@@ -99,13 +107,16 @@ func candidateFixture(t *testing.T, upstream string) (*Gateway, *CandidateProces
 	}
 	id := p.Identity{PID: os.Getpid(), Release: strings.Repeat("a", 64), Incarnation: "source", Instance: "a"}
 	target := p.Target{Release: id.Release, Incarnation: id.Incarnation, Instance: id.Instance, URL: "http://gateway", Socket: filepath.Join(base, "source.sock")}
-	n, err := OpenGateway(cfg, target, id)
+	n, err := OpenGatewayWithPolicy(cfg, target, id, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { n.Close() })
 	configureGateway(t, n, upstream)
-	opts := CandidateOptions{ConfigPath: configPath, Artifact: artifact, ReleasesDir: root, OwnerUID: uint32(os.Geteuid()), Listeners: sockets, MaxSnapshotBytes: 4 << 20, Output: os.Stderr}
+	opts := CandidateOptions{ConfigPath: configPath, Artifact: artifact, ReleasesDir: root, OwnerUID: uint32(os.Geteuid()), Listeners: sockets, MaxSnapshotBytes: min(4<<20, policy.SnapshotBytes), MaxDeltaBytes: policy.DeltaBytes, Output: os.Stderr}
+	for _, apply := range configure {
+		apply(&opts)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	c, err := n.startCandidate(ctx, opts, []string{"-test.run=^TestCandidateProcessHelper$", "--", "candidate-helper"})

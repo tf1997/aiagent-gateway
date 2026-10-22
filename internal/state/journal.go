@@ -31,13 +31,25 @@ type envelope struct {
 // handle: callers must fail closed and reopen rather than guess what committed.
 type Journal struct {
 	mu        sync.Mutex
-	f, lock   *os.File
+	f         journalFile
+	lock      *os.File
 	path      string
 	sequence  uint64
 	values    map[string]json.RawMessage
 	failed    error
 	commits   int
 	admission func() (func(), error)
+}
+
+// journalFile keeps failures local to one writer, including uncertain writes
+// whose bytes reached storage before the operation reported an error.
+type journalFile interface {
+	io.Reader
+	io.Writer
+	io.Seeker
+	Truncate(int64) error
+	Sync() error
+	Close() error
 }
 
 const maxFrame = 256 << 20
@@ -224,7 +236,11 @@ func (j *Journal) Replace(prefix string, values map[string]json.RawMessage) erro
 	if len(encoded) > maxFrame {
 		return fmt.Errorf("journal transaction too large")
 	}
-	if _, err := j.f.Write(encoded); err != nil {
+	written, err := j.f.Write(encoded)
+	if err == nil && written != len(encoded) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		j.failed = err
 		return err
 	}

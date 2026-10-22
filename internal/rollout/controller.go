@@ -126,6 +126,7 @@ func terminal(phase string) bool {
 func (c *Controller) Begin(artifact string, policy p.Policy) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	policy.Handoff = policy.Handoff.Effective()
 	if err := policy.Validate(); err != nil {
 		return err
 	}

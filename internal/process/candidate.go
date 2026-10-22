@@ -25,23 +25,29 @@ const maxCandidateSnapshot = 256 << 20
 // Candidate holds only an executor and remote state access until COMMITTED.
 // The executor is retained during adoption so existing streams keep leases.
 type Candidate struct {
-	mu       sync.Mutex
-	cfg      appconfig.Config
-	boot     candidateBoot
-	identity p.Identity
-	client   *shared.Client
-	business *gateway.Gateway
-	owner    *Gateway
-	decision handoff.Decision
-	receiver *shared.SnapshotReceiver
-	verified bool
-	sockets  []*Socket
-	public   []*http.Server
+	mu             sync.Mutex
+	cfg            appconfig.Config
+	boot           candidateBoot
+	identity       p.Identity
+	client         *shared.Client
+	business       *gateway.Gateway
+	owner          *Gateway
+	decision       handoff.Decision
+	receiver       *shared.SnapshotReceiver
+	verified       bool
+	sockets        []*Socket
+	public         []*http.Server
+	preview, delta bool
+	viewRaw        []byte
+	viewDecision   handoff.Decision
 }
 
 func openCandidate(cfg appconfig.Config, boot candidateBoot, release string) (*Candidate, error) {
 	t := boot.Target
-	if boot.Protocol != peerProtocol || boot.SnapshotFormat != gatewaySnapshotFormat || boot.ParentPID != os.Getppid() || boot.ParentPID < 2 ||
+	if boot.Policy.Validate() != nil || boot.Policy != boot.Policy.Effective() || boot.MaxSnapshotBytes > boot.Policy.SnapshotBytes || boot.MaxDeltaBytes > boot.Policy.DeltaBytes {
+		return nil, fmt.Errorf("INVALID_CANDIDATE_POLICY")
+	}
+	if boot.Protocol != peerProtocol || boot.SnapshotFormat != gatewaySnapshotFormat || boot.DeltaFormat != shared.DeltaFormat || boot.MaxDeltaBytes <= 0 || boot.MaxDeltaBytes > maxCandidateSnapshot || boot.ParentPID != os.Getppid() || boot.ParentPID < 2 ||
 		t.Release != release || t.Incarnation == "" || t.Incarnation == boot.Source.Incarnation || (t.Instance != "a" && t.Instance != "b") ||
 		boot.Token == "" || boot.StateEpoch == "" || boot.MaxSnapshotBytes <= 0 || boot.MaxSnapshotBytes > maxCandidateSnapshot ||
 		!filepath.IsAbs(boot.StateSocket) || !filepath.IsAbs(t.Socket) || filepath.Dir(t.Socket) != filepath.Dir(boot.StateSocket) || t.URL != "http://gateway" {
@@ -125,17 +131,23 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			return reply, err
 		}
 	case "snapshot":
-		if c.owner != nil || m.Decision.Validate() != nil || m.Decision.Phase != handoff.Sealed ||
+		if c.owner != nil || m.Decision.Validate() != nil || (!m.Preview && m.Decision.Phase != handoff.Sealed) || (m.Preview && m.Decision.Phase != handoff.Prepared) ||
 			m.Decision.Source != (handoff.Identity{Incarnation: c.boot.Source.Incarnation, Release: c.boot.Source.Release}) ||
 			m.Decision.Target != (handoff.Identity{Incarnation: c.identity.Incarnation, Release: c.identity.Release}) ||
-			m.Decision.Epoch != c.boot.StateEpoch || m.Manifest.Digest != m.Decision.Snapshot.Digest || int64(m.Manifest.Bytes) != m.Decision.Snapshot.Bytes {
+			m.Decision.Epoch != c.boot.StateEpoch || (!m.Delta && (m.Manifest.Digest != m.Decision.Snapshot.Digest || int64(m.Manifest.Bytes) != m.Decision.Snapshot.Bytes)) ||
+			(m.Delta && (c.viewRaw == nil || !sameHandoff(c.viewDecision, m.Decision))) {
 			return reply, handoff.ErrConflict
 		}
-		receiver, err := shared.NewSnapshotReceiver(m.Manifest, c.boot.MaxSnapshotBytes)
+		budget := c.boot.MaxSnapshotBytes
+		if m.Delta {
+			budget = c.boot.MaxDeltaBytes
+		}
+		receiver, err := shared.NewSnapshotReceiver(m.Manifest, budget)
 		if err != nil {
 			return reply, err
 		}
 		c.receiver, c.decision, c.verified = receiver, m.Decision, false
+		c.preview, c.delta = m.Preview, m.Delta
 	case "chunk":
 		if c.receiver == nil || m.Chunk == nil || c.verified {
 			return reply, fmt.Errorf("SNAPSHOT_NOT_STARTED")
@@ -145,7 +157,7 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			return reply, err
 		}
 	case "validate":
-		if c.verified && m.Decision == c.decision {
+		if (c.verified || (c.preview && c.viewDecision == c.decision && c.receiver == nil)) && m.Decision == c.decision {
 			break
 		}
 		if c.receiver == nil || m.Decision != c.decision {
@@ -156,23 +168,39 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		if err != nil {
 			return reply, err
 		}
-		if _, err = ValidateHandoff(raw, c.decision, c.boot.MaxSnapshotBytes, c.cfg.Options()); err != nil {
+		if c.delta {
+			var version shared.ImageVersion
+			raw, version, err = shared.ApplyDelta(ctx, c.viewRaw, imageVersion(c.viewDecision), raw, c.boot.MaxDeltaBytes, c.boot.MaxSnapshotBytes)
+			if err != nil {
+				return reply, err
+			}
+			if version != imageVersion(c.decision) {
+				return reply, handoff.ErrConflict
+			}
+		}
+		// A preview uses the same full invariant checks as a sealed image,
+		// while retaining PREPARED and never setting commit authorization.
+		validation := c.decision
+		validation.Phase = handoff.Sealed
+		if _, err = ValidateHandoff(raw, validation, c.boot.MaxSnapshotBytes, c.cfg.Options()); err != nil {
 			return reply, err
 		}
 		if err = ctx.Err(); err != nil {
 			return reply, err
 		}
-		c.verified = true
+		c.viewRaw, c.viewDecision = raw, c.decision
+		c.verified = !c.preview
 	case "commit":
-		if !c.verified || m.Decision != c.decision {
+		if !c.verified || c.preview || m.Decision != c.decision {
 			return reply, handoff.ErrConflict
 		}
 		if c.owner == nil {
-			n, err := AdoptGateway(ctx, c.cfg, c.boot.Target, c.identity, c.decision, c.boot.MaxSnapshotBytes, c.client, c.business)
+			n, err := openHandoffGateway(ctx, c.cfg, c.boot.Target, c.identity, c.decision, c.boot.MaxSnapshotBytes, c.client, c.business, false, c.boot.Policy)
 			if err != nil {
 				return reply, err
 			}
 			c.owner = n
+			c.viewRaw = nil
 		}
 	case "abort":
 		if c.owner != nil || m.Decision.Phase != handoff.Aborted || m.Decision.Source != (handoff.Identity{Incarnation: c.boot.Source.Incarnation, Release: c.boot.Source.Release}) || m.Decision.Target != (handoff.Identity{Incarnation: c.identity.Incarnation, Release: c.identity.Release}) || m.Decision.Epoch != c.boot.StateEpoch {
@@ -192,12 +220,22 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			return reply, err
 		}
 		c.receiver, c.verified, c.decision = nil, false, handoff.Decision{}
+		c.viewRaw, c.viewDecision = nil, handoff.Decision{}
 	default:
 		return reply, fmt.Errorf("UNKNOWN_CANDIDATE_COMMAND")
 	}
 	reply.Identity = c.business.WorkerIdentity(c.identity)
+	if c.viewDecision.ID != "" {
+		version := imageVersion(c.viewDecision)
+		reply.View = &version
+	}
 	if c.owner != nil {
 		reply.Decision = c.owner.owner.Decision()
+		status := c.owner.shared.BarrierStatus()
+		reply.State = &status
+		reply.Policy = &c.owner.policy
+	} else {
+		reply.Policy = &c.boot.Policy
 	}
 	return reply, nil
 }
@@ -316,7 +354,7 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 	private := &http.Server{Handler: c.privateHandler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second}
 	defer private.Close()
 	go func() { _ = private.Serve(listener) }()
-	if err = writePeer(conn, peerMessage{Sequence: first.Sequence, Action: first.Action, Identity: c.business.WorkerIdentity(c.identity)}); err != nil {
+	if err = writePeer(conn, peerMessage{Sequence: first.Sequence, Action: first.Action, Identity: c.business.WorkerIdentity(c.identity), Policy: &c.boot.Policy}); err != nil {
 		return err
 	}
 	booted = true

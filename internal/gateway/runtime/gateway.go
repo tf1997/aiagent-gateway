@@ -27,6 +27,7 @@ import (
 
 // Options controls gateway startup, storage and runtime capacity.
 type Options struct {
+	StateQueue shared.QueueLimits
 	// StateClient supplies an in-process dispatcher for a complete gateway.
 	StateClient                                          *shared.Client
 	dialContext                                          func(context.Context, string, string) (net.Conn, error)
@@ -83,6 +84,9 @@ type Gateway struct {
 }
 
 func ValidateOptions(o Options) error {
+	if o.StateQueue.Requests < 0 || o.StateQueue.Bytes < 0 || o.StateQueue.Wait < 0 {
+		return fmt.Errorf("invalid state queue limits")
+	}
 	if o.PublicURL != "" && !configuration.ValidURL(o.PublicURL) {
 		return fmt.Errorf("invalid public URL")
 	}
@@ -183,6 +187,9 @@ func open(o Options, image *stateImage) (*Gateway, error) {
 			f.Close()
 		}
 		return nil, err
+	}
+	if err := g.stateBarrier.Configure(o.StateQueue); err != nil {
+		return fail(err)
 	}
 	var err error
 	var c protocol.Config

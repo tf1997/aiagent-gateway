@@ -39,6 +39,7 @@ func LoadDeployment(path string) (Deployment, error) {
 		e = fmt.Errorf("invalid deployment manifest")
 	}
 	if e == nil {
+		d.Policy.Handoff = d.Policy.Handoff.Effective()
 		e = d.Policy.Validate()
 	}
 	return d, e

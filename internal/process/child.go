@@ -27,24 +27,32 @@ type CandidateOptions struct {
 	OwnerUID                          uint32
 	Listeners                         [3]*Socket
 	MaxSnapshotBytes                  int
+	MaxDeltaBytes                     int
 	Output                            io.Writer
 }
 
 // CandidateProcess refers only to a child created by this process. Persisted
 // PIDs cannot authorize killing, adopting or replacing arbitrary processes.
 type CandidateProcess struct {
-	mu         sync.Mutex
-	target     p.Target
-	channel    *peerChannel
-	cmd        *exec.Cmd
-	done       chan struct{}
-	waitErr    error
-	server     *http.Server
-	listener   net.Listener
-	dir        string
-	token      string
-	verified   handoff.Decision
-	stateOwner atomic.Pointer[shared.Server]
+	mu               sync.Mutex
+	target           p.Target
+	channel          *peerChannel
+	cmd              *exec.Cmd
+	done             chan struct{}
+	waitErr          error
+	server           *http.Server
+	listener         net.Listener
+	dir              string
+	token            string
+	verified         handoff.Decision
+	stateOwner       atomic.Pointer[shared.Server]
+	followRaw        []byte
+	followDecision   handoff.Decision
+	followErr        error
+	followDeadline   time.Time
+	maxSnapshotBytes int
+	maxDeltaBytes    int
+	policy           p.HandoffPolicy
 }
 
 func (c *CandidateProcess) Target() p.Target      { return c.target }
@@ -84,8 +92,14 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 	if err = service.ValidateArtifact(opts.ReleasesDir, opts.Artifact, opts.OwnerUID); err != nil {
 		return nil, err
 	}
-	if opts.MaxSnapshotBytes <= 0 || opts.MaxSnapshotBytes > maxCandidateSnapshot {
+	if opts.MaxSnapshotBytes <= 0 || opts.MaxSnapshotBytes > n.policy.SnapshotBytes {
 		return nil, fmt.Errorf("INVALID_CANDIDATE_SNAPSHOT_BUDGET")
+	}
+	if opts.MaxDeltaBytes == 0 {
+		opts.MaxDeltaBytes = n.policy.DeltaBytes
+	}
+	if opts.MaxDeltaBytes < 0 || opts.MaxDeltaBytes > n.policy.DeltaBytes {
+		return nil, fmt.Errorf("INVALID_CANDIDATE_DELTA_BUDGET")
 	}
 	config, err := os.Open(opts.ConfigPath)
 	if err != nil {
@@ -114,7 +128,8 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 		return nil, err
 	}
 	files = append(files, child)
-	c := &CandidateProcess{channel: &peerChannel{conn: conn}, done: make(chan struct{})}
+	c := &CandidateProcess{channel: &peerChannel{conn: conn}, done: make(chan struct{}),
+		maxSnapshotBytes: opts.MaxSnapshotBytes, maxDeltaBytes: opts.MaxDeltaBytes, policy: n.policy}
 	defer func() {
 		if err != nil {
 			if c.cmd != nil && c.cmd.Process != nil {
@@ -176,12 +191,13 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 	files = nil
 	boot := candidateBoot{Protocol: peerProtocol, SnapshotFormat: gatewaySnapshotFormat, ConfigPath: opts.ConfigPath,
 		Source: n.target, Target: c.target, ParentPID: os.Getpid(), StateSocket: stateSocket, StateEpoch: n.owner.Decision().Epoch,
-		ConfigRevision: n.core.WorkerIdentity(n.identity).ConfigRevision, Token: token, MaxSnapshotBytes: opts.MaxSnapshotBytes}
+		ConfigRevision: n.core.WorkerIdentity(n.identity).ConfigRevision, Token: token, MaxSnapshotBytes: opts.MaxSnapshotBytes,
+		MaxDeltaBytes: opts.MaxDeltaBytes, DeltaFormat: shared.DeltaFormat, Policy: c.policy}
 	reply, err := c.channel.call(ctx, peerMessage{Action: "boot", Boot: &boot})
 	if err != nil {
 		return nil, err
 	}
-	if err = c.checkIdentity(reply.Identity); err != nil || !reply.Identity.Ready || reply.Identity.ConfigRevision != boot.ConfigRevision {
+	if err = c.checkIdentity(reply.Identity); err != nil || !reply.Identity.Ready || reply.Identity.ConfigRevision != boot.ConfigRevision || reply.Policy == nil || *reply.Policy != c.policy {
 		return nil, fmt.Errorf("CANDIDATE_NOT_READY: %v", err)
 	}
 	if err = n.entry.SetPeer(c.target, token); err != nil {
@@ -212,28 +228,37 @@ func (c *CandidateProcess) Identity(ctx context.Context) (p.Identity, error) {
 func (c *CandidateProcess) ValidateHandoff(ctx context.Context, source *Gateway, d handoff.Decision, maxBytes int) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if d.Target != (handoff.Identity{Incarnation: c.target.Incarnation, Release: c.target.Release}) {
+	if c.followDecision.ID == d.ID && !c.followDeadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, c.followDeadline)
+		defer cancel()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if maxBytes <= 0 || maxBytes > c.maxSnapshotBytes {
+		return fmt.Errorf("INVALID_HANDOFF_SNAPSHOT_BUDGET")
+	}
+	if d.Phase != handoff.Sealed || d.Target != (handoff.Identity{Incarnation: c.target.Incarnation, Release: c.target.Release}) {
 		return handoff.ErrConflict
 	}
-	snapshot, err := source.HandoffSnapshot(d.ID, maxBytes)
+	source.handoffMu.Lock()
+	if source.candidate != c || source.owner.Decision() != d {
+		source.handoffMu.Unlock()
+		return handoff.ErrConflict
+	}
+	raw, err := source.owner.LoadSnapshot(d.ID, maxBytes)
+	source.handoffMu.Unlock()
 	if err != nil {
 		return err
 	}
-	if _, err = c.channel.call(ctx, peerMessage{Action: "snapshot", Decision: d, Manifest: snapshot.Manifest()}); err != nil {
+	c.verified = handoff.Decision{}
+	if _, err = c.sendHandoffImage(ctx, d, raw, maxBytes, false); err != nil {
 		return err
 	}
-	for i := 0; i < snapshot.Manifest().Chunks; i++ {
-		chunk, err := snapshot.Chunk(i)
-		if err != nil {
-			return err
-		}
-		if _, err = c.channel.call(ctx, peerMessage{Action: "chunk", Chunk: &chunk}); err != nil {
-			return err
-		}
-	}
-	if _, err = c.channel.call(ctx, peerMessage{Action: "validate", Decision: d}); err != nil {
-		return err
-	}
+	// Final validation advances the acknowledged base too. A repeated
+	// validation must not resend a delta against the previous preview.
+	c.followRaw, c.followDecision = raw, d
 	c.verified = d
 	return nil
 }
@@ -253,6 +278,7 @@ func (c *CandidateProcess) Commit(ctx context.Context, d handoff.Decision) (hand
 	if reply.Decision != expected || c.checkIdentity(reply.Identity) != nil {
 		return reply.Decision, handoff.ErrConflict
 	}
+	c.followRaw = nil
 	return reply.Decision, nil
 }
 
@@ -354,6 +380,8 @@ func (c *CandidateProcess) RestoreSource(ctx context.Context, restored *Gateway,
 		return err
 	}
 	c.verified = handoff.Decision{}
+	c.followRaw, c.followDecision, c.followErr = nil, handoff.Decision{}, nil
+	c.followDeadline = time.Time{}
 	return nil
 }
 

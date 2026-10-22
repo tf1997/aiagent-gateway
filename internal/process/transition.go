@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"aiagent-gateway/internal/handoff"
 )
@@ -36,12 +37,28 @@ func (n *Gateway) TransferHandoff(ctx context.Context, candidate *CandidateProce
 	if !owned {
 		return result, fmt.Errorf("CANDIDATE_NOT_OWNED")
 	}
-	d, err := n.PrepareHandoff(ctx, id, rollout, handoff.Identity{Incarnation: candidate.target.Incarnation, Release: candidate.target.Release}, maxBytes)
+	if !candidate.hasFollow(id) && n.owner.Decision().Phase != handoff.Sealed {
+		if _, err := candidate.FollowHandoff(ctx, n, id, rollout, maxBytes); err != nil {
+			result.Decision = n.owner.Decision()
+			return result, err
+		}
+	}
+	barrierCtx, cancel := context.WithTimeout(ctx, time.Duration(n.policy.BarrierMillis)*time.Millisecond)
+	defer cancel()
+	d, err := n.PrepareHandoff(barrierCtx, id, rollout, handoff.Identity{Incarnation: candidate.target.Incarnation, Release: candidate.target.Release}, maxBytes)
 	result.Decision = n.owner.Decision()
 	if err != nil {
 		return result, err
 	}
-	if err = candidate.ValidateHandoff(ctx, n, d, maxBytes); err != nil {
+	if err = candidate.ValidateHandoff(barrierCtx, n, d, maxBytes); err != nil {
+		abortErr := n.AbortHandoff(d.ID)
+		result.Decision = n.owner.Decision()
+		if abortErr != nil {
+			n.StopIngress()
+		}
+		return result, errors.Join(err, abortErr)
+	}
+	if err = barrierCtx.Err(); err != nil {
 		abortErr := n.AbortHandoff(d.ID)
 		result.Decision = n.owner.Decision()
 		if abortErr != nil {
@@ -60,12 +77,16 @@ func (n *Gateway) TransferHandoff(ctx context.Context, candidate *CandidateProce
 		return result, err
 	}
 	result.Source = nil
-	if committed, commitErr := candidate.Commit(ctx, d); commitErr == nil {
+	if committed, commitErr := candidate.Commit(barrierCtx, d); commitErr == nil {
 		result.Decision = committed
-		if err = candidate.Activate(ctx); err == nil {
+		activation, stop := context.WithTimeout(ctx, time.Duration(n.policy.ActivationSeconds)*time.Second)
+		defer stop()
+		err = candidate.Activate(activation)
+		if err == nil {
 			result.Activated = true
 			return result, nil
 		}
+		ctx = activation // recovery cannot restart the activation time budget
 	} else {
 		err = commitErr
 	}
@@ -80,6 +101,8 @@ func (n *Gateway) TransferHandoff(ctx context.Context, candidate *CandidateProce
 // transition. A busy writer lock leaves Source nil. Only a locked, durable
 // ABORTED decision can restore the source, and COMMITTED always selects B.
 func (n *Gateway) ResolveHandoff(ctx context.Context, candidate *CandidateProcess, sealed handoff.Decision, maxBytes int) (Transition, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(n.policy.ActivationSeconds)*time.Second)
+	defer cancel()
 	result := Transition{}
 	if candidate == nil || sealed.Validate() != nil || sealed.Phase != handoff.Sealed || sealed.Source != (handoff.Identity{Incarnation: n.identity.Incarnation, Release: n.identity.Release}) || sealed.Target != (handoff.Identity{Incarnation: candidate.target.Incarnation, Release: candidate.target.Release}) {
 		return result, handoff.ErrConflict
@@ -105,7 +128,7 @@ func (n *Gateway) ResolveHandoff(ctx context.Context, candidate *CandidateProces
 	if d != sealed {
 		return result, handoff.ErrConflict
 	}
-	restored, err := RestoreGateway(ctx, n.config, n.target, n.identity, sealed, maxBytes)
+	restored, err := openHandoffGateway(ctx, n.config, n.target, n.identity, sealed, maxBytes, nil, nil, true, n.policy)
 	if errors.Is(err, handoff.ErrCommitted) {
 		// The candidate won the lock after our read. Reconcile its decision;
 		// never turn this race into a source activation.

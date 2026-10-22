@@ -32,21 +32,29 @@ type peerMessage struct {
 	Decision handoff.Decision        `json:"decision,omitempty"`
 	Manifest shared.SnapshotManifest `json:"manifest,omitempty"`
 	Chunk    *shared.SnapshotChunk   `json:"chunk,omitempty"`
+	Preview  bool                    `json:"preview,omitempty"`
+	Delta    bool                    `json:"delta,omitempty"`
+	View     *shared.ImageVersion    `json:"view,omitempty"`
+	Policy   *p.HandoffPolicy        `json:"handoff_policy,omitempty"`
+	State    *shared.BarrierStatus   `json:"state,omitempty"`
 	Error    string                  `json:"error,omitempty"`
 }
 
 type candidateBoot struct {
-	Protocol         int      `json:"protocol"`
-	SnapshotFormat   string   `json:"snapshot_format"`
-	ConfigPath       string   `json:"config_path"`
-	Source           p.Target `json:"source"`
-	Target           p.Target `json:"target"`
-	ParentPID        int      `json:"parent_pid"`
-	StateSocket      string   `json:"state_socket"`
-	StateEpoch       string   `json:"state_epoch"`
-	ConfigRevision   uint64   `json:"config_revision"`
-	Token            string   `json:"token"`
-	MaxSnapshotBytes int      `json:"max_snapshot_bytes"`
+	Protocol         int             `json:"protocol"`
+	SnapshotFormat   string          `json:"snapshot_format"`
+	ConfigPath       string          `json:"config_path"`
+	Source           p.Target        `json:"source"`
+	Target           p.Target        `json:"target"`
+	ParentPID        int             `json:"parent_pid"`
+	StateSocket      string          `json:"state_socket"`
+	StateEpoch       string          `json:"state_epoch"`
+	ConfigRevision   uint64          `json:"config_revision"`
+	Token            string          `json:"token"`
+	MaxSnapshotBytes int             `json:"max_snapshot_bytes"`
+	MaxDeltaBytes    int             `json:"max_delta_bytes"`
+	DeltaFormat      string          `json:"delta_format"`
+	Policy           p.HandoffPolicy `json:"handoff_policy"`
 }
 
 type peerChannel struct {
