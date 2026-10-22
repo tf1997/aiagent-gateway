@@ -39,6 +39,7 @@ type Journal struct {
 	failed    error
 	commits   int
 	admission func() (func(), error)
+	compactIO compactionIO
 }
 
 // journalFile keeps failures local to one writer, including uncertain writes
@@ -66,7 +67,7 @@ func Open(dir string) (*Journal, error) {
 		lock.Close()
 		return nil, fmt.Errorf("state already locked: %w", err)
 	}
-	j := &Journal{lock: lock, path: filepath.Join(dir, "state.log"), values: map[string]json.RawMessage{}}
+	j := &Journal{lock: lock, path: filepath.Join(dir, "state.log"), values: map[string]json.RawMessage{}, compactIO: systemCompactionIO()}
 	fail := func(e error) (*Journal, error) { j.Close(); return nil, e }
 	if info, e := os.Lstat(j.path); e == nil && !info.Mode().IsRegular() {
 		return fail(fmt.Errorf("state journal must be a regular file"))
@@ -262,51 +263,6 @@ func (j *Journal) Replace(prefix string, values map[string]json.RawMessage) erro
 			return err
 		}
 	}
-	return nil
-}
-func (j *Journal) compact() error {
-	raw, _ := json.Marshal(frame{Version: 1, Sequence: 1, Values: j.values})
-	sum := sha256.Sum256(raw)
-	encoded, _ := json.Marshal(envelope{raw, hex.EncodeToString(sum[:])})
-	encoded = append(encoded, '\n')
-	if len(encoded) > maxFrame {
-		return fmt.Errorf("state snapshot exceeds capacity")
-	}
-	f, err := os.CreateTemp(filepath.Dir(j.path), ".snapshot-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(encoded); err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	if err = os.Rename(f.Name(), j.path); err != nil {
-		return err
-	}
-	d, err := os.Open(filepath.Dir(j.path))
-	if err != nil {
-		return err
-	}
-	err = d.Sync()
-	d.Close()
-	if err != nil {
-		return err
-	}
-	next, err := os.OpenFile(j.path, os.O_RDWR|os.O_APPEND, 0600)
-	if err != nil {
-		return err
-	}
-	j.f.Close()
-	j.f = next
-	j.sequence = 1
-	j.commits = 0
 	return nil
 }
 func (j *Journal) Close() error {

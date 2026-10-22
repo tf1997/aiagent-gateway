@@ -15,6 +15,7 @@ type failingJournalFile struct {
 	journalFile
 	write func([]byte) (int, error)
 	sync  func() error
+	close func() error
 }
 
 func (f *failingJournalFile) Write(b []byte) (int, error) {
@@ -29,6 +30,13 @@ func (f *failingJournalFile) Sync() error {
 		return f.sync()
 	}
 	return f.journalFile.Sync()
+}
+
+func (f *failingJournalFile) Close() error {
+	if f.close != nil {
+		return f.close()
+	}
+	return f.journalFile.Close()
 }
 
 // Every failure must fence the original handle. Reopening uses only complete
