@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"aiagent-gateway/internal/appconfig"
+	"aiagent-gateway/internal/entry"
 	"aiagent-gateway/internal/gateway"
 	"aiagent-gateway/internal/gateway/runtime/shared"
 	"aiagent-gateway/internal/handoff"
@@ -25,6 +26,8 @@ const maxCandidateSnapshot = 256 << 20
 // Candidate holds only an executor and remote state access until COMMITTED.
 // The executor is retained during adoption so existing streams keep leases.
 type Candidate struct {
+	frontend       *entry.Entry
+	allocator      *candidateAllocator
 	mu             sync.Mutex
 	cfg            appconfig.Config
 	boot           candidateBoot
@@ -37,6 +40,7 @@ type Candidate struct {
 	verified       bool
 	sockets        []*Socket
 	public         []*http.Server
+	publicActive   bool
 	preview, delta bool
 	viewRaw        []byte
 	viewDecision   handoff.Decision
@@ -72,12 +76,31 @@ func openCandidate(cfg appconfig.Config, boot candidateBoot, release string) (*C
 		c.client.Close()
 		return nil, err
 	}
+	c.allocator = newCandidateAllocator(boot)
+	c.frontend, err = entry.NewFrontend(c.allocator, boot.Target, c.business.ExecuteLocal)
+	if err != nil {
+		c.business.Close()
+		c.client.Close()
+		return nil, err
+	}
+	source := boot.Source
+	source.Socket = boot.StateSocket
+	if err = c.frontend.SetPeer(source, boot.Token); err != nil {
+		c.Close()
+		return nil, err
+	}
 	return c, nil
 }
 
 func (c *Candidate) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.frontend != nil {
+		c.frontend.Close()
+	}
+	if c.allocator != nil {
+		c.allocator.client.CloseIdleConnections()
+	}
 	for _, server := range c.public {
 		server.Close()
 	}
@@ -126,10 +149,28 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 	reply := peerMessage{Sequence: m.Sequence, Action: m.Action}
 	switch m.Action {
 	case "identity":
+	case "stats":
+		if c.owner == nil {
+			return reply, fmt.Errorf("CANDIDATE_NOT_COMMITTED")
+		}
+		stats := c.owner.entry.Stats(time.Time{}, c.identity.Incarnation)
+		reply.Stats = &stats
 	case "activate":
 		if err := c.activate(ctx); err != nil {
 			return reply, err
 		}
+	case "accept":
+		if err := c.acceptPublic(ctx); err != nil {
+			return reply, err
+		}
+	case "pause":
+		for _, socket := range c.sockets[:2] {
+			_ = socket.Pause()
+		}
+		for _, server := range c.public {
+			server.SetKeepAlivesEnabled(false)
+		}
+		c.publicActive = false
 	case "snapshot":
 		if c.owner != nil || m.Decision.Validate() != nil || (!m.Preview && m.Decision.Phase != handoff.Sealed) || (m.Preview && m.Decision.Phase != handoff.Prepared) ||
 			m.Decision.Source != (handoff.Identity{Incarnation: c.boot.Source.Incarnation, Release: c.boot.Source.Release}) ||
@@ -200,6 +241,7 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 				return reply, err
 			}
 			c.owner = n
+			c.allocator.owner.Store(n)
 			c.viewRaw = nil
 		}
 	case "abort":
@@ -225,6 +267,9 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		return reply, fmt.Errorf("UNKNOWN_CANDIDATE_COMMAND")
 	}
 	reply.Identity = c.business.WorkerIdentity(c.identity)
+	if !c.allocator.healthy() {
+		reply.Identity.Ready = false
+	}
 	if c.viewDecision.ID != "" {
 		version := imageVersion(c.viewDecision)
 		reply.View = &version
@@ -249,8 +294,18 @@ func (c *Candidate) activate(ctx context.Context) error {
 	if c.owner == nil || !c.owner.Ready() {
 		return fmt.Errorf("CANDIDATE_NOT_COMMITTED")
 	}
-	if len(c.public) != 0 {
+	return c.acceptPublic(ctx)
+}
+
+func (c *Candidate) acceptPublic(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.publicActive {
 		return nil
+	}
+	if len(c.sockets) != 3 {
+		return fmt.Errorf("MISSING_PUBLIC_LISTENERS")
 	}
 	var listeners []net.Listener
 	for _, socket := range c.sockets[:2] {
@@ -263,11 +318,12 @@ func (c *Candidate) activate(ctx context.Context) error {
 		}
 		listeners = append(listeners, listener)
 	}
-	for i, handler := range []http.Handler{c.owner.DataHandler(), c.owner.AdminHandler()} {
+	for i, handler := range []http.Handler{c.frontend, c.publicAdmin()} {
 		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
 		c.public = append(c.public, server)
 		go func() { _ = server.Serve(listeners[i]) }()
 	}
+	c.publicActive = true
 	return nil
 }
 
@@ -342,6 +398,22 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 		return err
 	}
 	defer c.Close()
+	receiptCtx, stopReceipts := context.WithCancel(ctx)
+	receiptsDone := make(chan struct{})
+	go func() {
+		defer close(receiptsDone)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-receiptCtx.Done():
+				return
+			case <-ticker.C:
+				c.allocator.retry(receiptCtx)
+			}
+		}
+	}()
+	defer func() { stopReceipts(); <-receiptsDone }()
 	c.sockets = sockets
 	listener, err := net.Listen("unix", c.boot.Target.Socket)
 	if err != nil {

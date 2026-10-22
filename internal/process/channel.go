@@ -37,6 +37,7 @@ type peerMessage struct {
 	View     *shared.ImageVersion    `json:"view,omitempty"`
 	Policy   *p.HandoffPolicy        `json:"handoff_policy,omitempty"`
 	State    *shared.BarrierStatus   `json:"state,omitempty"`
+	Stats    *p.Statistics           `json:"stats,omitempty"`
 	Error    string                  `json:"error,omitempty"`
 }
 

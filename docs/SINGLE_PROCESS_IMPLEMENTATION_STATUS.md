@@ -68,7 +68,7 @@ go build -o /tmp/gateway-process ./cmd/gateway
 
 `TransferHandoff` 自动补齐未建立的基线，最终仍持久化完整镜像及 SEALED。最终差量必须重建该精确镜像并获得 ACK，才能让锁和提交；重复最终校验使用最新 ACK 基线。超限或校验失败终止该次准备，不自动改用超预算全量传输。新 handoff ID 可重新建立基线。
 
-跨域镜像格式为 `gateway-process-state-2`，共享镜像直接嵌入规范 JSON，避免外层 base64 位移使小修改放大为整段变化。候选握手同时核对快照格式和 `gateway-image-delta-1`，格式不符在交接前拒绝。
+跨域镜像格式为 `gateway-process-state-3`，共享镜像直接嵌入规范 JSON，避免外层 base64 位移使小修改放大为整段变化。候选握手同时核对快照格式和 `gateway-image-delta-1`，格式不符在交接前拒绝。
 
 `releaseprotocol.Policy.handoff` 保存预算；缺失或单项为 0 时使用默认值，负数或超上限拒绝。`OpenGatewayWithPolicy` 将预算用于源运行时，候选握手继承实际预算并在接管后配置新 dispatcher；`StartCandidate` 的快照/增量选项只能收紧该次预算。
 
@@ -189,3 +189,11 @@ go build -o /tmp/gateway-process ./cmd/gateway
 3. 合入控制 listener 与 systemd MainPID 交接、配置解冻、连续 A→B→C；只有旧进程实际退出且新版独立可用时报告 COMPLETED。
 4. 实现正式 launch、唯一新部署清单和 Type=notify 安装器，按方案移除 infrastructure、host/worker 部署分支及 --update-host，不增加部署版本或历史兼容分支。
 5. 完成 Linux 安装/重启、实际 Agent、长期 SSE 与容量验收，再切换默认 install。
+
+### 双入口分配与活动回执迁移（2026-10-22）
+
+候选现在可在提交前显式接纳继承的公共 listener。两入口通过 owner 的同一分配器选择执行版本，记录入口 incarnation 与执行 incarnation；统计单独提供新版直接入口样本。回退流量可以通过私有凭据转发回源业务执行器，源端校验活动分配身份。管理入口在提交前访问源 owner，提交后使用本地 owner。
+
+entry 快照携带候选入口的活动请求；交接仅要求源入口及源执行排空。候选完成回执可暂存重试，并在 COMMITTED 后写入本地 owner。分配回复失败只记录失败与清理，不重发业务请求。回执容量丢失使候选 readiness 失败。
+
+新增真实子进程回归验证公共 HTTP 样本、新版公共 SSE 跨交接、样本和活动记录迁移、源连接断开后的独立服务，以及回退转发与三次暂停/恢复监听。这些是底层能力；自动灰度控制器及正式服务接管仍在实现。

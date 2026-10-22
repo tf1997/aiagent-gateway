@@ -18,7 +18,7 @@ import (
 	"aiagent-gateway/internal/state"
 )
 
-const gatewaySnapshotFormat = "gateway-process-state-2"
+const gatewaySnapshotFormat = "gateway-process-state-3"
 
 type gatewayImage struct {
 	Format  string           `json:"format"`
@@ -58,7 +58,7 @@ func (n *Gateway) PrepareHandoff(ctx context.Context, id, rollout string, target
 		}
 		return d, nil
 	}
-	if n.business.WorkerIdentity(n.identity).Inflight != 0 || n.entry.Active() != 0 {
+	if n.business.WorkerIdentity(n.identity).Inflight != 0 || n.entry.LocalActive() != 0 {
 		return handoff.Decision{}, fmt.Errorf("SOURCE_NOT_DRAINED")
 	}
 	if err = n.owner.Prepare(id, rollout, target); err != nil {
@@ -141,7 +141,7 @@ func (n *Gateway) CheckpointHandoff(ctx context.Context, id, rollout string, tar
 	if maxBytes <= 0 || maxBytes > n.policy.SnapshotBytes {
 		return nil, handoff.Decision{}, fmt.Errorf("INVALID_HANDOFF_SNAPSHOT_BUDGET")
 	}
-	if n.business.WorkerIdentity(n.identity).Inflight != 0 || n.entry.Active() != 0 {
+	if n.business.WorkerIdentity(n.identity).Inflight != 0 || n.entry.LocalActive() != 0 {
 		return nil, handoff.Decision{}, fmt.Errorf("SOURCE_NOT_DRAINED")
 	}
 	if err = n.owner.Prepare(id, rollout, target); err != nil {
@@ -252,7 +252,7 @@ func decodeGatewayImage(raw []byte, d handoff.Decision, maxBytes int, options ga
 func (n *Gateway) YieldHandoff(decision handoff.Decision) error {
 	n.handoffMu.Lock()
 	defer n.handoffMu.Unlock()
-	if decision != n.owner.Decision() || decision.Phase != handoff.Sealed || !n.shared.BarrierStatus().Sealed || n.entry.Active() != 0 || n.business.WorkerIdentity(n.identity).Inflight != 0 {
+	if decision != n.owner.Decision() || decision.Phase != handoff.Sealed || !n.shared.BarrierStatus().Sealed || n.entry.LocalActive() != 0 || n.business.WorkerIdentity(n.identity).Inflight != 0 {
 		return handoff.ErrConflict
 	}
 	return n.Close()

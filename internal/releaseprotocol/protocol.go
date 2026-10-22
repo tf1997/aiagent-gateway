@@ -73,6 +73,7 @@ func (p Policy) Validate() error {
 }
 
 type Result struct {
+	Ingress         string    `json:"ingress_incarnation,omitempty"`
 	ID              string    `json:"request_id"`
 	Instance        string    `json:"instance"`
 	Incarnation     string    `json:"incarnation"`
@@ -123,10 +124,11 @@ type Resolution struct {
 	Error       string `json:"error,omitempty"`
 }
 type Statistics struct {
-	Counts   map[string]Counts `json:"counts"`
-	Active   int               `json:"active"`
-	Lost     bool              `json:"lost"`
-	Failures int               `json:"failures"`
-	Total    int               `json:"total"`
-	Revision uint64            `json:"revision"`
+	IngressCounts map[string]Counts `json:"direct_ingress_counts,omitempty"`
+	Counts        map[string]Counts `json:"counts"`
+	Active        int               `json:"active"`
+	Lost          bool              `json:"lost"`
+	Failures      int               `json:"failures"`
+	Total         int               `json:"total"`
+	Revision      uint64            `json:"revision"`
 }

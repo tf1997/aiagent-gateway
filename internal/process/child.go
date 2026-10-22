@@ -46,6 +46,7 @@ type CandidateProcess struct {
 	token            string
 	verified         handoff.Decision
 	stateOwner       atomic.Pointer[shared.Server]
+	runtimeOwner     atomic.Pointer[Gateway]
 	followRaw        []byte
 	followDecision   handoff.Decision
 	followErr        error
@@ -58,6 +59,16 @@ type CandidateProcess struct {
 func (c *CandidateProcess) Target() p.Target      { return c.target }
 func (c *CandidateProcess) PID() int              { return c.cmd.Process.Pid }
 func (c *CandidateProcess) Done() <-chan struct{} { return c.done }
+
+func (c *CandidateProcess) Accept(ctx context.Context) error {
+	_, err := c.channel.call(ctx, peerMessage{Action: "accept"})
+	return err
+}
+
+func (c *CandidateProcess) Pause(ctx context.Context) error {
+	_, err := c.channel.call(ctx, peerMessage{Action: "pause"})
+	return err
+}
 
 // StartCandidate enforces the two-process limit while the current owner is
 // alive. A failed or stopped child is reaped and its leases retired first.
@@ -74,6 +85,9 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 	if n.candidate != nil {
 		select {
 		case <-n.candidate.done:
+			if err := n.entry.RetireIngress(n.candidate.target.Incarnation); err != nil {
+				return nil, err
+			}
 			if err := n.shared.Retire(n.candidate.target.Incarnation); err != nil {
 				return nil, err
 			}
@@ -174,9 +188,8 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 		return nil, err
 	}
 	c.stateOwner.Store(n.shared)
-	c.server = &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c.stateOwner.Load().HandlerFor(token, c.target.Incarnation).ServeHTTP(w, r)
-	}), ReadHeaderTimeout: 5 * time.Second}
+	c.runtimeOwner.Store(n)
+	c.server = &http.Server{Handler: c.sourceHandler(), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = c.server.Serve(c.listener) }()
 	c.cmd = exec.Command(opts.Artifact, args...)
 	c.cmd.ExtraFiles = files
@@ -373,6 +386,7 @@ func (c *CandidateProcess) RestoreSource(ctx context.Context, restored *Gateway,
 	restored.candidate = c
 	restored.handoffMu.Unlock()
 	c.stateOwner.Store(restored.shared)
+	c.runtimeOwner.Store(restored)
 	if err := restored.entry.SetPeer(c.target, c.token); err != nil {
 		return err
 	}
@@ -405,7 +419,7 @@ func (c *CandidateProcess) Stop(ctx context.Context, source *Gateway) error {
 		if err != nil {
 			return err
 		}
-		if id.Inflight != 0 || source.shared.Count(c.target.Incarnation) != 0 {
+		if id.Inflight != 0 || source.shared.Count(c.target.Incarnation) != 0 || source.entry.IngressActive(c.target.Incarnation) != 0 {
 			return fmt.Errorf("CANDIDATE_NOT_DRAINED")
 		}
 		if err = c.cmd.Process.Signal(syscall.SIGTERM); err != nil {
@@ -418,6 +432,9 @@ func (c *CandidateProcess) Stop(ctx context.Context, source *Gateway) error {
 		}
 	}
 	if err = source.shared.Retire(c.target.Incarnation); err != nil {
+		return err
+	}
+	if err = source.entry.RetireIngress(c.target.Incarnation); err != nil {
 		return err
 	}
 	c.closeTransport()

@@ -21,6 +21,7 @@ import (
 
 type Resolver func(context.Context, p.Request) (p.Resolution, error)
 type Entry struct {
+	allocator   Allocator
 	mu          sync.Mutex
 	j           *state.Journal
 	traffic     p.Traffic
@@ -198,7 +199,7 @@ func (e *Entry) Apply(expected uint64, next p.Traffic) error {
 func (e *Entry) Stats(since time.Time, worker string) p.Statistics {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := p.Statistics{Counts: map[string]p.Counts{}, Revision: e.traffic.Revision, Lost: e.lost || e.j.Healthy() != nil}
+	out := p.Statistics{Counts: map[string]p.Counts{}, IngressCounts: map[string]p.Counts{}, Revision: e.traffic.Revision, Lost: e.lost || e.j.Healthy() != nil}
 	for _, r := range e.active {
 		if r.Incarnation == worker {
 			out.Active++
@@ -226,11 +227,29 @@ func (e *Entry) Stats(since time.Time, worker string) p.Statistics {
 			c.Unknown++
 		}
 		out.Counts[r.Profile] = c
+		if r.Ingress == worker {
+			direct := out.IngressCounts[r.Profile]
+			switch r.Verdict {
+			case "success":
+				direct.Success++
+			case "failure":
+				direct.Failure++
+			case "excluded":
+				direct.Excluded++
+			default:
+				direct.Unknown++
+			}
+			out.IngressCounts[r.Profile] = direct
+		}
 		out.Total++
 	}
 	return out
 }
 func (e *Entry) start(key, preferred string) (p.Target, p.Result, error) {
+	return e.startIngress(key, preferred, e.localTarget.Incarnation, p.ID("req_"))
+}
+
+func (e *Entry) startIngress(key, preferred, ingress, id string) (p.Target, p.Result, error) {
 	leave, err := e.admit()
 	if err != nil {
 		return p.Target{}, p.Result{}, err
@@ -243,6 +262,18 @@ func (e *Entry) start(key, preferred string) (p.Target, p.Result, error) {
 	}
 	if e.j.Healthy() != nil {
 		return p.Target{}, p.Result{}, fmt.Errorf("entry storage unavailable")
+	}
+	if id == "" || len(id) > 128 {
+		return p.Target{}, p.Result{}, fmt.Errorf("INVALID_REQUEST_ID")
+	}
+	if _, exists := e.active[id]; exists {
+		return p.Target{}, p.Result{}, fmt.Errorf("REQUEST_ALREADY_ALLOCATED")
+	}
+	if _, exists := e.results[id]; exists {
+		return p.Target{}, p.Result{}, fmt.Errorf("REQUEST_ALREADY_COMPLETED")
+	}
+	if ingress != "" && ingress != e.traffic.Stable.Incarnation && (e.traffic.Candidate == nil || ingress != e.traffic.Candidate.Incarnation) {
+		return p.Target{}, p.Result{}, fmt.Errorf("UNKNOWN_INGRESS")
 	}
 	t := e.traffic.Stable
 	if !validTarget(t) {
@@ -272,7 +303,7 @@ func (e *Entry) start(key, preferred string) (p.Target, p.Result, error) {
 		}
 		e.bindings[key] = t.Incarnation
 	}
-	r := p.Result{ID: p.ID("req_"), Instance: t.Instance, Incarnation: t.Incarnation, Release: t.Release, RoutingRevision: e.traffic.Revision, Started: time.Now()}
+	r := p.Result{Ingress: ingress, ID: id, Instance: t.Instance, Incarnation: t.Incarnation, Release: t.Release, RoutingRevision: e.traffic.Revision, Started: time.Now()}
 	e.active[r.ID] = r
 	if e.traffic.Rollout != "" {
 		if len(e.results)+len(e.active) > 8192 {
@@ -286,13 +317,34 @@ func (e *Entry) start(key, preferred string) (p.Target, p.Result, error) {
 	return t, r, nil
 }
 func (e *Entry) finish(r p.Result) {
+	_ = e.Complete(context.Background(), r)
+}
+
+func (e *Entry) Complete(ctx context.Context, r p.Result) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	leave, err := e.admit()
 	if err != nil {
-		return
+		return err
 	} // Seal requires the entry to have drained first.
 	defer leave()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if old, ok := e.results[r.ID]; ok {
+		old.Started = old.Started.Round(0).UTC()
+		old.Completed = old.Completed.Round(0).UTC()
+		r.Started = r.Started.Round(0).UTC()
+		r.Completed = r.Completed.Round(0).UTC()
+		if old == r && e.j.Healthy() == nil {
+			return nil
+		}
+		return fmt.Errorf("RESULT_CONFLICT")
+	}
+	active, ok := e.active[r.ID]
+	if !ok || active.ID != r.ID || active.Ingress != r.Ingress || active.Incarnation != r.Incarnation || active.Release != r.Release || active.Instance != r.Instance || active.RoutingRevision != r.RoutingRevision || !active.Started.Equal(r.Started) || r.Completed.Before(r.Started) {
+		return fmt.Errorf("RESULT_IDENTITY_MISMATCH")
+	}
 	delete(e.active, r.ID)
 	if e.changed != nil {
 		close(e.changed)
@@ -304,10 +356,12 @@ func (e *Entry) finish(r p.Result) {
 		} else {
 			e.lost = true
 		}
-		if e.save() != nil {
+		if err := e.save(); err != nil {
 			e.lost = true
+			return err
 		}
 	}
+	return nil
 }
 func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
@@ -315,6 +369,14 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/readyz" {
+		if e.allocator != nil {
+			if e.allocator.Ready(r.Context()) {
+				write(w, 200, map[string]bool{"ready": true})
+			} else {
+				write(w, 503, map[string]bool{"ready": false})
+			}
+			return
+		}
 		t := e.Traffic()
 		if !validTarget(t.Stable) || e.j.Healthy() != nil {
 			write(w, 503, map[string]bool{"ready": false})
@@ -329,12 +391,17 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	q := p.Request{Method: r.Method, Path: r.URL.Path, Header: r.Header}
-	resolved, err := e.resolve(r.Context(), q)
+	var allocator Allocator = e
+	if e.allocator != nil {
+		allocator = e.allocator
+	}
+	id := p.ID("req_")
+	allocation, err := allocator.Allocate(r.Context(), q, e.localTarget.Incarnation, id)
 	if err != nil {
 		write(w, 503, map[string]string{"error": "STATE_UNAVAILABLE"})
 		return
 	}
-	if resolved.NeedBody {
+	if allocation.Resolution.NeedBody {
 		raw, er := io.ReadAll(http.MaxBytesReader(w, r.Body, 2<<20))
 		if er != nil {
 			write(w, 413, map[string]string{"error": "REQUEST_TOO_LARGE"})
@@ -343,21 +410,21 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewReader(raw))
 		q.Body = raw
 		q.BodyRead = true
-		resolved, err = e.resolve(r.Context(), q)
+		allocation, err = allocator.Allocate(r.Context(), q, e.localTarget.Incarnation, id)
 		if err != nil {
 			write(w, 503, map[string]string{"error": "STATE_UNAVAILABLE"})
 			return
 		}
 	}
-	if resolved.Status != 0 {
-		write(w, resolved.Status, map[string]string{"error": resolved.Error})
+	if allocation.Resolution.Status != 0 {
+		write(w, allocation.Resolution.Status, map[string]string{"error": allocation.Resolution.Error})
 		return
 	}
-	target, result, err := e.start(resolved.Key, resolved.OwnerWorker)
-	if err != nil {
-		write(w, 503, map[string]string{"error": "RELEASE_UNAVAILABLE"})
+	if allocation.Resolution.NeedBody || !validTarget(allocation.Target) || allocation.Result.ID != id {
+		write(w, 503, map[string]string{"error": "INVALID_ALLOCATION"})
 		return
 	}
+	target, result := allocation.Target, allocation.Result
 	rw := &responseWriter{ResponseWriter: w}
 	var metadata http.Header
 	var localResult *p.Result
@@ -395,7 +462,7 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			result.Verdict = "excluded"
 			result.Reason = "client_cancelled"
 		}
-		e.finish(result)
+		_ = allocator.Complete(context.Background(), result)
 	}()
 	e.mu.Lock()
 	local, localTarget := e.local, e.localTarget
