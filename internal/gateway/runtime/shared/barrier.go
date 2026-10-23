@@ -12,15 +12,18 @@ import (
 // operations, including slow discovery, before a snapshot can be authoritative.
 // Waiting requests retain their original context and consume a bounded budget.
 type Barrier struct {
-	mu                     sync.Mutex
-	sealed                 bool
-	sealing                bool
-	captures               int
-	revision               uint64
-	limits                 QueueLimits
-	timeouts, rejected     uint64
-	active, waiting, bytes int
-	changed                chan struct{}
+	mu                              sync.Mutex
+	sealed                          bool
+	sealing                         bool
+	captures                        int
+	revision                        uint64
+	limits                          QueueLimits
+	timeouts, rejected              uint64
+	active, waiting, bytes          int
+	changed                         chan struct{}
+	pauseSince                      time.Time
+	pauseCount                      uint64
+	lastPause, totalPause, maxPause time.Duration
 }
 
 // Wait, Seal and Resume also support the candidate's bounded transport gate.
@@ -85,12 +88,26 @@ type BarrierStatus struct {
 	Revision               uint64
 	Timeouts, Rejected     uint64
 	Limits                 QueueLimits
+	// Pause measurements cover admission closing through reopening, including
+	// drain time. They are local to this gate and are not replication state.
+	PauseCount                                                            uint64
+	CurrentPauseMicros, LastPauseMicros, TotalPauseMicros, MaxPauseMicros int64
 }
 
 func (b *Barrier) Status() BarrierStatus {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return BarrierStatus{b.sealing, b.sealed && !b.sealing, b.active, b.waiting, b.bytes, b.captures, b.revision, b.timeouts, b.rejected, b.limits.effective()}
+	current := time.Duration(0)
+	if !b.pauseSince.IsZero() {
+		current = time.Since(b.pauseSince)
+	}
+	return BarrierStatus{
+		Sealing: b.sealing, Sealed: b.sealed && !b.sealing, Active: b.active, Waiting: b.waiting,
+		Bytes: b.bytes, Captures: b.captures, Revision: b.revision, Timeouts: b.timeouts,
+		Rejected: b.rejected, Limits: b.limits.effective(), PauseCount: b.pauseCount,
+		CurrentPauseMicros: current.Microseconds(), LastPauseMicros: b.lastPause.Microseconds(),
+		TotalPauseMicros: b.totalPause.Microseconds(), MaxPauseMicros: b.maxPause.Microseconds(),
+	}
 }
 
 // TryEnter admits owner-local work without queueing it for a later owner.
@@ -178,6 +195,7 @@ func (b *Barrier) seal(ctx context.Context) error {
 		return fmt.Errorf("STATE_HANDOFF_ALREADY_SEALED")
 	}
 	b.sealed = true
+	b.pauseSince = time.Now()
 	b.sealing = true
 	defer func() { b.sealing = false }()
 	b.signal()
@@ -190,13 +208,13 @@ func (b *Barrier) seal(ctx context.Context) error {
 		}
 		b.mu.Lock()
 		if ctx.Err() != nil {
-			b.sealed = false
+			b.endPause()
 			b.signal()
 			return ctx.Err()
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		b.sealed = false
+		b.endPause()
 		b.signal()
 		return err
 	}
@@ -212,9 +230,22 @@ func (b *Barrier) resume() error {
 	if b.captures != 0 {
 		return fmt.Errorf("STATE_HANDOFF_SNAPSHOT_IN_PROGRESS")
 	}
-	b.sealed = false
+	b.endPause()
 	b.signal()
 	return nil
+}
+
+// endPause requires b.mu and counts a completed pause exactly once, including
+// a seal cancelled while waiting for admitted operations to drain.
+func (b *Barrier) endPause() {
+	if b.sealed {
+		b.lastPause = time.Since(b.pauseSince)
+		b.totalPause += b.lastPause
+		b.maxPause = max(b.maxPause, b.lastPause)
+		b.pauseCount++
+		b.pauseSince = time.Time{}
+		b.sealed = false
+	}
 }
 
 // lockSealed pins the frozen state while an import/export accesses the backend.

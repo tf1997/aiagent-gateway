@@ -6,7 +6,42 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestBarrierPauseMeasurements(t *testing.T) {
+	b := &Barrier{}
+	if err := b.Seal(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if status := b.Status(); !status.Sealed || status.PauseCount != 0 {
+		t.Fatal("unfinished pause counted as complete", status)
+	}
+	if err := b.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	first := b.Status()
+	if first.Sealed || first.CurrentPauseMicros != 0 || first.PauseCount != 1 || first.TotalPauseMicros != first.LastPauseMicros || first.MaxPauseMicros != first.LastPauseMicros {
+		t.Fatal("incorrect completed pause", first)
+	}
+	if err := b.Resume(); err != nil || b.Status() != first {
+		t.Fatal("duplicate resume counted another pause", err)
+	}
+	leave, err := b.TryEnter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leave()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := b.Seal(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	last := b.Status()
+	if last.Sealed || last.Sealing || last.CurrentPauseMicros != 0 || last.PauseCount != 2 || last.LastPauseMicros < 15000 || last.MaxPauseMicros < last.LastPauseMicros || last.TotalPauseMicros < first.TotalPauseMicros+last.LastPauseMicros {
+		t.Fatal("cancelled seal lost its admission pause", last)
+	}
+}
 
 func TestDirectControlsRespectSealedLeaseImage(t *testing.T) {
 	var count, executions atomic.Int64

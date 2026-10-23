@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +14,46 @@ import (
 	"aiagent-gateway/internal/gateway/runtime/shared"
 	"aiagent-gateway/internal/state"
 )
+
+func TestSessionPatchesPreserveOtherSessions(t *testing.T) {
+	f := sharedSetup(t)
+	route := create(t, f.core, "proxy", "http://127.0.0.1:8001")
+	c := shared.NewLocalClient(f.server, "writer")
+	defer c.Close()
+	var leases []string
+	for _, id := range []string{"first", "second"} {
+		var out shared.Response
+		if err := c.Call("acquire", shared.Request{Owner: "alice", Route: route.Key, Revision: route.Version, Session: id, Entry: "proxy"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		leases = append(leases, out.Lease)
+	}
+	second := "session/" + stateKey(sessionKey{"alice", route.ID, "second", "proxy"})
+	before := f.j.Snapshot()
+	if len(before[second]) == 0 {
+		t.Fatal("second acquire was not persisted")
+	}
+	if err := c.Call("release", shared.Request{Lease: leases[0]}, nil); err != nil {
+		t.Fatal(err)
+	}
+	after := f.j.Snapshot()
+	if len(after) != len(before) || !bytes.Equal(before[second], after[second]) {
+		t.Fatal("releasing the first session changed another session")
+	}
+	if err := c.Call("release", shared.Request{Lease: leases[1]}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Periodic full persistence must agree with all acknowledged patches.
+	before = f.j.Snapshot()
+	if err := f.core.persistSessions(); err != nil {
+		t.Fatal(err)
+	}
+	for key, raw := range f.j.Snapshot() {
+		if !bytes.Equal(before[key], raw) {
+			t.Fatal("request patch omitted a session update", key)
+		}
+	}
+}
 
 func TestRouteUpsertProtectsSharedResourceOwnership(t *testing.T) {
 	f := sharedSetup(t)

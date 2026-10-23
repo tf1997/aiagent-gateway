@@ -194,18 +194,23 @@ func (j *Journal) SetAdmission(admit func() (func(), error)) {
 	j.admission = admit
 }
 
-// Replace commits only changes in prefix. It never overwrites another domain.
-func (j *Journal) Replace(prefix string, values map[string]json.RawMessage) error {
+func (j *Journal) admit() (func(), error) {
 	j.mu.Lock()
 	admit := j.admission
 	j.mu.Unlock()
 	if admit != nil {
-		leave, err := admit()
-		if err != nil {
-			return err
-		}
-		defer leave()
+		return admit()
 	}
+	return func() {}, nil
+}
+
+// Replace commits only changes in prefix. It never overwrites another domain.
+func (j *Journal) Replace(prefix string, values map[string]json.RawMessage) error {
+	leave, err := j.admit()
+	if err != nil {
+		return err
+	}
+	defer leave()
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.failed != nil {
@@ -227,6 +232,48 @@ func (j *Journal) Replace(prefix string, values map[string]json.RawMessage) erro
 			}
 		}
 	}
+	return j.commit(f)
+}
+
+// Apply atomically updates the named keys and removes the named deletions.
+// Unlike Replace, it neither scans nor serializes unchanged domain records.
+// Both operations share the same durability, admission and failure semantics.
+func (j *Journal) Apply(values map[string]json.RawMessage, remove []string) error {
+	leave, err := j.admit()
+	if err != nil {
+		return err
+	}
+	defer leave()
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.failed != nil {
+		return j.failed
+	}
+	f := frame{Version: 1, Sequence: j.sequence + 1, Values: map[string]json.RawMessage{}}
+	for k, v := range values {
+		if k == "" || !json.Valid(v) {
+			return fmt.Errorf("invalid journal key/value")
+		}
+		if !bytes.Equal(j.values[k], v) {
+			f.Values[k] = v
+		}
+	}
+	seen := map[string]bool{}
+	for _, k := range remove {
+		if _, conflict := values[k]; k == "" || conflict {
+			return fmt.Errorf("invalid journal deletion")
+		}
+		if _, exists := j.values[k]; exists && !seen[k] {
+			f.Delete = append(f.Delete, k)
+			seen[k] = true
+		}
+	}
+	return j.commit(f)
+}
+
+// commit requires j.mu. A successful acknowledgement follows file sync;
+// any uncertain write poisons the writer until it is closed and recovered.
+func (j *Journal) commit(f frame) error {
 	if len(f.Values) == 0 && len(f.Delete) == 0 {
 		return nil
 	}

@@ -1,6 +1,6 @@
 # 灰度发布操作
 
-更新日期：2026-10-23。完整网关按 1 → 2 → 1 发布，入口、业务、状态和发布控制一起升级。正式安装和 Linux/systemd 生命周期已验证；实际 Agent 换版受模型服务过载阻塞，生产容量和完整故障矩阵未完成。详见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md) 和 [部署全流程](DEPLOYMENT_LIFECYCLE.md)。
+更新日期：2026-10-23。完整网关按 1 → 2 → 1 发布，入口、业务、状态和发布控制一起升级。正式安装和 Linux/systemd 生命周期已验证；实际 Agent 完整换版、目标生产容量和存储/系统矩阵未完成。详见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md) 和 [部署全流程](DEPLOYMENT_LIFECYCLE.md)。
 
 ## 构建发版
 
@@ -96,6 +96,8 @@ sudo journalctl -u aiagent-gateway.service -f
 
 成功需确认 `phase == COMPLETED`、`stable.release` 是本次产物摘要、`committed` 和 handoff 决定相符、MainPID 是新版，并核对 readiness 和真实业务。首装没有 handoff，committed 为 false 是正常情况。进程重启后的终态可以保留之前的 ROLLED_BACK，稳定版本仍由持久决定选定。
 
+`state_queue` 与 `allocation_queue` 的 `PauseCount`、`LastPauseMicros`、`MaxPauseMicros`、`TotalPauseMicros` 记录候选各屏障从关闭接纳到重新开放的实际时长，包含已接纳调用的排空时间；`CurrentPauseMicros` 表示尚未结束的暂停。单位为微秒，计数属于当前屏障实例，重启后不恢复。`handoff_milliseconds` 还包含预览传输等过程，不能当作业务暂停时长。评估负载时同时检查客户端错误、`Timeouts` 和 `Rejected`，不能仅看发布是否 COMPLETED。
+
 现有 SSE 不迁移 TCP 连接：旧版流排空后退出，新版活动流可跨状态 owner 交接继续。业务请求不会因失败而改版重放。已有会话、公开资源 ID 和 Agent Endpoint 归属保留，冷启动不能恢复已经断开的 TCP/SSE。
 
 ## 验证命令
@@ -107,9 +109,12 @@ go vet ./...
 go build -o /tmp/gateway ./cmd/gateway
 python3 -B deploy/rollout-process/complete.py /tmp/gateway
 python3 -B deploy/rollout-systemd/process.py --reuse-image --cycles 20
+python3 -B deploy/rollout-process/load.py --concurrency 100
 python3 -B deploy/rollout-process/agent.py /tmp/gateway
 ```
 
 systemd 脚本使用隔离容器，无宿主目录挂载与公开端口，完成后清理。`--reuse-image` 使用已有 `aiagent-gateway-systemd-test:bookworm`；不传该项时构建镜像。测量报告默认 `/tmp/gateway-systemd-process.json`，是小状态、串行 HTTP 回归负载，不是生产容量上限。
+
+并发脚本复用上述 Linux 镜像，自动构建三份实际网关产物，以非 root 用户在仅有 loopback 的隔离容器中执行。HTTP 与 SSE 两阶段各保持指定数量的闭环客户端，每次请求使用新会话，分别完成 A→B、B→C；模拟上游耗时为 HTTP 50 ms、SSE 250 ms。默认报告 `/tmp/gateway-concurrent-rollout.json` 包含延迟、完整 SSE 校验、上游重复调用数、队列/屏障、合计 CPU/RSS/FD 与进程数；失败也保存报告并以非零状态退出。测试使用缩短的观察时间，但保留默认 2 秒状态等待和 5 秒最终屏障预算。CPU 为每核 100%，资源按约 100 ms 采样，可能漏掉采样间隙的短峰；容器共享开发机资源，结果不能外推为生产容量上限。
 
 实际 Agent 脚本使用本机已有的模型配置，创建两个临时 Hermes 容器与独立网关，发送少量合成模型请求。报告默认 `/tmp/gateway-real-agent-rollout.json`，仅 passed=true 才表示完整换版通过；上游过载时不修改断言来凑成功。

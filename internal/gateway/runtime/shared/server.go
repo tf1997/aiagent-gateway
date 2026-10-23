@@ -1,15 +1,19 @@
 package shared
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"aiagent-gateway/internal/gateway/protocol"
 	"aiagent-gateway/internal/releaseprotocol"
@@ -177,15 +181,66 @@ func (s *Server) dispatch(ctx context.Context, q Request) (out Response) {
 }
 
 func copyResponse(out Response) Response {
-	raw, err := json.Marshal(out)
-	var copy Response
-	if err == nil {
-		err = json.Unmarshal(raw, &copy)
-	}
-	if err != nil {
+	// These DTOs contain value types except for the collections copied below.
+	// A handoff can carry thousands of receipts; a JSON round trip per copy
+	// would encode/decode that history during both capture and adoption.
+	validRaw := func(raw json.RawMessage) bool { return raw == nil || json.Valid(raw) }
+	if !wireTime(out.Resource.Seen) || !wireTime(out.Reservation.Resource.Seen) || !wireTime(out.Cache.Expires) {
 		return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
 	}
-	return copy
+	if out.Config != nil {
+		for _, audit := range out.Config.Audit {
+			if !wireTime(audit.At) {
+				return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
+			}
+		}
+		for _, route := range out.Config.Routes {
+			if len(route.Card) != 0 && !validRaw(route.Card) {
+				return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
+			}
+		}
+		for _, receipt := range out.Config.Receipts {
+			if !validRaw(receipt.Body) {
+				return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
+			}
+		}
+		config := out.Config.Clone()
+		out.Config = &config
+	}
+	if out.Endpoint != nil {
+		endpoint := *out.Endpoint
+		endpoint.Interfaces = maps.Clone(endpoint.Interfaces)
+		out.Endpoint = &endpoint
+	}
+	out.Resources = slices.Clone(out.Resources)
+	for _, resource := range out.Resources {
+		if !wireTime(resource.Seen) {
+			return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
+		}
+	}
+	out.Mapped = slices.Clone(out.Mapped)
+	for _, pair := range out.Mapped {
+		if !wireTime(pair.Value.Seen) {
+			return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
+		}
+	}
+	out.Cache.Tasks = slices.Clone(out.Cache.Tasks)
+	for i, raw := range out.Cache.Tasks {
+		if !validRaw(raw) {
+			return Response{Epoch: out.Epoch, Error: "STATE_RESPONSE_INVALID"}
+		}
+		out.Cache.Tasks[i] = bytes.Clone(raw)
+	}
+	return out
+}
+
+// Preserve JSON's timestamp constraints for both local and remote callers.
+func wireTime(t time.Time) bool {
+	if t.IsZero() {
+		return true
+	}
+	_, offset := t.Zone()
+	return t.Year() >= 0 && t.Year() <= 9999 && offset > -24*60*60 && offset < 24*60*60
 }
 
 func (s *Server) Freeze(frozen bool) error {
@@ -249,6 +304,12 @@ type lease struct {
 type LeaseRecord struct {
 	ID, Worker, Kind, Owner, Route, Endpoint, Entry, Session string
 	Resource                                                 protocol.ResourceKey
+}
+
+// Record is used only within the serialized dispatcher, like Add and Release.
+func (l *Leases) Record(id string) (LeaseRecord, bool) {
+	ref, ok := l.items[id]
+	return ref.record, ok
 }
 
 func (l *Leases) Add(record LeaseRecord, release func()) string {

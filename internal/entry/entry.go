@@ -309,7 +309,11 @@ func (e *Entry) startIngress(key, preferred, ingress, id string) (p.Target, p.Re
 		if len(e.results)+len(e.active) > 8192 {
 			e.lost = true
 		}
-		if err := e.save(); err != nil {
+		values := map[string]json.RawMessage{"entry/active/" + r.ID: jsonValue(r), "entry/lost": jsonValue(e.lost)}
+		if key != "" && e.traffic.Percent > 0 && e.traffic.Percent < 100 {
+			values["entry/binding/"+key] = jsonValue(e.bindings[key])
+		}
+		if err := e.j.Apply(values, nil); err != nil {
 			delete(e.active, r.ID)
 			return t, r, err
 		}
@@ -351,12 +355,15 @@ func (e *Entry) Complete(ctx context.Context, r p.Result) error {
 		e.changed = nil
 	}
 	if e.traffic.Rollout != "" {
+		values := map[string]json.RawMessage{}
 		if len(e.results) < 8192 {
 			e.results[r.ID] = r
+			values["entry/result/"+r.ID] = jsonValue(r)
 		} else {
 			e.lost = true
 		}
-		if err := e.save(); err != nil {
+		values["entry/lost"] = jsonValue(e.lost)
+		if err := e.j.Apply(values, []string{"entry/active/" + r.ID}); err != nil {
 			e.lost = true
 			return err
 		}

@@ -127,10 +127,15 @@ func (g *Gateway) executeShared(q shared.Request, leases *shared.Leases) (out sh
 	case "retire":
 		leases.Retire(q.Worker)
 	case "release":
+		record, _ := leases.Record(q.Lease)
 		var released bool
 		released, err = leases.Release(q.Worker, q.Lease)
-		if err == nil && released {
-			err = g.persistSessions()
+		if err == nil && released && record.Kind == "acquire" && record.Session != "" {
+			if route := g.current.Load().Routes[record.Route]; route != nil {
+				err = g.persistSession(sessionKey{record.Owner, route.ID, record.Session, record.Entry})
+			} else {
+				err = g.persistSessions()
+			}
 		}
 	case "acquire":
 		if rt == nil || rt.Version != q.Revision {
@@ -150,7 +155,7 @@ func (g *Gateway) executeShared(q shared.Request, leases *shared.Leases) (out sh
 				}
 				sh.mu.Unlock()
 			}
-			if err = g.persistSessions(); err != nil {
+			if err = g.persistSession(sessionKey{q.Owner, rt.ID, q.Session, q.Entry}); err != nil {
 				l.release()
 				break
 			}

@@ -81,6 +81,34 @@ func (g *Gateway) persistSessions() error {
 	return nil
 }
 
+// Request paths persist only the session they changed. Full replacement is
+// reserved for configuration/maintenance batches that can remove sessions.
+func (g *Gateway) persistSession(key sessionKey) error {
+	if g.journal == nil || key.ID == "" {
+		return nil
+	}
+	g.sessionPersist.Lock()
+	defer g.sessionPersist.Unlock()
+	sh := g.shard(key)
+	sh.mu.Lock()
+	var raw json.RawMessage
+	if b := sh.items[key]; b != nil {
+		raw = rawValue(durableSession{b.WorkerOwner, key, b.Endpoint, b.Seen, b.TTL})
+	}
+	sh.mu.Unlock()
+	name := "session/" + stateKey(key)
+	var err error
+	if raw == nil {
+		err = g.journal.Apply(nil, []string{name})
+	} else {
+		err = g.journal.Apply(map[string]json.RawMessage{name: raw}, nil)
+	}
+	if err != nil {
+		g.healthy.Store(false)
+	}
+	return err
+}
+
 type sessionKey struct{ Owner, Route, ID, Interface string }
 
 type binding struct {
