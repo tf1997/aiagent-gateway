@@ -34,6 +34,17 @@ type gatewayImage struct {
 	Release      map[string]json.RawMessage `json:"release"`
 }
 
+// preparedHandoff retains the final, fully validated candidate image. It is
+// private to the command loop; adoption still checks the locked decision and
+// exact durable snapshot before using it. StateOwner and entry.Import detach
+// their writable indexes from this read-only image.
+type preparedHandoff struct {
+	decision handoff.Decision
+	raw      []byte
+	image    gatewayImage
+	view     *gateway.StateView
+}
+
 // PrepareHandoff seals all currently assembled writable domains. The caller
 // must stop the release controller before entering; this function owns the
 // entry and shared admission barriers until AbortHandoff or YieldHandoff.
@@ -275,6 +286,10 @@ func RestoreGateway(ctx context.Context, cfg appconfig.Config, target p.Target, 
 }
 
 func openHandoffGateway(ctx context.Context, cfg appconfig.Config, target p.Target, identity p.Identity, expected handoff.Decision, maxBytes int, client *shared.Client, business *gateway.Gateway, restoreSource bool, policy p.HandoffPolicy) (_ *Gateway, err error) {
+	return openPreparedHandoffGateway(ctx, cfg, target, identity, expected, maxBytes, client, business, restoreSource, policy, nil)
+}
+
+func openPreparedHandoffGateway(ctx context.Context, cfg appconfig.Config, target p.Target, identity p.Identity, expected handoff.Decision, maxBytes int, client *shared.Client, business *gateway.Gateway, restoreSource bool, policy p.HandoffPolicy, prepared *preparedHandoff) (_ *Gateway, err error) {
 	policy = policy.Effective()
 	if err := policy.Validate(); err != nil {
 		return nil, err
@@ -311,9 +326,18 @@ func openHandoffGateway(ctx context.Context, cfg appconfig.Config, target p.Targ
 		return nil, err
 	}
 	opts := ownerOptions(cfg, policy)
-	image, view, err := decodeGatewayImage(raw, expected, maxBytes, opts)
-	if err != nil {
-		return nil, err
+	var image gatewayImage
+	var view *gateway.StateView
+	if prepared != nil {
+		if prepared.decision != expected || prepared.view == nil || !bytes.Equal(prepared.raw, raw) {
+			return nil, handoff.ErrConflict
+		}
+		image, view = prepared.image, prepared.view
+	} else {
+		image, view, err = decodeGatewayImage(raw, expected, maxBytes, opts)
+		if err != nil {
+			return nil, err
+		}
 	}
 	n.journal, err = state.Open(filepath.Join(cfg.DataDir, "shared"))
 	if err != nil {
@@ -365,6 +389,11 @@ func openHandoffGateway(ctx context.Context, cfg appconfig.Config, target p.Targ
 	}
 	if err = n.shared.Resume(); err != nil {
 		return nil, err
+	}
+	if client != nil {
+		if err = client.ResumeCalls(); err != nil {
+			return nil, err
+		}
 	}
 	if n.business == nil {
 		opts.StateClient = shared.NewLocalClient(n.shared, identity.Incarnation)

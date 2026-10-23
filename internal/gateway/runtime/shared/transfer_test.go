@@ -150,6 +150,74 @@ func TestUnacknowledgedReleaseIsRetriedAfterAdoption(t *testing.T) {
 	}
 }
 
+func TestQuiescedClientQueuesAgainstAdoptedOwner(t *testing.T) {
+	var oldCount, newCount, executions atomic.Int64
+	a := NewServer("token", transferBackend(&oldCount, &executions))
+	c := NewLocalClient(a, "candidate")
+	defer c.Close()
+	var original Response
+	if err := c.Call("acquire", Request{}, &original); err != nil {
+		t.Fatal(err)
+	}
+	release := c.Release(original.Lease)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := c.Quiesce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Seal(ctx); err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() { release(); close(released) }()
+	acquired := make(chan error, 1)
+	go func() { acquired <- c.CallContext(ctx, "acquire", Request{}, nil) }()
+	deadline := time.Now().Add(time.Second)
+	for c.gate.Status().Waiting != 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("state operations did not queue before transport selection")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if executions.Load() != 1 {
+		t.Fatal("queued acquire reached old owner")
+	}
+	v, err := a.Export()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := NewServer("token", transferBackend(&newCount, &executions))
+	if err = b.Seal(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Import(v, "adopted"); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.AdoptLocal(ctx, v.Epoch, "adopted", b); err != nil {
+		t.Fatal("queued calls blocked adoption", err)
+	}
+	if err = b.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.ResumeCalls(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-released:
+	case <-ctx.Done():
+		t.Fatal("queued lease release stuck")
+	}
+	if err = <-acquired; err != nil {
+		t.Fatal(err)
+	}
+	if err = c.RetryReleases(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if newCount.Load() != 1 || oldCount.Load() != 1 || executions.Load() != 2 || c.Active() != 0 {
+		t.Fatal("queued mutations lost or replayed", oldCount.Load(), newCount.Load(), executions.Load())
+	}
+}
+
 func TestLostReleaseResponseIsRecoveredWithoutReleasingAgain(t *testing.T) {
 	var count, newCount, executions atomic.Int64
 	a := NewServer("token", transferBackend(&count, &executions))

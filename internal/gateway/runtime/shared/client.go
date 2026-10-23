@@ -22,6 +22,7 @@ import (
 type Unavailable struct{ error }
 
 type Client struct {
+	gate                  Barrier
 	accessMu              sync.RWMutex
 	local                 *Server
 	epochMu               sync.Mutex
@@ -59,6 +60,15 @@ func (c *Client) Call(action string, q Request, out *Response) error {
 }
 
 func (c *Client) CallContext(ctx context.Context, action string, q Request, out *Response) error {
+	size, err := json.Marshal(q)
+	if err != nil {
+		return err
+	}
+	leave, err := c.gate.Wait(ctx, len(size))
+	if err != nil {
+		return err
+	}
+	defer leave()
 	c.accessMu.RLock()
 	defer c.accessMu.RUnlock()
 	if c.failed.Load() {
@@ -110,6 +120,11 @@ func (c *Client) CallContext(ctx context.Context, action string, q Request, out 
 	c.failed.Store(true)
 	return fmt.Errorf("SHARED_STATE_UNAVAILABLE: %w", last)
 }
+
+func (c *Client) ConfigureHandoffQueue(limits QueueLimits) error { return c.gate.Reconfigure(limits) }
+func (c *Client) Quiesce(ctx context.Context) error              { return c.gate.Seal(ctx) }
+func (c *Client) ResumeCalls() error                             { return c.gate.Resume() }
+func (c *Client) QueueStatus() BarrierStatus                     { return c.gate.Status() }
 
 func (c *Client) accept(v Response, out *Response) error {
 	if v.Epoch != "" {

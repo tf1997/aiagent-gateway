@@ -366,7 +366,7 @@ curl -fsS "$GATEWAY_ADMIN_URL/admin/v1/routes/research" \
 
 POST 更新和按 key 删除默认无需 `If-Match`，并发提交以最后一次成功提交为准。需要乐观锁时带上路由最新 ETag；过期返回 412，对不存在的 key 携带 If-Match 也返回 412。首次创建需提供 `expose` 等完整必要字段，单独提交 key 和超时不能创建新路由。`id`、`version` 是只读字段，不要把 GET 响应原样作为 POST 正文。
 
-部署到已有灰度架构时，公共管理接口由 host 承载，需要按宿主维护流程更新它才能启用此功能。仅通过 install 升级业务 worker 不会更新管理接口；前台模式重启为新二进制即可。
+完整网关的 install 同时发布管理接口与业务代码；前台模式重启为新二进制即可。旧实验拓扑需人工维护切换，安装器不自动迁移。
 
 ### 动态配置消费者
 
@@ -379,7 +379,7 @@ curl -fsS "$GATEWAY_ADMIN_URL/admin/v1/routes" \
   -d '{"key":"research","consumers":[{"id":"app-a","token":"new-caller-secret"}]}'
 ```
 
-成功保存后，新 HTTP、Hermes 和 A2A 请求立即按新 Token 验证，灰度入口和 worker 同步使用最新配置，无需重启。消费者 ID 是资源归属标识：轮换 Token 保持 ID，原会话、任务和实例绑定继续有效；修改 ID 视为另一个消费者，不能继承旧资源。同名 ID 跨路由共享每调用方并发额度，资源仍按路由隔离。
+成功保存后，新 HTTP、Hermes 和 A2A 请求立即按新 Token 验证，入口和业务执行器同步使用最新配置，无需重启。消费者 ID 是资源归属标识：轮换 Token 保持 ID，原会话、任务和实例绑定继续有效；修改 ID 视为另一个消费者，不能继承旧资源。同名 ID 跨路由共享每调用方并发额度，资源仍按路由隔离。
 
 | consumers 输入 | 行为 |
 | --- | --- |
@@ -502,7 +502,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
   -o bin/aiagent-gateway-linux-amd64 ./cmd/gateway
 ```
 
-复制到具备 systemd 247+（支持 LoadCredential）的 Linux 服务器后，在服务器执行：
+已验收环境为 Debian 12 / systemd 252.39 / Linux arm64；其他系统版本需单独验证。复制对应架构产物后，在服务器执行：
 
 ```sh
 sudo ./aiagent-gateway-linux-amd64 install
@@ -512,34 +512,34 @@ sudo aiagent-gateway rollout status --json
 
 首次安装创建专用系统用户、随机管理 Token、数据目录和 systemd 服务，并设置开机启动。消费者在创建/更新路由时动态登记；没有默认的全路由消费者。由 root 编辑 `/etc/aiagent-gateway/config.yaml` 调整管理 Token 和公开 URL，再按维护安排重启生效。
 
-该文件使用 YAML，权限 0600，由 systemd LoadCredential 提供给服务进程读取，不作为 shell 脚本 source。运行 curl 的终端可设置自己的客户端变量。旧环境变量部署需按 [迁移说明](CONFIGURATION.md#从环境变量版本迁移) 在维护窗口切换，普通 worker 灰度不能升级旧基础组件。
+该文件使用 YAML，权限 0600，由 systemd LoadCredential 提供给服务进程读取，不作为 shell 脚本 source。运行 curl 的终端可设置自己的客户端变量。旧实验部署需在维护窗口人工停止、备份后切换，详见 [部署全流程](DEPLOYMENT_LIFECYCLE.md)。
 
 ```sh
 sudo aiagent-gateway stop
 sudo aiagent-gateway start
 sudo aiagent-gateway restart
-sudo journalctl -u aiagent-gateway-rollout -f
+sudo journalctl -u aiagent-gateway.service -f
 ```
 
-`stop/start/restart` 操作整套服务，可能中断连接。日常升级使用**新上传二进制**的 `install`，由发布控制器启动候选 worker，验证真实流量并自动切流或回退。默认灰度分配 5% 新会话，验证至少 60 秒、每类必需请求至少 10 个成功样本，全量后再观察 300 秒；无业务流量可能因样本不足回退。
+`stop/start/restart` 操作整套服务，可能中断连接。日常升级使用**新上传二进制**的 `install`，由后台发布控制器启动候选完整网关，验证真实流量并自动切流或回退。默认灰度分配 5% 新会话，验证至少 60 秒、每类必需请求至少 10 个成功样本，全量后再观察 300 秒；无业务流量可能因样本不足回退。
 
-安装统一使用 host-worker；宿主自身更新在停机后执行 `install --update-host`。`rollout resume` 用于处理 `RECOVERY_REQUIRED`；`rollout rollback` 用于尚保留候选和旧稳定目标的发布任务。完整打包上传、端口、升级、回退及降级流程见 [灰度升级操作说明](ROLLOUT_OPERATIONS.md)。
+稳定时一个服务 PID，发布时最多两个，正常完成后回到一个。没有 `--update-host`。`rollout resume` 处理可恢复的 `RECOVERY_REQUIRED`；`rollout rollback` 仅允许提交前执行，COMMITTED 后必须恢复新版或另发兼容产物。完整打包上传、端口、升级、回退及降级流程见 [灰度升级操作说明](ROLLOUT_OPERATIONS.md)。
 
 ### 数据与重启行为
 
 | 项目 | 前台单进程模式 | systemd 灰度部署模式 |
 | --- | --- | --- |
-| 路由和实例配置 | 保存到 `routes.json`，版本在 `config.json` | 由共享状态服务维护同样的拆分存储 |
-| 管理幂等回执和审计记录 | 保存到 `route-logs.json` | 由共享状态服务保存到 `route-logs.json` |
-| 会话、公开资源 ID、归属、数据幂等预留 | 内存保存，重启丢失 | 由共享状态日志持久化，worker 切换仍定位原 Agent |
-| 列表分页快照 | 重启失效 | 可跨 worker，状态服务重启后失效 |
-| 已建立的 TCP/SSE 连接 | 停止进程会中断 | 灰度时留在原 worker 排空，不能通过状态日志重建 |
+| 路由和实例配置 | 保存到 `routes.json`，版本在 `config.json` | 由唯一 owner 维护同样的拆分存储 |
+| 管理幂等回执和审计记录 | 保存到 `route-logs.json` | 由唯一 owner 保存到 `route-logs.json` |
+| 会话、公开资源 ID、归属、数据幂等预留 | 内存保存，重启丢失 | 由共享状态日志持久化，网关换版仍定位原 Agent |
+| 列表分页快照 | 重启失效 | 可随在线快照交接；冷启动后失效 |
+| 已建立的 TCP/SSE 连接 | 停止进程会中断 | 旧版连接排空，新版活动流可跨状态交接；冷启动不能重建连接 |
 
-前台模式重启后，旧 Hermes/A2A 公开 ID 不可恢复；generic 会话头再次出现则可能重新分配。上游有会话数据库也不能代替网关归属映射。需要持久归属和日常灰度升级时使用共享状态部署。
+前台模式重启后，旧 Hermes/A2A 公开 ID 不可恢复；generic 会话头再次出现则可能重新分配。上游有会话数据库也不能代替网关归属映射。需要持久归属和日常灰度升级时使用完整网关 process / systemd 部署。
 
-单进程不能同时打开同一数据目录。灰度部署由一个状态服务独占写入；数据主要位于 `/var/lib/aiagent-gateway`，发布记录位于 `/var/lib/aiagent-gateway-rollout`。备份应包含配置、共享状态、发布记录和凭据，并在停机或其他一致性备份流程下取得。
+单进程不能同时打开同一数据目录。完整网关灰度始终只有一个持锁 writer；数据位于 `/var/lib/aiagent-gateway`，发布报告位于其 `release/`，选版决定位于 `handoff/`。备份应包含配置、共享状态、发布记录和凭据，并在停机或其他一致性备份流程下取得。
 
-`sudo aiagent-gateway uninstall` 停止并卸载服务/CLI，保留凭据、数据和版本产物。Linux systemd 实机部署及生产压力验收仍待完成；当前已有本机多进程验证和控制流程测试，范围见 [验证记录](../VALIDATION.md)。
+`sudo aiagent-gateway uninstall` 停止并卸载服务/CLI，保留凭据、数据和版本产物。正式安装与 systemd 生命周期已在隔离 Linux 容器通过，实际 Agent 换版、生产压力和完整故障矩阵仍待完成，范围见 [验证记录](../VALIDATION.md)。
 
 ## 9. 常见问题
 
@@ -564,7 +564,7 @@ sudo journalctl -u aiagent-gateway-rollout -f
 | A2A HTTP 200 但调用失败 | 检查 JSON 的 error，尤其是版本头和方法名 |
 | SSE 长时间无输出或集中输出 | 检查上游是否流式、客户端是否关闭缓冲、入口代理是否缓冲以及各层超时 |
 
-排查顺序建议为：网关 `/readyz` → 管理 `/admin/v1/config/status` → 路由及 Endpoint 详情 → 实际业务请求 → 进程/systemd 日志。灰度部署额外查看 `rollout status --json` 和对应 worker 的日志。
+排查顺序建议为：网关 `/readyz` → 管理 `/admin/v1/config/status` → 路由及 Endpoint 详情 → 实际业务请求 → 进程/systemd 日志。灰度部署额外查看 `rollout status --json` 和完整网关服务日志。
 
 普通 generic HTTP 代理透传上游 HTTP 状态和正文。Hermes 的 HTTP 错误响应保留网关 `error` 码，同时增加 `upstream`，例如：
 
@@ -580,4 +580,4 @@ sudo journalctl -u aiagent-gateway-rollout -f
 
 `upstream.body` 保留 JSON 结构；非 JSON 响应使用字符串。新增的 `upstream.body` 最多保留 64 KiB 上游正文，超限时 `upstream.truncated` 为 true；读取中断时仍返回已收到的正文及 `upstream.message`。有效 A2A JSON-RPC 错误及 SSE 事件沿用 2 MiB 上限。新增详情及 A2A 错误会隐藏已配置的上游 Token、Bearer/Basic 凭据和明确的凭据字段（如 api_key、password），保留业务错误消息和诊断信息。
 
-这些代理响应变更位于业务 worker；install 灰度部署更新到包含修复的新 worker 后生效，前台部署则重启为新二进制。
+这些代理响应变更在 install 发布包含修复的完整产物后生效，前台部署则重启为新二进制。

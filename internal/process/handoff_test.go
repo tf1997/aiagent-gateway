@@ -78,16 +78,37 @@ func TestGatewayHandoffKeepsCandidateLeaseAndLatestState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = ValidateHandoff(raw, decision, 4<<20, cfg.Options()); err != nil {
+	image, view, err := decodeGatewayImage(raw, decision, 4<<20, cfg.Options())
+	if err != nil {
 		t.Fatal(err)
 	}
+	prepared := &preparedHandoff{decision: decision, raw: raw, image: image, view: view}
 	if _, err = AdoptGateway(context.Background(), cfg, bTarget, bID, decision, 4<<20, client, business); err == nil {
 		t.Fatal("candidate took source writer lock")
 	}
 	if err = a.YieldHandoff(decision); err != nil {
 		t.Fatal(err)
 	}
-	b, err := AdoptGateway(context.Background(), cfg, bTarget, bID, decision, 4<<20, client, business)
+	for _, staleDecision := range []bool{false, true} {
+		stale := *prepared
+		if staleDecision {
+			stale.decision.Snapshot.Revision++
+		} else {
+			stale.raw = append([]byte(nil), raw...)
+			stale.raw[0] ^= 1
+		}
+		unexpected, err := openPreparedHandoffGateway(context.Background(), cfg, bTarget, bID, decision, 4<<20, client, business, false, p.DefaultHandoffPolicy(), &stale)
+		if !errors.Is(err, handoff.ErrConflict) {
+			if unexpected != nil {
+				unexpected.Close()
+			}
+			t.Fatal("stale validated image bypassed durable snapshot check", err)
+		}
+		if d, err := handoff.ReadDecision(cfg.DataDir); err != nil || d != decision {
+			t.Fatal("rejected prepared image changed ownership", d, err)
+		}
+	}
+	b, err := openPreparedHandoffGateway(context.Background(), cfg, bTarget, bID, decision, 4<<20, client, business, false, p.DefaultHandoffPolicy(), prepared)
 	if err != nil {
 		t.Fatal(err)
 	}

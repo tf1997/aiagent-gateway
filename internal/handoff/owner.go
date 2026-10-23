@@ -28,9 +28,11 @@ const (
 )
 
 var (
-	ErrConflict   = errors.New("HANDOFF_CONFLICT")
-	ErrCommitted  = errors.New("ROLLBACK_AFTER_COMMIT")
-	ErrNoBaseline = errors.New("HANDOFF_BASELINE_MISSING")
+	ErrConflict       = errors.New("HANDOFF_CONFLICT")
+	ErrCommitted      = errors.New("ROLLBACK_AFTER_COMMIT")
+	ErrNoBaseline     = errors.New("HANDOFF_BASELINE_MISSING")
+	ErrLostBaseline   = errors.New("HANDOFF_BASELINE_MISSING_WITH_STATE")
+	ErrReleaseChanged = errors.New("COLD_START_RELEASE_CHANGED")
 )
 
 // Identity uses a content digest, never a mutable path or a persisted PID.
@@ -123,7 +125,7 @@ func Acquire(dir string, identity Identity) (*Owner, error) {
 	if !identity.valid() {
 		return nil, fmt.Errorf("invalid process identity")
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := state.EnsureDirectory(dir); err != nil {
 		return nil, err
 	}
 	fd, err := syscall.Open(filepath.Join(dir, "owner.lock"), syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0600)
@@ -143,6 +145,11 @@ func Acquire(dir string, identity Identity) (*Owner, error) {
 	d, err := decode(o.journal.Snapshot())
 	if err != nil && !errors.Is(err, ErrNoBaseline) {
 		return fail(err)
+	}
+	if errors.Is(err, ErrNoBaseline) {
+		if err = checkBootstrapState(dir); err != nil {
+			return fail(err)
+		}
 	}
 	o.decision = d
 	return o, nil
@@ -167,10 +174,30 @@ func decode(values map[string]json.RawMessage) (Decision, error) {
 // different from a corrupt existing decision; only the former permits bootstrap.
 func ReadDecision(dir string) (Decision, error) {
 	values, err := state.ReadSnapshot(filepath.Join(dir, "handoff"))
-	if err != nil {
-		return Decision{}, err
+	var d Decision
+	if err == nil {
+		d, err = decode(values)
 	}
-	return decode(values)
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrNoBaseline) {
+		if checkErr := checkBootstrapState(dir); checkErr != nil {
+			return Decision{}, checkErr
+		}
+	}
+	return d, err
+}
+
+// A baseline is persisted before opening any business domain. Its absence is
+// only a fresh-start condition when those domains have never been created.
+// Lost metadata must not turn an existing deployment into a new initial release.
+func checkBootstrapState(dir string) error {
+	for _, path := range []string{"shared", "entry", "release", filepath.Join("handoff", "snapshots")} {
+		if _, err := os.Lstat(filepath.Join(dir, path)); err == nil {
+			return ErrLostBaseline
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (o *Owner) Decision() Decision { o.mu.Lock(); defer o.mu.Unlock(); return o.decision }
@@ -230,7 +257,10 @@ func (o *Owner) Recover() (Decision, error) {
 	if err := o.ready(); err != nil {
 		return previous, err
 	}
-	if previous.Phase == "" || previous.ColdStart != o.identity.Release || previous.Owner.Incarnation == o.identity.Incarnation {
+	if previous.ColdStart != "" && previous.ColdStart != o.identity.Release {
+		return previous, errors.Join(ErrConflict, ErrReleaseChanged)
+	}
+	if previous.Phase == "" || previous.Owner.Incarnation == o.identity.Incarnation {
 		return previous, ErrConflict
 	}
 	err := o.save(Decision{Phase: Stable, Source: o.identity, Owner: o.identity, Epoch: p.ID("epoch_"), ColdStart: o.identity.Release})

@@ -91,8 +91,8 @@ func Manage(action string, output io.Writer) error {
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	switch action {
-	case "install", "update-host":
-		return m.installRollout(ctx, action == "update-host")
+	case "install":
+		return m.installRollout(ctx)
 	case "uninstall":
 		return m.uninstallRollout(ctx)
 	case "start", "stop", "restart":

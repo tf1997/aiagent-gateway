@@ -4,6 +4,7 @@ import (
 	"aiagent-gateway/internal/appconfig"
 	p "aiagent-gateway/internal/releaseprotocol"
 	"aiagent-gateway/internal/rollout"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -24,7 +25,6 @@ const ControllerSocket = "/run/aiagent-gateway-control/controller.sock"
 const ReleasesDir = "/opt/aiagent-gateway/releases"
 
 type Deployment struct {
-	Infrastructure string   `json:"infrastructure"`
 	InitialRelease string   `json:"initial_release"`
 	Policy         p.Policy `json:"policy"`
 }
@@ -33,9 +33,14 @@ func LoadDeployment(path string) (Deployment, error) {
 	var d Deployment
 	b, e := os.ReadFile(path)
 	if e == nil {
-		e = json.Unmarshal(b, &d)
+		decoder := json.NewDecoder(bytes.NewReader(b))
+		decoder.DisallowUnknownFields()
+		e = decoder.Decode(&d)
+		if e == nil && decoder.Decode(new(any)) != io.EOF {
+			e = fmt.Errorf("invalid deployment manifest")
+		}
 	}
-	if e == nil && (d.Infrastructure == "" || d.InitialRelease == "") {
+	if e == nil && d.InitialRelease == "" {
 		e = fmt.Errorf("invalid deployment manifest")
 	}
 	if e == nil {
@@ -83,7 +88,7 @@ func (m *manager) stageRelease() (string, error) {
 	}
 	return filepath.Join(ReleasesDir, id, "gateway"), nil
 }
-func (m *manager) installRollout(ctx context.Context, updateHost bool) error {
+func (m *manager) installRollout(ctx context.Context) error {
 	artifact, err := m.stageRelease()
 	if err != nil {
 		return err
@@ -105,9 +110,6 @@ func (m *manager) installRollout(ctx context.Context, updateHost bool) error {
 		if _, err := os.Stat(m.path(dataPath)); err != nil {
 			return fmt.Errorf("existing configuration missing; restore it before upgrading")
 		}
-		if updateHost {
-			return m.updateHost(ctx, artifact, d)
-		}
 		if err = m.restoreRolloutUnits(d); err != nil {
 			return err
 		}
@@ -120,7 +122,7 @@ func (m *manager) installRollout(ctx context.Context, updateHost bool) error {
 			}
 		}
 		// Repeated installs inspect the live report and reuse the current release
-		// or task instead of restarting a serving worker.
+		// or task instead of restarting a serving gateway.
 		var current rollout.Report
 		if err = client.Call(ctx, "GET", "/control/v1/rollout", nil, &current); err != nil {
 			return err
@@ -147,7 +149,7 @@ func (m *manager) installRollout(ctx context.Context, updateHost bool) error {
 		}
 
 		if d.Policy.AutoProfiles {
-			d.Policy, err = policyForConfig(d.Policy, m.path(dataPath))
+			d.Policy, err = PolicyForConfig(d.Policy, m.path(dataPath))
 			if err != nil {
 				return err
 			}
@@ -162,9 +164,6 @@ func (m *manager) installRollout(ctx context.Context, updateHost bool) error {
 		return waitRolloutFor(context.Background(), client, m.output, started.ID, artifact)
 	} else if !os.IsNotExist(err) {
 		return err
-	}
-	if updateHost {
-		return fmt.Errorf("no deployment found; run install first")
 	}
 	for _, path := range []string{binaryPath, unitPath} {
 		if found, err := exists(m.path(path)); err != nil {
@@ -208,18 +207,13 @@ func (m *manager) installRollout(ctx context.Context, updateHost bool) error {
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(binary)
-	infra := filepath.Join("/opt/aiagent-gateway/infrastructure", hex.EncodeToString(sum[:]), "gateway")
-	if err = atomicWrite(m.path(infra), binary, 0755); err != nil {
-		return err
-	}
 	if err = atomicWrite(m.path(binaryPath), binary, 0755); err != nil {
 		return err
 	}
-	if err = m.writeHostUnits(infra); err != nil {
+	if err = m.writeProcessUnits(artifact); err != nil {
 		return err
 	}
-	d := Deployment{Infrastructure: infra, InitialRelease: artifact, Policy: p.DefaultPolicy()}
+	d := Deployment{InitialRelease: artifact, Policy: p.DefaultPolicy()}
 	raw, _ := json.MarshalIndent(d, "", "  ")
 	if err = atomicWrite(m.path(DeploymentPath), raw, 0600); err != nil {
 		return err
@@ -296,21 +290,22 @@ func sameWorker(id p.Identity, target p.Target) bool {
 }
 
 func (m *manager) verifyInstalledRelease(ctx context.Context, token string, target p.Target) error {
-	id, err := workerIdentity(ctx, token, target)
+	client := rollout.NewClient(m.path(ControllerSocket), token)
+	defer client.HTTP.CloseIdleConnections()
+	var id p.Identity
+	err := client.Call(ctx, "GET", "/control/v1/identity", nil, &id)
 	if err != nil {
 		return err
 	}
 	if !sameWorker(id, target) {
-		return fmt.Errorf("stable worker identity or readiness mismatch")
+		return fmt.Errorf("stable gateway identity or readiness mismatch")
 	}
-	client := rollout.NewClient(m.path(EntrySocket), token)
-	defer client.HTTP.CloseIdleConnections()
 	traffic, err := client.Traffic(ctx)
 	if err != nil {
 		return err
 	}
 	if traffic.Stable != target || traffic.Candidate != nil || traffic.Percent != 0 || traffic.Frozen || traffic.Rollout != "" {
-		return fmt.Errorf("entry is not serving the recorded stable worker")
+		return fmt.Errorf("entry is not serving the recorded stable gateway")
 	}
 	return nil
 }
@@ -325,7 +320,7 @@ func RolloutCommand(action string, out io.Writer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if action == "status" {
-		var r rollout.Report
+		var r json.RawMessage
 		if err = c.Call(ctx, "GET", "/control/v1/rollout", nil, &r); err != nil {
 			return err
 		}
@@ -356,14 +351,14 @@ func (m *manager) restoreRolloutUnits(d Deployment) error {
 		if err != nil {
 			return err
 		}
-		raw = []byte(strings.ReplaceAll(string(raw), "@BINARY@", d.Infrastructure))
+		raw = []byte(strings.ReplaceAll(string(raw), "@BINARY@", d.InitialRelease))
 		if err = atomicWrite(path, raw, 0644); err != nil {
 			return err
 		}
 		changed = true
 	}
 	if _, err := os.Stat(m.path(binaryPath)); os.IsNotExist(err) {
-		raw, err := os.ReadFile(m.path(d.Infrastructure))
+		raw, err := os.ReadFile(m.path(d.InitialRelease))
 		if err != nil {
 			return err
 		}
@@ -403,7 +398,8 @@ func waitStable(ctx context.Context, c *rollout.Client, token string) error {
 				return fmt.Errorf("rollout recovery required: %s", report.Reason)
 			}
 			if report.Stable.Incarnation != "" {
-				id, e := workerIdentity(ctx, token, report.Stable)
+				var id p.Identity
+				e := c.Call(ctx, "GET", "/control/v1/identity", nil, &id)
 				if e == nil && sameWorker(id, report.Stable) {
 					return nil
 				}
@@ -418,7 +414,7 @@ func waitStable(ctx context.Context, c *rollout.Client, token string) error {
 	return fmt.Errorf("stable deployment did not become ready")
 }
 
-func policyForConfig(policy p.Policy, path string) (p.Policy, error) {
+func PolicyForConfig(policy p.Policy, path string) (p.Policy, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return policy, err

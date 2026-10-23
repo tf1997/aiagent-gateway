@@ -2,8 +2,8 @@ package entry
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"time"
 
@@ -78,13 +78,21 @@ func (e *Entry) Export() (Transfer, error) {
 		return Transfer{}, err
 	}
 	v := Transfer{Traffic: e.traffic, Bindings: e.bindings, Results: e.results, Counter: e.counter, Lost: e.lost, Active: e.active}
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return Transfer{}, err
+	return v.clone(), nil
+}
+
+// Results and bindings contain only values. Copy their maps and the one target
+// pointer directly instead of serializing the entire evidence history twice
+// while incoming allocation calls are waiting at the handoff barrier.
+func (v Transfer) clone() Transfer {
+	v.Bindings = maps.Clone(v.Bindings)
+	v.Results = maps.Clone(v.Results)
+	v.Active = maps.Clone(v.Active)
+	if v.Traffic.Candidate != nil {
+		candidate := *v.Traffic.Candidate
+		v.Traffic.Candidate = &candidate
 	}
-	var detached Transfer
-	err = json.Unmarshal(raw, &detached)
-	return detached, err
+	return v
 }
 
 func (v Transfer) Validate() error {
@@ -130,14 +138,7 @@ func Import(j *state.Journal, token string, resolve Resolver, image Transfer) (*
 	if err := image.Validate(); err != nil {
 		return nil, err
 	}
-	raw, err := json.Marshal(image)
-	if err != nil {
-		return nil, err
-	}
-	var v Transfer
-	if err = json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
+	v := image.clone()
 	if v.Bindings == nil {
 		v.Bindings = map[string]string{}
 	}

@@ -18,27 +18,28 @@ import (
 	p "aiagent-gateway/internal/releaseprotocol"
 )
 
-const peerProtocol = 1
+const peerProtocol = 2
 const maxPeerFrame = 2 << 20 // includes JSON/base64 framing of a 1 MiB chunk
 
 // peerMessage travels only over the inherited socketpair. Credentials never
 // appear in argv, persisted reports, or a public management endpoint.
 type peerMessage struct {
-	Sequence uint64                  `json:"sequence"`
-	Action   string                  `json:"action"`
-	Deadline time.Time               `json:"deadline,omitempty"`
-	Boot     *candidateBoot          `json:"boot,omitempty"`
-	Identity p.Identity              `json:"identity,omitempty"`
-	Decision handoff.Decision        `json:"decision,omitempty"`
-	Manifest shared.SnapshotManifest `json:"manifest,omitempty"`
-	Chunk    *shared.SnapshotChunk   `json:"chunk,omitempty"`
-	Preview  bool                    `json:"preview,omitempty"`
-	Delta    bool                    `json:"delta,omitempty"`
-	View     *shared.ImageVersion    `json:"view,omitempty"`
-	Policy   *p.HandoffPolicy        `json:"handoff_policy,omitempty"`
-	State    *shared.BarrierStatus   `json:"state,omitempty"`
-	Stats    *p.Statistics           `json:"stats,omitempty"`
-	Error    string                  `json:"error,omitempty"`
+	Sequence  uint64                  `json:"sequence"`
+	Action    string                  `json:"action"`
+	Deadline  time.Time               `json:"deadline,omitempty"`
+	Boot      *candidateBoot          `json:"boot,omitempty"`
+	Identity  p.Identity              `json:"identity,omitempty"`
+	Decision  handoff.Decision        `json:"decision,omitempty"`
+	Manifest  shared.SnapshotManifest `json:"manifest,omitempty"`
+	Chunk     *shared.SnapshotChunk   `json:"chunk,omitempty"`
+	Preview   bool                    `json:"preview,omitempty"`
+	Delta     bool                    `json:"delta,omitempty"`
+	View      *shared.ImageVersion    `json:"view,omitempty"`
+	Policy    *p.HandoffPolicy        `json:"handoff_policy,omitempty"`
+	State     *shared.BarrierStatus   `json:"state,omitempty"`
+	Stats     *p.Statistics           `json:"stats,omitempty"`
+	Lifecycle bool                    `json:"lifecycle_ready,omitempty"`
+	Error     string                  `json:"error,omitempty"`
 }
 
 type candidateBoot struct {
@@ -56,6 +57,10 @@ type candidateBoot struct {
 	MaxDeltaBytes    int             `json:"max_delta_bytes"`
 	DeltaFormat      string          `json:"delta_format"`
 	Policy           p.HandoffPolicy `json:"handoff_policy"`
+	Service          bool            `json:"service,omitempty"`
+	ReleasesDir      string          `json:"releases_dir,omitempty"`
+	Unit             string          `json:"unit,omitempty"`
+	ArtifactUID      uint32          `json:"artifact_uid"`
 }
 
 type peerChannel struct {

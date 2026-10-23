@@ -58,7 +58,23 @@ func (c *CandidateProcess) FollowHandoff(ctx context.Context, source *Gateway, i
 		}
 		return FollowStatus{}, err
 	}
-	raw, d, err := source.CheckpointHandoff(ctx, id, rollout, handoff.Identity{Incarnation: c.target.Incarnation, Release: c.target.Release}, maxBytes)
+	// Only the consistent capture needs the candidate transport gate closed.
+	// Snapshot transmission and validation can be slow and must not consume
+	// the bounded wait budget of incoming business requests.
+	captureCtx, stopCapture := context.WithTimeout(ctx, time.Duration(c.policy.BarrierMillis)*time.Millisecond)
+	_, err = c.channel.call(captureCtx, peerMessage{Action: "quiesce"})
+	if err != nil {
+		stopCapture()
+		return FollowStatus{}, err
+	}
+	raw, d, err := source.CheckpointHandoff(captureCtx, id, rollout, handoff.Identity{Incarnation: c.target.Incarnation, Release: c.target.Release}, maxBytes)
+	stopCapture()
+	if source.StorageHealthy() {
+		resume, stopResume := context.WithTimeout(context.Background(), time.Duration(c.policy.StateWaitMillis)*time.Millisecond)
+		_, resumeErr := c.channel.call(resume, peerMessage{Action: "resume_calls"})
+		stopResume()
+		err = errors.Join(err, resumeErr)
+	}
 	if err != nil {
 		return FollowStatus{}, err
 	}

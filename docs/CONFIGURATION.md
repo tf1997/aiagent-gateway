@@ -28,7 +28,7 @@ go build -o bin/aiagent-gateway ./cmd/gateway
 
 旧版将所有内容放在 `config.json` 的 schema 1/2 文件仍可读取。启动和幂等重放不改写旧文件；首次成功管理修改前，先原样保存为 `config.schema-1.backup.json` 或 `config.schema-2.backup.json`，再拆分写入，保留路由/Endpoint ID、凭据、幂等回执和审计历史。同名备份内容冲突时拒绝迁移。旧单文件与拆分文件混放时拒绝启动，避免不完整恢复丢失路由。备份或恢复应在停止写入后覆盖整个数据目录，不能只复制 `config.json`；旧二进制不支持拆分格式。
 
-前台模式更换二进制后重启即可使用新存储。灰度部署由 host 维护这些文件，需要按宿主维护流程更新 host；日常 `install` 只发布 worker。新版安装器能从新旧存储推断 HTTP、SSE 和 A2A 验收要求。
+前台模式更换二进制后重启即可使用新存储。完整网关灰度由当前 owner 维护这些文件，`install` 发布完整程序。控制器从冻结后的配置推导 HTTP、SSE 和 A2A 验收要求。
 
 最小实用配置：
 
@@ -70,7 +70,7 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 
 更新 Token 通过路由 POST/upsert 或 Endpoint PATCH 动态生效，无需重启。更新已有接口时省略 `token` 保留原值，显式 `null` 或空字符串移除认证；首次创建省略表示无需上游认证。管理响应及幂等回执不返回 Token。
 
-上游 Token 需要原文转发，随路由保存到权限 0600 的 `routes.json`，并通过受认证的本机共享配置传给 worker；消费者 Token 仍仅保存哈希。已有 `credential_ref` 必须迁入接口的 `token`，不能将原引用名当成 Token。迁移步骤见下文。
+上游 Token 需要原文转发，随路由保存到权限 0600 的 `routes.json`，并通过受认证的私有配置通道传给候选；消费者 Token 仍仅保存哈希。已有 `credential_ref` 必须迁入接口的 `token`，不能将原引用名当成 Token。旧实验部署需在维护窗口人工整理凭据；安装器不自动迁移旧拓扑。
 
 ## 字段与默认值
 
@@ -89,25 +89,21 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 | `max_resources` | 200000 | 公共资源总容量 |
 | `max_resource_aliases` | 200000 | 资源别名容量 |
 | `max_data_idempotency` | 100000 | 数据幂等预留容量 |
-| `state_socket` | `/run/aiagent-gateway/state.sock` | 状态服务 Socket |
-| `entry_socket` | `/run/aiagent-gateway/entry.sock` | 入口控制 Socket |
+| `state_socket` | `/run/aiagent-gateway/state.sock` | 内部状态 Socket 配置；完整候选使用独立私有路径 |
+| `entry_socket` | `/run/aiagent-gateway/entry.sock` | 旧入口控制配置；完整服务使用 control_socket |
 | `control_socket` | `/run/aiagent-gateway-control/controller.sock` | 发布控制 Socket |
 | `deployment` | `/etc/aiagent-gateway/deployment.json` | 部署清单与发布策略 |
 
-`host` 和内部 `worker` 命令接受角色名后的 `--config PATH`。host 额外接受 `--deployment PATH`，worker 的 `--incarnation` 和 `--parent-fd` 由宿主管理，不能手工伪造。worker 的 `--slot`、`--release`、`--listen` 和 `--admin` 是发布控制器传入的实例参数；显式监听参数仍使用 `host:port`，覆盖该角色由 YAML 端口生成的监听地址。
+`process --config PATH` 是完整网关开发入口；使用部署清单时加 `--deployment PATH --releases-dir PATH --unit UNIT`。正式 unit 使用 `launch` 按持久决定选版后进入 process。候选进程、继承 FD 与握手参数由发布控制器管理。host/worker 角色命令已移除。
 
 ## systemd 安装
 
-安装生成的文件、各角色读取配置的方式，以及全组件维护步骤见 [安装、运行文件与升级全流程](DEPLOYMENT_LIFECYCLE.md)。
+文件与运行方式见 [部署全流程](DEPLOYMENT_LIFECYCLE.md)。首次 `install` 生成 `/etc/aiagent-gateway/config.yaml`，使用独立随机管理 Token，文件权限 0600，目录权限 0700。全新服务器也可预置有效 YAML，安装器保留原内容。
 
-首次 `install` 生成 `/etc/aiagent-gateway/config.yaml`，使用独立随机 Token，文件权限 0600，目录权限 0700。也可在全新服务器预先放置有效 YAML；安装器保留已有内容。
+unit 使用 `LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml` 和 `--config=%d/config.yaml`。候选经只读 FD 继承本轮配置；修改源 YAML 后需维护重启才能生效。路由、消费者及上游 Token 通过管理 API 动态更新，发布期间冻结配置写入。
 
-服务 unit 使用 `LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml` 和 `--config=%d/config.yaml`，由 systemd 将 root 文件提供给服务用户读取。需要支持该机制的 systemd（247+），详情见 [systemd 凭据文档](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#LoadCredential=)。不再使用 EnvironmentFile，也不需要放宽原文件权限。
+部署清单只包含 `initial_release` 和 `policy`。初始产物作为 launch 启动信封长期保留；已提交产物由 handoff 决定选定。当前已在 Debian 12 / systemd 252.39 验证正式安装和进程接管，其他系统版本未作支持承诺。
 
-安装统一使用 host-worker 拓扑。host 与子 worker 共用同一份 systemd YAML 凭据副本，修改源 YAML 后须维护重启 host 才生效；普通 worker 灰度不会重新加载源 YAML。host 发布日志固定在 `data_dir/release`。部署清单只包含 `infrastructure`、`initial_release` 和 `policy`，没有拓扑版本字段。
+安装器生成的 `data_dir` 为 `/var/lib/aiagent-gateway`，使用默认的绝对 Socket、部署清单和发布日志路径；不兼容路径在启动/升级前拒绝。监听端口、公开 URL 和容量可调整。自定义内部路径应使用独立开发配置或自行维护 unit，不与既有服务共用数据目录。
 
-安装器生成的 `data_dir` 是 `/var/lib/aiagent-gateway`。内置 systemd unit/driver 使用固定的状态目录、Socket、部署清单及发布日志路径，预置 YAML 也必须使用上述绝对默认路径；不兼容的路径配置会在启动/升级前拒绝。监听端口、公开 URL 和容量可调整。消费者及上游凭据通过路由 API 动态调整，无需重启。需要自定义内部路径时，使用前台角色启动或自行维护 unit。
-
-### 宿主更新
-
-普通 `install` 只灰度发布 worker。需要更新 host 和管理 CLI 时，先暂停新业务、排空并停止服务，再执行新产物的 `install --update-host`。更新前自动备份配置、状态与 unit，保留业务数据和自定义 drop-in，以新产物建立初始稳定版本。步骤见 [整套组件更新](DEPLOYMENT_LIFECYCLE.md#整套组件更新)。
+普通 `install` 发布完整网关，没有 `--update-host`。旧实验拓扑不自动迁移，不增加部署版本字段，不自动清空数据。需要迁移时，先人工停止并核对所有旧进程退出，取得包含配置、共享状态、发布决定和凭据的一致备份，再部署新拓扑。

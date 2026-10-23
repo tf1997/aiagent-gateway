@@ -56,7 +56,7 @@ type journalFile interface {
 const maxFrame = 256 << 20
 
 func Open(dir string) (*Journal, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := EnsureDirectory(dir); err != nil {
 		return nil, err
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "state.lock"), os.O_CREATE|os.O_RDWR, 0600)

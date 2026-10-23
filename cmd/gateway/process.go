@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"io"
 	"log/slog"
@@ -13,16 +14,21 @@ import (
 	"syscall"
 
 	"aiagent-gateway/internal/appconfig"
+	"aiagent-gateway/internal/handoff"
 	"aiagent-gateway/internal/process"
 	p "aiagent-gateway/internal/releaseprotocol"
+	"aiagent-gateway/internal/service"
 )
 
-// process is the complete runtime development entry. It is deliberately not
-// selected by install until live state handoff is implemented and validated.
+// process runs the complete gateway. Installed services enter through launch
+// so the durable handoff decision selects the executable before writers open.
 func runProcess(args []string) int {
 	fs := flag.NewFlagSet("process", flag.ContinueOnError)
 	config := fs.String("config", appconfig.DefaultPath, "YAML configuration file")
 	candidateFD := fs.Int("candidate-fd", 0, "inherited complete-process handshake descriptor")
+	deployment := fs.String("deployment", "", "complete gateway deployment manifest")
+	releases := fs.String("releases-dir", service.ReleasesDir, "immutable release directory")
+	unit := fs.String("unit", "", "systemd service unit")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			return 0
@@ -66,7 +72,28 @@ func runProcess(args []string) int {
 	}
 	target := p.Target{Artifact: path, Release: identity.Release, Instance: identity.Instance, Incarnation: identity.Incarnation,
 		URL: "http://gateway", Socket: filepath.Join(filepath.Dir(cfg.StateSocket), "p", identity.Incarnation, "business.sock")}
-	if err = process.ServeGateway(ctx, cfg, target, identity); err != nil {
+	if *deployment != "" {
+		d, loadErr := service.LoadDeployment(*deployment)
+		if loadErr != nil {
+			slog.Error("deployment failed", "error", loadErr)
+			return 1
+		}
+		uid := uint32(os.Geteuid())
+		if *releases == service.ReleasesDir {
+			uid = 0
+		}
+		if err = service.ValidateArtifact(*releases, path, uid); err != nil {
+			slog.Error("untrusted process artifact", "error", err)
+			return 1
+		}
+		err = process.ServeService(ctx, cfg, target, identity, process.ServiceOptions{ConfigPath: *config, ReleasesDir: *releases, Unit: *unit, OwnerUID: uid, Policy: d.Policy, Output: os.Stderr})
+	} else {
+		err = process.ServeGateway(ctx, cfg, target, identity)
+	}
+	if err != nil {
+		if *deployment != "" && errors.Is(err, handoff.ErrReleaseChanged) {
+			return runLaunch([]string{"--config", *config, "--deployment", *deployment, "--releases-dir", *releases, "--unit", *unit})
+		}
 		slog.Error("complete process failed", "error", err)
 		return 1
 	}

@@ -1,8 +1,8 @@
 # 整个网关灰度发布实施方案
 
-更新日期：2026-10-19。状态：实现中，Linux/systemd 原型和单进程基础运行时已验证；完整自动灰度尚未完成。具体交付、验证边界与下一步见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
+更新日期：2026-10-23。完整网关自动灰度与默认安装已实现，正式安装和 Linux/systemd 连续发布已验证。连续操作增量、完整故障矩阵、实际 Agent 换版与生产容量仍未验收完成，具体范围见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
 
-本文基于当前 host + worker 代码，定义入口、业务、状态和发布控制一起换版的方案。当前安装仍为 2 → 3 → 2，普通 install 只灰度 worker，host 更新需要维护窗口；实际操作以 [部署全流程](DEPLOYMENT_LIFECYCLE.md) 为准。本文中的新接口、字段、命令和默认值均为目标设计，不能直接用于当前版本。
+本文保留目标设计和完整验收标准，不能把未完成条目理解为已经支持。当前操作以 [部署全流程](DEPLOYMENT_LIFECYCLE.md) 为准；旧 host + worker 是历史实现。当前代码已接入完整网关默认 install，但尚未满足第 11 节全部阶段的整体放行要求。
 
 ## 1. 目标与范围
 
@@ -61,9 +61,9 @@ GatewayProcess
 | 执行目标属于对方 | 私有 UDS，最多转发一次 | 私有 UDS，最多转发一次 |
 | 状态提交后 | 只允许排空与必要的控制转发 | 本地 dispatcher |
 
-拟新增 `internal/process` 组装完整进程，`internal/handoff` 实现交接协调。复用 `internal/entry`、`internal/rollout`、`internal/state`，避免重写现有业务协议。
+`internal/process` 已组装完整进程，`internal/handoff` 实现交接协调。复用 `internal/entry`、`internal/rollout`、`internal/state`，避免重写现有业务协议。
 
-StateAccess/交接协调器需要以下能力，具体 Go 类型在 P1/P2 实现时确定：
+StateAccess/交接协调器的目标能力如下，当前 Go API 见实现进度及对应包：
 
 ~~~text
 Call(ctx, operation) -> result
@@ -209,7 +209,7 @@ release 根据记录执行一次性释放，迟到或重复释放不能再次扣
 
 StateAccess 的接纳门覆盖完整状态操作，包括锁外 discovery、持久化和回执登记。操作进入时绑定 epoch 和 operation_id，提交前再次校验；不能只等 shared.Server.mu 空闲就认为没有在途写入。
 
-快照在一致 revision 上建立，只读导入不产生上游副作用。A 在提交状态变化的同一临界区记录有序增量，B 只更新隔离的导入视图。增量溢出或 revision 缺口必须触发重新取快照或停止本轮准备，禁止跳过变化继续提交。
+快照在一致 revision 上建立，只读导入不产生上游副作用。目标要求 A 在提交状态变化的同一临界区记录有序增量，B 只更新隔离的导入视图。当前实现是有界检查点差量，仍需全量捕获与重建，尚未达到连续操作增量这一项。增量溢出或 revision 缺口必须触发重新取快照或停止本轮准备，禁止跳过变化继续提交。
 
 快照按不超过 1 MiB 的块传输，每块包含 snapshot_id、序号、偏移、长度和摘要；B 验证顺序、总量及最终摘要后才承认导入完成，不能把整个快照塞进当前状态 RPC。摘要基于明确排序与编码的内容计算，不依赖 map 遍历顺序。交接日志引用快照摘要，快照不反向包含这条引用，避免循环依赖。
 
@@ -487,7 +487,7 @@ COMPLETED 必须同时满足：B 独立可用、状态和控制归属为 B、sys
 | P4：安装与运维 | 唯一新拓扑、unit、权限、CLI/status、冷启动恢复、清理策略 | Linux 首装、正常升级、进程崩溃、机器重启、stop/start、卸载保留数据后重装通过 |
 | P5：实际业务与容量 | 真实 Agent 联调、压力/长流、屏障和资源测量、操作文档 | 存量资源续接及 Agent 归属正确；交接预算有实测依据；完成连续成功、失败回退后再成功发布 |
 
-顺序为 P0 → P1 → P2 → P3 → P4 → P5。P0 先证明无需常驻 supervisor 的生命周期可行；P2 是自动提交的硬前置。所有阶段完成前，当前 install 保持已有行为，不把未验证的完整网关灰度接到默认安装路径。
+顺序为 P0 → P1 → P2 → P3 → P4 → P5。P0 先证明无需常驻 supervisor 的生命周期可行；P2 是自动提交的硬前置。原计划的默认安装放行要求是所有阶段完成。当前工作树已将默认安装接入完整网关并验证正式 Linux 安装，但 P2/P5 尚有上述缺口；这是相对原放行顺序的偏差，不能将当前默认路径等同于整体验收完成。
 
 ### 11.1 必测场景
 
@@ -515,4 +515,4 @@ COMPLETED 必须同时满足：B 独立可用、状态和控制归属为 B、sys
 
 P5 输出交接停顿 p50/p95/p99、状态队列拒绝数、请求失败数、两版 RSS/CPU/FD、快照/增量大小与排空耗时，并据此修订第 6.4 节预算。常驻进程减少不等于灰度峰值内存减半：两版 runtime 和导入快照会同时存在。
 
-本次文档交付不代表上述功能或验收已完成；实现后的操作说明与验证记录需分别更新 DEPLOYMENT_LIFECYCLE、ROLLOUT_OPERATIONS 和 VALIDATION。
+各项实际交付、测量范围和未完成验收记录于 SINGLE_PROCESS_IMPLEMENTATION_STATUS、DEPLOYMENT_LIFECYCLE、ROLLOUT_OPERATIONS 和 VALIDATION；以上目标不能替代验证证据。

@@ -48,7 +48,7 @@ func TestInstallSameRelease(t *testing.T) {
 				}
 				m.executable = renamed
 			}
-			d := Deployment{Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
+			d := Deployment{InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
 			raw, _ := json.Marshal(d)
 			for path, body := range map[string][]byte{
 				configPath: []byte("data_dir: /var/lib/aiagent-gateway\nadmin_token: unchanged-secret\n"),
@@ -123,6 +123,14 @@ func TestInstallSameRelease(t *testing.T) {
 					w.WriteHeader(409)
 					return
 				}
+				if r.URL.Path == "/control/v1/identity" {
+					json.NewEncoder(w).Encode(identity)
+					return
+				}
+				if r.URL.Path == "/control/v1/traffic" {
+					json.NewEncoder(w).Encode(traffic)
+					return
+				}
 				if reads.Add(1) > 1 && (mode == "in_progress" || mode == "recovering" || strings.HasPrefix(mode, "wait_")) {
 					report.Phase, report.Stable = "COMPLETED", stable
 					if mode == "wait_replaced" {
@@ -144,7 +152,7 @@ func TestInstallSameRelease(t *testing.T) {
 			for _, path := range []string{configPath, dataPath, binaryPath, DeploymentPath, unitPath} {
 				before[path] = read(t, m.path(path))
 			}
-			err = m.installRollout(context.Background(), false)
+			err = m.installRollout(context.Background())
 			wantSuccess := mode == "active" || mode == "renamed_binary" || mode == "stopped" || mode == "rolled_back" || mode == "failed" || mode == "in_progress" || mode == "recovering"
 			if (err == nil) != wantSuccess {
 				t.Fatalf("success=%t, error=%v", wantSuccess, err)

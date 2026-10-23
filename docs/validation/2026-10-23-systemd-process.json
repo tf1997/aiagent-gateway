@@ -1,0 +1,59 @@
+{
+  "systemd": "systemd 252 (252.39-1~deb12u2)",
+  "release_windows_ms": {
+    "samples": 24,
+    "p50": 637,
+    "p95": 951,
+    "p99": 965
+  },
+  "snapshot_bytes": [
+    469703,
+    1063769,
+    603059,
+    1187641,
+    1400903,
+    1659304,
+    1915631,
+    2172469,
+    2425132,
+    2833007,
+    3049916,
+    3289986,
+    3536765,
+    3777927,
+    4022406,
+    4391453,
+    4589427,
+    4799029,
+    5028507,
+    5267515,
+    5487471,
+    5721927,
+    6136016,
+    6345717
+  ],
+  "request_ms": {
+    "samples": 2081,
+    "p50": 8.479,
+    "p95": 19.811,
+    "p99": 110.775
+  },
+  "handoff_request_ms": {
+    "samples": 196,
+    "p50": 11.776,
+    "p95": 302.271,
+    "p99": 475.755
+  },
+  "queue_timeouts": 0,
+  "queue_rejected": 0,
+  "peak_rss_kib": 216980,
+  "peak_fds": 46,
+  "peak_service_pids": 2,
+  "request_failures": 0,
+  "passed": true,
+  "extra_release_cycles": 20,
+  "scope": "small-state serial HTTP workload; not a production capacity ceiling",
+  "environment": "Debian 12 / Linux arm64, isolated Docker systemd container",
+  "date": "2026-10-23",
+  "gateway_revision_note": "working tree for complete process rollout; source and report committed together"
+}

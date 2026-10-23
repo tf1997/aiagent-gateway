@@ -44,6 +44,15 @@ type Candidate struct {
 	preview, delta bool
 	viewRaw        []byte
 	viewDecision   handoff.Decision
+	prepared       *preparedHandoff
+	service        *Service
+	lifetime       context.Context
+	wake           func()
+	serviceCancel  context.CancelFunc
+	serviceDone    chan struct{}
+	serviceErr     error
+	serviceReady   bool
+	callsSealed    bool
 }
 
 func openCandidate(cfg appconfig.Config, boot candidateBoot, release string) (*Candidate, error) {
@@ -57,7 +66,7 @@ func openCandidate(cfg appconfig.Config, boot candidateBoot, release string) (*C
 		!filepath.IsAbs(boot.StateSocket) || !filepath.IsAbs(t.Socket) || filepath.Dir(t.Socket) != filepath.Dir(boot.StateSocket) || t.URL != "http://gateway" {
 		return nil, fmt.Errorf("INVALID_CANDIDATE_BOOTSTRAP")
 	}
-	c := &Candidate{cfg: cfg, boot: boot, identity: p.Identity{PID: os.Getpid(), Release: release, Incarnation: t.Incarnation, Instance: t.Instance}}
+	c := &Candidate{cfg: cfg, boot: boot, serviceDone: make(chan struct{}), identity: p.Identity{PID: os.Getpid(), Release: release, Incarnation: t.Incarnation, Instance: t.Instance}}
 	c.client = shared.NewClient(boot.StateSocket, boot.Token, t.Incarnation)
 	var config shared.Response
 	if err := c.client.Call("config", shared.Request{}, &config); err != nil {
@@ -77,6 +86,17 @@ func openCandidate(cfg appconfig.Config, boot candidateBoot, release string) (*C
 		return nil, err
 	}
 	c.allocator = newCandidateAllocator(boot)
+	limits := shared.QueueLimits{Requests: boot.Policy.QueueRequests, Bytes: boot.Policy.QueueBytes, Wait: time.Duration(boot.Policy.StateWaitMillis) * time.Millisecond}
+	if err = c.client.ConfigureHandoffQueue(limits); err != nil {
+		c.business.Close()
+		c.client.Close()
+		return nil, err
+	}
+	if err = c.allocator.gate.Configure(limits); err != nil {
+		c.business.Close()
+		c.client.Close()
+		return nil, err
+	}
 	c.frontend, err = entry.NewFrontend(c.allocator, boot.Target, c.business.ExecuteLocal)
 	if err != nil {
 		c.business.Close()
@@ -94,7 +114,17 @@ func openCandidate(cfg appconfig.Config, boot candidateBoot, release string) (*C
 
 func (c *Candidate) Close() error {
 	c.mu.Lock()
+	if c.serviceCancel != nil {
+		c.serviceCancel()
+		done := c.serviceDone
+		c.mu.Unlock()
+		<-done
+		c.mu.Lock()
+	}
 	defer c.mu.Unlock()
+	if c.service != nil {
+		c.service.close()
+	}
 	if c.frontend != nil {
 		c.frontend.Close()
 	}
@@ -126,7 +156,7 @@ func (c *Candidate) privateHandler() http.Handler {
 			var m peerMessage
 			decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 			decoder.DisallowUnknownFields()
-			if decoder.Decode(&m) != nil || decoder.Decode(new(any)) != io.EOF || (m.Action != "identity" && m.Action != "activate") {
+			if decoder.Decode(&m) != nil || decoder.Decode(new(any)) != io.EOF || (m.Action != "identity" && m.Action != "activate" && m.Action != "takeover") {
 				http.Error(w, "INVALID_RECOVERY_COMMAND", http.StatusBadRequest)
 				return
 			}
@@ -149,6 +179,21 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 	reply := peerMessage{Sequence: m.Sequence, Action: m.Action}
 	switch m.Action {
 	case "identity":
+	case "quiesce":
+		if !c.callsSealed {
+			if err := c.allocator.gate.Seal(ctx); err != nil {
+				return reply, err
+			}
+			if err := c.client.Quiesce(ctx); err != nil {
+				_ = c.allocator.gate.Resume()
+				return reply, err
+			}
+			c.callsSealed = true
+		}
+	case "resume_calls":
+		_ = c.client.ResumeCalls()
+		_ = c.allocator.gate.Resume()
+		c.callsSealed = false
 	case "stats":
 		if c.owner == nil {
 			return reply, fmt.Errorf("CANDIDATE_NOT_COMMITTED")
@@ -157,6 +202,10 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		reply.Stats = &stats
 	case "activate":
 		if err := c.activate(ctx); err != nil {
+			return reply, err
+		}
+	case "takeover":
+		if err := c.takeover(ctx); err != nil {
 			return reply, err
 		}
 	case "accept":
@@ -188,6 +237,7 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			return reply, err
 		}
 		c.receiver, c.decision, c.verified = receiver, m.Decision, false
+		c.prepared = nil
 		c.preview, c.delta = m.Preview, m.Delta
 	case "chunk":
 		if c.receiver == nil || m.Chunk == nil || c.verified {
@@ -223,7 +273,8 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		// while retaining PREPARED and never setting commit authorization.
 		validation := c.decision
 		validation.Phase = handoff.Sealed
-		if _, err = ValidateHandoff(raw, validation, c.boot.MaxSnapshotBytes, c.cfg.Options()); err != nil {
+		image, view, err := decodeGatewayImage(raw, validation, c.boot.MaxSnapshotBytes, c.cfg.Options())
+		if err != nil {
 			return reply, err
 		}
 		if err = ctx.Err(); err != nil {
@@ -231,18 +282,24 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		}
 		c.viewRaw, c.viewDecision = raw, c.decision
 		c.verified = !c.preview
+		if c.verified {
+			c.prepared = &preparedHandoff{decision: c.decision, raw: raw, image: image, view: view}
+		}
 	case "commit":
 		if !c.verified || c.preview || m.Decision != c.decision {
 			return reply, handoff.ErrConflict
 		}
 		if c.owner == nil {
-			n, err := openHandoffGateway(ctx, c.cfg, c.boot.Target, c.identity, c.decision, c.boot.MaxSnapshotBytes, c.client, c.business, false, c.boot.Policy)
+			n, err := openPreparedHandoffGateway(ctx, c.cfg, c.boot.Target, c.identity, c.decision, c.boot.MaxSnapshotBytes, c.client, c.business, false, c.boot.Policy, c.prepared)
 			if err != nil {
 				return reply, err
 			}
 			c.owner = n
 			c.allocator.owner.Store(n)
+			_ = c.allocator.gate.Resume()
+			c.callsSealed = false
 			c.viewRaw = nil
+			c.prepared = nil
 		}
 	case "abort":
 		if c.owner != nil || m.Decision.Phase != handoff.Aborted || m.Decision.Source != (handoff.Identity{Incarnation: c.boot.Source.Incarnation, Release: c.boot.Source.Release}) || m.Decision.Target != (handoff.Identity{Incarnation: c.identity.Incarnation, Release: c.identity.Release}) || m.Decision.Epoch != c.boot.StateEpoch {
@@ -258,15 +315,20 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		if err = c.client.RestoreRemote(ctx, actual.Epoch); err != nil {
 			return reply, err
 		}
+		_ = c.client.ResumeCalls()
+		_ = c.allocator.gate.Resume()
+		c.callsSealed = false
 		if err = c.client.RetryReleases(ctx); err != nil {
 			return reply, err
 		}
 		c.receiver, c.verified, c.decision = nil, false, handoff.Decision{}
 		c.viewRaw, c.viewDecision = nil, handoff.Decision{}
+		c.prepared = nil
 	default:
 		return reply, fmt.Errorf("UNKNOWN_CANDIDATE_COMMAND")
 	}
 	reply.Identity = c.business.WorkerIdentity(c.identity)
+	reply.Lifecycle = c.serviceReady
 	if !c.allocator.healthy() {
 		reply.Identity.Ready = false
 	}
@@ -318,12 +380,60 @@ func (c *Candidate) acceptPublic(ctx context.Context) error {
 		}
 		listeners = append(listeners, listener)
 	}
-	for i, handler := range []http.Handler{c.frontend, c.publicAdmin()} {
+	data := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n := c.allocator.owner.Load(); n != nil {
+			n.DataHandler().ServeHTTP(w, r)
+			return
+		}
+		c.frontend.ServeHTTP(w, r)
+	})
+	for i, handler := range []http.Handler{data, c.publicAdmin()} {
 		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
 		c.public = append(c.public, server)
 		go func() { _ = server.Serve(listeners[i]) }()
 	}
 	c.publicActive = true
+	return nil
+}
+
+func (c *Candidate) takeover(ctx context.Context) error {
+	if !c.boot.Service || c.owner == nil || c.lifetime == nil || !c.owner.Ready() {
+		return fmt.Errorf("CANDIDATE_NOT_READY_FOR_SERVICE")
+	}
+	if c.serviceReady {
+		return nil
+	}
+	if c.service == nil {
+		var sockets [3]*Socket
+		copy(sockets[:], c.sockets)
+		s, err := newService(c.owner, sockets, ServiceOptions{ConfigPath: c.boot.ConfigPath, ReleasesDir: c.boot.ReleasesDir, Unit: c.boot.Unit, OwnerUID: c.boot.ArtifactUID, Output: os.Stderr}, true)
+		if err != nil {
+			return err
+		}
+		c.service = s
+		s.queueStatus = func() (shared.BarrierStatus, shared.BarrierStatus) {
+			return c.client.QueueStatus(), c.allocator.gate.Status()
+		}
+		s.opts.Policy = s.controller.report.Policy
+		s.servers = append(s.servers, c.public...)
+		s.ownerChanged = func(n *Gateway) {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.owner = n
+			c.business = n.business
+			c.allocator.owner.Store(n)
+		}
+	}
+	if err := c.service.acceptControl(); err != nil {
+		return err
+	}
+	if err := c.service.ready(ctx, true); err != nil {
+		return err
+	}
+	runCtx, cancel := context.WithCancel(c.lifetime)
+	c.serviceCancel = cancel
+	c.serviceReady = true
+	go func() { c.serviceErr = c.service.run(runCtx); close(c.serviceDone); c.wake() }()
 	return nil
 }
 
@@ -415,6 +525,8 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 	}()
 	defer func() { stopReceipts(); <-receiptsDone }()
 	c.sockets = sockets
+	c.lifetime = ctx
+	c.wake = func() { _ = conn.Close() }
 	listener, err := net.Listen("unix", c.boot.Target.Socket)
 	if err != nil {
 		return err
@@ -435,6 +547,9 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 	for {
 		m, readErr := readPeer(conn)
 		if readErr != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			if !c.committed() {
 				return readErr // the source disappeared before ownership committed
 			}
@@ -443,6 +558,8 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 			select {
 			case <-ctx.Done():
 				return nil
+			case <-c.serviceDone:
+				return c.serviceErr
 			}
 		}
 		if m.Sequence != sequence+1 || m.Deadline.IsZero() {

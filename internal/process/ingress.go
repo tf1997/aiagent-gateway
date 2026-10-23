@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"aiagent-gateway/internal/entry"
+	"aiagent-gateway/internal/gateway/runtime/shared"
 	p "aiagent-gateway/internal/releaseprotocol"
 )
 
@@ -108,6 +109,7 @@ func (c *CandidateProcess) sourceHandler() http.Handler {
 }
 
 type candidateAllocator struct {
+	gate           shared.Barrier
 	owner          atomic.Pointer[Gateway]
 	client         *http.Client
 	token, ingress string
@@ -170,6 +172,15 @@ func (a *candidateAllocator) Ready(ctx context.Context) bool {
 }
 
 func (a *candidateAllocator) Allocate(ctx context.Context, q p.Request, ingress, id string) (entry.Allocation, error) {
+	size, err := json.Marshal(q)
+	if err != nil {
+		return entry.Allocation{}, err
+	}
+	leave, err := a.gate.Wait(ctx, len(size))
+	if err != nil {
+		return entry.Allocation{}, err
+	}
+	defer leave()
 	if ingress != a.ingress {
 		return entry.Allocation{}, fmt.Errorf("INVALID_LOCAL_INGRESS")
 	}
@@ -180,7 +191,7 @@ func (a *candidateAllocator) Allocate(ctx context.Context, q p.Request, ingress,
 		return n.entry.Allocate(ctx, q, ingress, id)
 	}
 	var out entry.Allocation
-	err := a.call(ctx, "POST", "/_process/entry/allocate", allocationRequest{q, id}, &out)
+	err = a.call(ctx, "POST", "/_process/entry/allocate", allocationRequest{q, id}, &out)
 	if err != nil {
 		a.mu.Lock()
 		if len(a.pending)+len(a.unknown) >= 8192 {

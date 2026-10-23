@@ -23,6 +23,12 @@ type Barrier struct {
 	changed                chan struct{}
 }
 
+// Wait, Seal and Resume also support the candidate's bounded transport gate.
+// Queueing occurs before a call chooses its remote or adopted local owner.
+func (b *Barrier) Wait(ctx context.Context, bytes int) (func(), error) { return b.enter(ctx, bytes) }
+func (b *Barrier) Seal(ctx context.Context) error                      { return b.seal(ctx) }
+func (b *Barrier) Resume() error                                       { return b.resume() }
+
 // QueueLimits applies to calls waiting for a state handoff. Zero values select
 // the production defaults; configuration is fixed before admission starts.
 type QueueLimits struct {
@@ -49,6 +55,18 @@ func (b *Barrier) Configure(limits QueueLimits) error {
 	defer b.mu.Unlock()
 	if b.active != 0 || b.waiting != 0 || b.revision != 0 || b.sealed || limits.Requests < 0 || limits.Bytes < 0 || limits.Wait < 0 {
 		return fmt.Errorf("INVALID_STATE_QUEUE_CONFIGURATION")
+	}
+	b.limits = limits
+	return nil
+}
+
+// Reconfigure changes budgets between rollouts. Existing admitted operations
+// are unaffected; a seal or queued calls must finish under their original budget.
+func (b *Barrier) Reconfigure(limits QueueLimits) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sealed || b.sealing || b.waiting != 0 || b.captures != 0 || limits.Requests < 0 || limits.Bytes < 0 || limits.Wait < 0 {
+		return fmt.Errorf("STATE_QUEUE_BUDGET_BUSY")
 	}
 	b.limits = limits
 	return nil

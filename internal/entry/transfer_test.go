@@ -70,4 +70,18 @@ func TestEntryTransferPreservesAffinityAndEvidence(t *testing.T) {
 	if stats.Counts["http"].Success != 1 || stats.Active != 0 || next.counter != e.counter {
 		t.Fatal("evidence or allocator sequence lost")
 	}
+	// Neither the exported image nor the caller's import input may share maps
+	// or the candidate target with either live allocator.
+	v.Traffic.Candidate.Release = "mutated"
+	v.Results[result.ID] = p.Result{}
+	v.Active["injected"] = p.Result{}
+	for key := range v.Bindings {
+		delete(v.Bindings, key)
+	}
+	for _, allocator := range []*Entry{e, next} {
+		unchanged, err := allocator.Export()
+		if err != nil || !reflect.DeepEqual(unchanged, got) {
+			t.Fatal("transfer image aliases a live allocator", err)
+		}
+	}
 }

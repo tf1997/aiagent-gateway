@@ -70,6 +70,8 @@ func (s *Server) InitializeEpoch(epoch string) error {
 func (s *Server) Admit() (func(), error)                  { return s.barrier.TryEnter() }
 func (s *Server) ConfigureQueue(limits QueueLimits) error { return s.barrier.Configure(limits) }
 
+func (s *Server) ReconfigureQueue(limits QueueLimits) error { return s.barrier.Reconfigure(limits) }
+
 func (s *Server) Handler() http.Handler {
 	return s.handler(s.token, "")
 }

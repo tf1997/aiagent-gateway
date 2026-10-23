@@ -1,10 +1,10 @@
 # 开发文档
 
-按 [Hermes 适配与 A2A 1.0 开发方案](docs/HERMES_A2A_V1_DEVELOPMENT_PLAN.md)推进。P1/P2、A2A 1.0 和 Hermes HTTP 资源适配已实现，官方 SDK 六个 RPC 已通过两个真实 Hermes 实例的联调。第 7–12 节保留历史阶段记录；当前实现与验证进度见第 13 节。
+当前主线为 [完整网关灰度方案](docs/SINGLE_PROCESS_ROLLOUT_PLAN.md)，交付与未完成项以 [实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md) 为准。默认安装已接入 1 → 2 → 1 自动发布与 Linux/systemd 接管。HTTP/SSE/Hermes/A2A 协议实现沿用既有模块，后续章节保留历史开发记录，不应据旧 host/worker 描述配置当前部署。
 
 ## 1. 范围和约束
 
-以 DESIGN.md 为架构依据，用 Go 1.24+ 实现（YAML 解析使用 go.yaml.in/yaml/v3）单节点网关。Route 直接内嵌 Endpoint，不引入独立服务池、数据库或 Redis。配置从 HTTP API 更新并原子落盘；会话、A2A context 和任务映射仅在内存，重启失效。
+以 DESIGN.md 为架构依据，用 Go 1.24+ 实现（YAML 解析使用 go.yaml.in/yaml/v3）单节点网关。Route 直接内嵌 Endpoint，不引入独立服务池、数据库或 Redis。配置从 HTTP API 更新并原子落盘；普通前台入口的会话/资源在内存；完整 process / systemd 入口持久化业务元数据，在线交接还保留活动租约和短期缓存。
 
 交付可运行的首版：独立管理/数据监听、Bearer 认证、路由和实例 CRUD、配置版本/ETag、创建幂等、原子文件恢复、HTTP/SSE 代理、加权调度、会话绑定、健康检查、排空和优雅停机。A2A 仅支持 1.0 JSON-RPC HTTP/SSE，方法为 SendMessage、SendStreamingMessage、GetTask、ListTasks、CancelTask、SubscribeToTask；不支持推送通知。规范固定到 https://github.com/a2aproject/A2A/tree/v1.0.1 。
 
@@ -12,7 +12,9 @@
 
 | 文件或目录 | 职责 |
 | --- | --- |
-| cmd/gateway/main.go、internal/appconfig | YAML 配置、双端口启动、信号和停机 |
+| cmd/gateway/main.go、internal/appconfig | YAML 配置、启动入口、信号和停机 |
+| internal/process/、internal/handoff/ | 完整网关、自动发布、监听与控制交接、独占 owner 和持久决定 |
+| internal/service/ | 不可变产物、launch 选版、安装与 systemd unit |
 | internal/gateway/gateway.go | 对外入口和类型别名，保留 gateway.Open 等调用方式 |
 | internal/gateway/runtime/ | 启动组装、调度、会话绑定、健康检查和跨模块协调 |
 | internal/gateway/runtime/config/ | 配置校验与快照、管理 CRUD、消费者认证、迁移和原子存储 |
@@ -39,7 +41,7 @@
 
 YAML 文件提供监听端口、数据目录和管理 Token；消费者通过路由 consumers 动态登记，只持久化 Token 哈希。消费者 ID 是资源隔离键，每条路由独立授权。上游 Token 直接保存在路由接口的 token 中，代理移除客户端 Authorization、Cookie 和不可信身份头后注入可信身份/上游凭据。
 
-启动时自动初始化缺失的路由存储，已有文件直接读取；损坏或不可读时拒绝启动。ready 要求有效快照及持久化健康。数据和公共管理端口默认监听所有网卡（`:8080`、`:9090`），管理请求使用管理 Token 认证。内置 systemd worker 的内部端口显式绑定本机，发布控制使用 Unix Socket。
+启动时自动初始化缺失的路由存储，已有文件直接读取；损坏或不可读时拒绝启动。ready 要求有效快照及持久化健康。数据和公共管理端口默认监听所有网卡（`:8080`、`:9090`），管理请求使用管理 Token 认证。完整候选的执行与状态通信使用私有 Unix Socket；发布控制额外核对 Unix peer UID。
 
 ## 5. 验收与测试
 

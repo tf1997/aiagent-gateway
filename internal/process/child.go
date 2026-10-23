@@ -29,6 +29,8 @@ type CandidateOptions struct {
 	MaxSnapshotBytes                  int
 	MaxDeltaBytes                     int
 	Output                            io.Writer
+	Service                           bool
+	Unit                              string
 }
 
 // CandidateProcess refers only to a child created by this process. Persisted
@@ -68,6 +70,20 @@ func (c *CandidateProcess) Accept(ctx context.Context) error {
 func (c *CandidateProcess) Pause(ctx context.Context) error {
 	_, err := c.channel.call(ctx, peerMessage{Action: "pause"})
 	return err
+}
+
+func (c *CandidateProcess) Takeover(ctx context.Context) error {
+	reply, err := c.channel.call(ctx, peerMessage{Action: "takeover"})
+	if err != nil {
+		reply, err = c.recoverCall(ctx, peerMessage{Action: "takeover"})
+	}
+	if err != nil {
+		return err
+	}
+	if c.checkIdentity(reply.Identity) != nil || !reply.Identity.Ready || !reply.Lifecycle {
+		return fmt.Errorf("CANDIDATE_LIFECYCLE_NOT_READY")
+	}
+	return nil
 }
 
 // StartCandidate enforces the two-process limit while the current owner is
@@ -205,7 +221,8 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 	boot := candidateBoot{Protocol: peerProtocol, SnapshotFormat: gatewaySnapshotFormat, ConfigPath: opts.ConfigPath,
 		Source: n.target, Target: c.target, ParentPID: os.Getpid(), StateSocket: stateSocket, StateEpoch: n.owner.Decision().Epoch,
 		ConfigRevision: n.core.WorkerIdentity(n.identity).ConfigRevision, Token: token, MaxSnapshotBytes: opts.MaxSnapshotBytes,
-		MaxDeltaBytes: opts.MaxDeltaBytes, DeltaFormat: shared.DeltaFormat, Policy: c.policy}
+		MaxDeltaBytes: opts.MaxDeltaBytes, DeltaFormat: shared.DeltaFormat, Policy: c.policy,
+		Service: opts.Service, ReleasesDir: opts.ReleasesDir, Unit: opts.Unit, ArtifactUID: opts.OwnerUID}
 	reply, err := c.channel.call(ctx, peerMessage{Action: "boot", Boot: &boot})
 	if err != nil {
 		return nil, err

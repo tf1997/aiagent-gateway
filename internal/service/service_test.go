@@ -75,11 +75,11 @@ func TestMissingDataRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	completedInstallServer(t, m, artifact)
-	if err := m.installRollout(context.Background(), false); err != nil {
+	if err := m.installRollout(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	os.Remove(m.path(dataPath))
-	if err := m.installRollout(context.Background(), false); err == nil {
+	if err := m.installRollout(context.Background()); err == nil {
 		t.Fatal("missing state recreated")
 	}
 	if ok, _ := exists(m.path(dataPath)); ok {
@@ -124,7 +124,7 @@ func TestSymlinkRejected(t *testing.T) {
 	p := m.path(unitPath)
 	os.MkdirAll(filepath.Dir(p), 0755)
 	os.Symlink(m.executable, p)
-	if err := m.installRollout(context.Background(), false); err == nil {
+	if err := m.installRollout(context.Background()); err == nil {
 		t.Fatal("symlink replaced")
 	}
 }
@@ -136,7 +136,7 @@ func TestFirstInstallDoesNotResetUnloadedUnit(t *testing.T) {
 		t.Fatal(err)
 	}
 	completedInstallServer(t, m, artifact)
-	if err := m.installRollout(context.Background(), false); err != nil {
+	if err := m.installRollout(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	for _, call := range f.calls {
@@ -153,7 +153,7 @@ func TestAccountCannotBeRoot(t *testing.T) {
 		}
 		return f.run(ctx, name, args...)
 	}
-	if err := m.installRollout(context.Background(), false); err == nil {
+	if err := m.installRollout(context.Background()); err == nil {
 		t.Fatal("root account accepted")
 	}
 	if ok, _ := exists(m.path(binaryPath)); ok {

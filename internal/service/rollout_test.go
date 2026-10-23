@@ -51,7 +51,7 @@ func TestPolicyForConfigStorageFormats(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := policyForConfig(p.DefaultPolicy(), path)
+			got, err := PolicyForConfig(p.DefaultPolicy(), path)
 			if err != nil || strings.Join(got.Profiles, ",") != tc.want {
 				t.Fatalf("profiles = %v, want %s: %v", got.Profiles, tc.want, err)
 			}
@@ -87,7 +87,7 @@ func TestPolicyForConfigRejectsIncompleteSplitStore(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := policyForConfig(p.DefaultPolicy(), path); err == nil {
+			if _, err := PolicyForConfig(p.DefaultPolicy(), path); err == nil {
 				t.Fatal("incomplete store silently reduced rollout coverage")
 			}
 		})
@@ -101,7 +101,7 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d := Deployment{Infrastructure: "/opt/aiagent-gateway/infrastructure/old/gateway", InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
+	d := Deployment{InitialRelease: "/opt/aiagent-gateway/releases/old/gateway", Policy: p.DefaultPolicy()}
 	raw, _ := json.Marshal(d)
 	atomicWrite(m.path(DeploymentPath), raw, 0600)
 	if err := os.MkdirAll(filepath.Dir(m.path(ControllerSocket)), 0700); err != nil {
@@ -132,7 +132,7 @@ func TestRolloutInstallPreservesServingVersionAndCredentials(t *testing.T) {
 	})}
 	go srv.Serve(l)
 	defer srv.Close()
-	if err = m.installRollout(context.Background(), false); err != nil {
+	if err = m.installRollout(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	artifact := <-posted

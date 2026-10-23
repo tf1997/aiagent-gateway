@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -40,11 +39,8 @@ func TestYAMLCLIInitializationAndEnvironmentRemoval(t *testing.T) {
 	if code := runForeground([]string{"--config", config, "--init-only"}); code != 1 {
 		t.Fatal("corrupt route store overwritten", code)
 	}
-	for _, role := range []string{"host", "worker"} {
-		err := serveRole(role, []string{"--config", filepath.Join(dir, "absent.yaml")})
-		if err == nil || !strings.Contains(err.Error(), "open YAML config") {
-			t.Fatal("role ignored config path", role, err)
-		}
+	if code := runProcess([]string{"--config", filepath.Join(dir, "absent.yaml")}); code != 1 {
+		t.Fatal("process ignored config path", code)
 	}
 }
 

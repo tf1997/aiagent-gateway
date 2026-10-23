@@ -1,171 +1,97 @@
 # 安装、运行文件与升级全流程
 
-按 2026-10-19 的实现说明。新安装使用 **稳定宿主 host + 业务 worker**：稳定期 2 个常驻进程，灰度期 3 个，正常结束后恢复 2 个。所有安装统一采用这一拓扑。
+更新日期：2026-10-23。安装使用一个完整网关进程，发布期间运行新旧两个网关，正常完成后回到一个进程。入口、业务执行、状态和发布控制一起换版。实现与未完成验收见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
 
-日常 `install` 只发布业务 worker，入口、管理、状态和发布控制所在的 host 保持运行。host 自身升级需要维护窗口。设计依据见 [减进程方案](PROCESS_REDUCTION_RECOMMENDATION.md)。
-
-## 运行模式与进程
-
-| 角色 | systemd 管理方式 | 监听 | 用户 |
-| --- | --- | --- | --- |
-| host（入口、状态、管理、发布控制） | `aiagent-gateway.service` 的 MainPID | 公共数据 `:8080`、管理 `:9090`，三个控制 UDS | aiagent-gateway |
-| worker A 或 B | host 直接启动并 Wait 回收的子进程 | 两个动态分配的 `127.0.0.1` 端口 | aiagent-gateway |
-| 候选 worker | 仅发布期间启动的第二个子进程 | 独立动态 loopback 端口 | aiagent-gateway |
+## 运行方式
 
 ```text
-稳定：host + A(H0)          = 2 个
-灰度：host + A(H0) + B(H1)  = 3 个
-完成：host + B(H1)          = 2 个
-下一次：host + B(H1) + A(H2)
+稳定：A（入口、业务、状态 owner、发布控制）
+灰度：A（唯一 owner）← 私有 UDS → B（入口、业务、候选视图）
+完成：B（入口、业务、状态 owner、发布控制）
+服务实例：1 → 2 → 1；可连续 A → B → C
 ```
 
-数量不含短命 install/status CLI、一次性 init、systemd 和上游 Agent。正常 systemd 状态为 `active (running)`。发布排空超时时保留两个 worker 等待恢复，不强杀旧请求或启动第三个 worker。
+systemd 管理 `aiagent-gateway.service`，运行用户为非 root 的 `aiagent-gateway`。`Type=notify`、`NotifyAccess=main`、`KillMode=mixed` 配合 MainPID 通知和 READY 屏障完成父子进程接管。短命 install/status CLI、初始化服务和 systemctl 查询不计入服务实例数。
 
-```mermaid
-flowchart LR
-    Client[业务客户端] --> Host[host：入口 / 管理 / 状态 / 发布控制]
-    Host --> A[worker A]
-    Host --> B[worker B：灰度时]
-    A --> Agent[原 Agent Endpoint]
-    B --> Agent
-    A -. 共享状态 UDS .-> Host
-    B -. 共享状态 UDS .-> Host
-```
-
-无子命令的前台模式仍是单进程网关，不提供 host-worker 自动灰度。对外安装只维护 host-worker 模式。
+已在隔离 Debian 12 / systemd 252.39 / Linux arm64 环境验证正式安装、连续换版、失败回退、进程崩溃、stop/start、容器重启、卸载保留数据后重装。其他系统版本与生产负载仍需单独验收。
 
 ## 首次安装
 
-构建和上传步骤见 [操作说明](ROLLOUT_OPERATIONS.md#构建发版)。在 Linux/systemd 247+ 上执行：
-
 ```sh
-sudo ./aiagent-gateway-linux-amd64 install
+sudo ./gateway-linux-arm64 install
 sudo aiagent-gateway rollout status --json
 sudo systemctl status aiagent-gateway.service
 curl -fsS http://127.0.0.1:8080/readyz
 ```
 
-安装器以 root 暂存自身二进制的 SHA-256 版本，创建非 root 账户、启动 YAML、部署清单和两个 unit（host 与一次性 init）。已有凭据不重建。init 只初始化缺失的路由存储，host 打开配置及三个持久日志，随后启动初始 worker。首次没有旧版，身份、就绪及协议校验通过后直接完成，不等待灰度业务样本。
+安装器需要 `systemctl`、`getent`、`groupadd` 和 `useradd`。root 暂存 SHA-256 命名的只读产物，创建专用账户、管理 CLI、YAML 凭据、部署清单和两个 unit。一次性 init 只在配置存储缺失时运行。已有凭据和业务文件保留，损坏或不完整的既有部署拒绝自动重置。
 
-启动配置通过 systemd `LoadCredential` 提供给 host，worker 继承同一份 YAML 路径。默认没有业务路由；通过管理 API 注册路由、消费者和上游凭据。A2A 接入前将 `public_url` 配置为客户端可访问的地址。
+服务通过 `launch` 启动。它只读交接决定并校验选定产物，随后 exec 到完整运行入口，保持 PID；不启动常驻 supervisor。选定产物缺失、哈希不符或日志损坏时失败，不回退到另一个版本。取得 owner.lock 后再次检查版本选择，解决读取决定与实际取得锁之间的竞态。
 
 ## 文件布局
 
-`H0`、`H1` 代表完整的 64 位 SHA-256。
+| 路径 | 用途 |
+| --- | --- |
+| `/usr/local/bin/aiagent-gateway` | 管理 CLI，首装或缺失重装时安装 |
+| `/opt/aiagent-gateway/releases/<sha256>/gateway` | root 所有的不可变完整网关产物 |
+| `/etc/aiagent-gateway/config.yaml` | 启动配置和管理 Token，0600 |
+| `/etc/aiagent-gateway/deployment.json` | `initial_release` 和 `policy` |
+| `/etc/systemd/system/aiagent-gateway.service` | 完整网关，ExecStart 调用初始产物的 launch |
+| `/etc/systemd/system/aiagent-gateway-init.service` | 一次性路由存储初始化 |
+| `/var/lib/aiagent-gateway/owner.lock` | 整个网关的独占写入权，固定 inode |
+| `data_dir/handoff/state.log` | 权威交接决定与冷启动选版 |
+| `data_dir/handoff/snapshots/` | 有摘要的不可变交接镜像 |
+| `data_dir/config.json`、`routes.json`、`route-logs.json` | 配置、路由、幂等回执和审计 |
+| `data_dir/shared/`、`entry/`、`release/` | 业务元数据、分配/结果、发布报告 |
+| `/run/aiagent-gateway/p/<标识>/` | 候选私有执行与状态通道 |
+| `/run/aiagent-gateway-control/controller.sock` | 稳定发布控制 UDS，随 listener FD 交接 |
 
-```text
-/usr/local/bin/aiagent-gateway              管理 CLI，日常 worker 发布不替换
-/opt/aiagent-gateway/
-  infrastructure/H0/gateway                稳定 host 二进制
-  releases/H0/gateway                      初始 worker
-  releases/H1/gateway                      后续业务版本
-/etc/aiagent-gateway/
-  config.yaml                              启动配置、管理 Token
-  deployment.json                          基础产物、启动种子、发布策略
-/etc/systemd/system/
-  aiagent-gateway.service                   单个 host service
-  aiagent-gateway-init.service              一次性初始化
-/var/lib/aiagent-gateway/
-  config.json                              存储格式、schema、配置版本
-  routes.json                              路由、Endpoint、消费者及上游凭据
-  route-logs.json                          管理幂等回执和审计记录
-  .config.pending.json                     存在时用于完成配置提交
-  gateway.lock                             配置独占锁
-  shared/state.log                         资源、会话、别名、业务幂等
-  entry/state.log                          切流策略、会话版本分配、请求结果
-  release/state.log                        发布报告、稳定版本和未完成切流意图
-/run/aiagent-gateway/
-  state.sock                               worker 共享状态
-  entry.sock                               本机入口诊断/控制
-/run/aiagent-gateway-control/controller.sock 发布提交与查询
-/run/lock/aiagent-gateway-install.lock       安装与管理命令互斥
-```
+配置与部署文件通过 LoadCredential 提供给服务；候选通过只读 FD 接收配置。凭据不进入命令行或 status。公共管理 Token 不授予执行产物的权限；发布控制还检查本机 Unix peer UID，正式部署只接受 root。
 
-三个日志目录各有 `state.lock`。host 是路由和持久状态的唯一写入者；两个 worker 都通过状态 UDS 使用同一个 epoch、配额、资源目录及幂等数据。部署清单仅包含 `infrastructure`、`initial_release` 和 `policy`。`initial_release` 只在没有发布历史时使用，当前稳定版以 `release/state.log` 和 `rollout status` 为准，不选择最新上传文件。
+`initial_release` 仅作为首次启动的种子和长期保留的启动信封。普通升级不改写它；已提交版本由 handoff 决定选择。产物保留策略目前是保留全部版本和快照，不自动删除可能用于启动或恢复的文件。
 
-安装二进制及 releases 目录由 root 持有，运行用户只读；产物和目录不能由其他用户写入，符号链接和内容哈希不符会拒绝启动。host 以专用非 root 用户运行，通过 Unix peer credentials 与管理 Token 双重校验发布控制请求。生产控制入口只接受 root 安装身份，公共管理 API 不提供执行二进制的接口。
-
-配置与状态按 0600 创建；运行和状态目录限制为 0700。备份应复制完整目录和恢复事务，不能只复制 `config.json`。
-
-## 配置如何生效
-
-| 修改内容 | 操作 | 生效范围 |
-| --- | --- | --- |
-| 路由、权重、消费者、上游 Token | 管理 API | 动态生效，灰度期间管理写入冻结 |
-| YAML 监听、管理 Token、容量 | 修改 config.yaml，维护重启 | host 与 worker 一起重启；不是灰度发布 |
-| 发布策略 | root 编辑 deployment.json.policy | 下次 install 提交的任务 |
-| 业务实现 | 执行新产物 install | 经过灰度和全量观察后生效 |
-| host/基础组件 | install --update-host | 停机维护后整体更新 |
-
-host 存续期间启动的 worker 使用同一份 systemd 凭据副本。编辑源 YAML 不影响正在运行的 host 或下一次业务发布，须维护重启。发布日志固定使用 `data_dir/release`。
-
-## 一次灰度升级的文件变化
+## 在线升级
 
 ```sh
-sudo aiagent-gateway rollout status --json > rollout-before.json
-sudo ./aiagent-gateway-linux-amd64 install
+sudo ./gateway-new install
+sudo aiagent-gateway rollout status --json
 ```
 
-执行新上传文件的 `install`，不要误用旧管理 CLI 提交旧产物。安装器新增 `/opt/aiagent-gateway/releases/H1/gateway`，通过本机控制 Socket 提交并等待任务；不改 host unit、CLI、基础组件路径、公共监听或 MainPID。worker 不生成 systemd unit，版本/端口/随机 incarnation 写入发布及入口日志。
+安装器暂存新产物并提交任务，后台控制器独立推进。CLI 等待期间退出不会取消发布；重连后通过 status 查看。相同产物的重复提交复用活动任务；相同健康稳定产物直接成功。有其他活动版本、未排空旧实例或未解决交接时拒绝另一个候选。
 
-重复提交同一正在发布的版本沿用原任务；已健康运行的同版本直接返回成功。其他活动任务或 `RECOVERY_REQUIRED` 阻止叠加发布。关闭 install 终端不取消后台任务，可重新查询或接续等待。
+默认先将 5% 新逻辑会话分配给候选，旧会话保持亲和。验证通过后全量执行、开启候选公共接入、暂停旧版 Accept，并采集每个必需 profile 的新版直接入口成功样本。旧版本地执行和转发中的长流都必须排空；候选上的活动 SSE 可带租约跨状态提交继续完成。
 
-## 进程与请求如何交接
+最终交接捕获并验证完整状态，源关闭所有领域写句柄后让出 owner.lock。候选取得锁、重读决定、提交 COMMITTED，再切为本地状态访问。状态和分配调用在交接窗口有界排队；超时、超容量不会重放业务请求。
 
-host 保持公共连接与共享状态，启动候选后核对实际子 PID、随机 incarnation、产物、槽位、协议和配置版本，确认就绪才参与流量。A/B 只表示两个槽位，端口动态分配；host 不根据持久化 PID 收养或终止不属于自己的进程。
+`COMPLETED` 要求新版状态/控制独立可用、systemd MainPID 接管已确认、旧进程实际退出、配置解冻。仅收到快照或 HTTP 激活回执不足以完成发布。
 
-5% 阶段按新逻辑会话分配 worker。全量后，已有会话的后续请求也可进入新 worker，但会话及 Hermes/A2A 公开资源 ID 继续指向原 Agent。已有 SSE 留在原请求链，不迁移连接。上游已收到的模型或工具请求不重放。
+## 回退与恢复
 
-## 全量切流与验证规则
+```sh
+sudo aiagent-gateway rollout rollback
+sudo aiagent-gateway rollout resume
+```
 
-默认 5% 新会话、至少验证 60 秒、每类至少 10 个真实成功样本，最长验证 300 秒；全量观察 300 秒并取得新样本。HTTP、SSE、A2A、A2A SSE 独立计数，readiness 不能代替业务成功。
+- 验证期出现有效失败或到期无成功样本：自动恢复旧版流量并排空候选。
+- 全量观察缺少新版直接入口样本：`RECOVERY_REQUIRED`，保留两版和证据；补足样本后 resume，或提交前 rollback。
+- 源/候选排空超时：保留两版，拒绝第三实例。请求结束后 resume，不强制制造成功。
+- 提交回执不确定：重读持久决定、核对身份与锁。COMMITTED 后返回 `ROLLBACK_AFTER_COMMIT`，只能恢复新版或另发兼容产物。
+- 新主进程崩溃：systemd 清理服务组后，launch 按持久决定重启；不用旧交接快照覆盖新版随后写入的业务日志。
 
-候选失败或样本不足自动回退。提交前同时检查入口活跃请求、worker 执行和状态租约，归零才停止并回收旧进程；排空默认最长 600 秒，超时进入 `RECOVERY_REQUIRED`，保留现场，排空后使用 `rollout resume`。完整策略和错误分类见 [操作说明](ROLLOUT_OPERATIONS.md#默认发布规则)。
+状态输出保留 rollout/handoff ID、两版身份、决定、阶段时间、实际接管确认的 MainPID、入口与执行样本、状态和候选等待队列、快照大小及交接时间。长交接期间 status 返回最近已持久化的报告，决定与运行状态另行读取；它不是对所有字段的跨进程原子快照。
 
-## 回退重启与卸载
-
-- 候选失败：切回旧版，待候选排空后退出，返回 2 个进程。回退不撤销上游已执行的操作。
-- 稳定 worker 崩溃：host 回收子进程并按已提交产物重启，重新分配 incarnation，公共 host 和状态 epoch 不变。在途连接无法恢复。
-- host 崩溃：父进程生命管道关闭，worker 退出；systemd 清理同 cgroup 后重启。新 host 先核对发布日志和入口切流意图，未提交发布回到旧稳定版，已进入 COMMITTING 的恢复新稳定版。日志冲突拒绝启动。既有连接会中断，业务元数据从最新持久状态恢复。
-- 人工 stop/restart：host 最多用 20 秒排空公共请求，再关闭内部服务和子进程；unit 使用 [KillMode=mixed](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html)，先通知主进程，宿主退出或 35 秒停止超时后由 systemd 清理剩余 cgroup 成员。此操作不等同于正常业务灰度。
-- uninstall：移除 unit 和 CLI，保留清单、凭据、状态和不可变产物；重装恢复 host-worker 服务。
-
-已完成发布后的降级要用兼容 host 子进程协议和当前状态的历史 worker 重新执行 install，重新经过灰度。
-
-## 整套组件更新
-
-host 自身升级需要维护窗口。无需手动删除部署清单或发布日志。
-
-1. 先结束或恢复活动发布，确认报告为 COMPLETED、ROLLED_BACK 或 FAILED。
-2. 暂停外部新流量，等待当前请求和本地后台执行结束，再停止现有服务。维护停机不能保留原 TCP/SSE。
-3. 确认 host 和子 worker 已停止后执行更新。
+## 维护、停止与重装
 
 ```sh
 sudo aiagent-gateway stop
-sudo systemctl list-units --all 'aiagent-gateway*'
-sudo ./aiagent-gateway-linux-amd64 install --update-host
-sudo aiagent-gateway rollout status --json
-sudo systemctl status aiagent-gateway.service
-```
-
-安装器拒绝活动/正在停止的服务、无法确认 systemd 状态、缺失配置和未结束发布。通过检查后，先把启动配置、部署清单、整个业务数据目录、CLI、unit 和 drop-in 备份至 `/var/lib/aiagent-gateway-backups/<UTC时间>/`。
-
-保留路由三文件、恢复事务、shared 业务日志和自定义 unit drop-in 原位，归档 entry/release 进程身份，更新 host unit、基础产物和部署清单。
-
-更新以本次执行的产物建立初始稳定版本，启动后验证存量公开 ID、原 Agent 归属和管理写入，再恢复业务。旧不可变产物仍保留。启动失败会报告备份位置；当前不自动回滚已经写入的新状态，恢复前要判断新进程是否已接受业务，不能用更新前快照覆盖合法新数据。
-
-## 运行现场检查
-
-```sh
-sudo aiagent-gateway status
-sudo aiagent-gateway rollout status --json
-sudo systemctl show aiagent-gateway.service -p MainPID -p ControlGroup
-sudo systemd-cgls /system.slice/aiagent-gateway.service
-ps -eo pid,ppid,stat,args | grep '[g]ateway'
-sudo ss -ltnp
+sudo aiagent-gateway start
+sudo aiagent-gateway restart
 sudo journalctl -u aiagent-gateway.service -f
+sudo aiagent-gateway uninstall
 ```
 
-在进程树中核对 host 和一至两个直接 worker 子进程。worker 身份接口包含 PID，完整命令行包含槽位、release 和 incarnation；实际端口以发布报告为准。控制参数是内部实现，不应手工修改运行中子进程。
+停止和重启可能中断连接。systemd 最终清理整个服务 cgroup；普通升级使用 install。YAML 启动参数由本轮进程继承，修改源 YAML 后需维护重启；路由、消费者及上游凭据通过管理 API 更新，发布期间配置写入冻结。
 
-本机真实进程验证、竞态检查及 Linux 构建结果见 [验证记录](../VALIDATION.md)。当前尚未完成真实 Linux/systemd 安装与 cgroup 故障验收，也未测量生产负载下的 RSS/PSS、延迟和吞吐。
+卸载移除服务文件和 CLI，保留配置、业务状态、发布决定、部署清单和产物。重装恢复 unit/CLI 并启动已提交版本，不初始化新的业务基线。
+
+不提供 host/worker 部署角色、`infrastructure`、`--update-host` 或旧拓扑自动迁移。已有旧实验部署切换前，人工停止并核对旧进程退出，取得完整一致备份后重新布置新拓扑；安装器不会自动搬迁或删除用户数据。

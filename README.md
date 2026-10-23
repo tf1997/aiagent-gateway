@@ -10,9 +10,9 @@ Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例�
 
 首次安装生成哪些文件、运行几个进程、灰度时如何替换产物和交接请求，以及如何更新全部组件，见 [安装、运行文件与升级全流程](docs/DEPLOYMENT_LIFECYCLE.md)。
 
-已实现 [稳定宿主 + worker](docs/PROCESS_REDUCTION_RECOMMENDATION.md)：新安装平时 2 个、灰度时 3 个进程，入口、状态和发布控制合并为一个非 root host。安装统一采用 host-worker；后续 1 → 2 → 1 方案正在实现，Linux/systemd 交接原型、单进程基础运行时及状态迁移基础接口的范围见 [实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)，完整自动灰度尚未接入默认安装。
+安装已接入完整网关 1 → 2 → 1 自动发布：稳定时一个非 root 进程，发布时最多两个，入口、业务、状态和发布控制一起换版。正式安装和连续发布已通过隔离 Linux/systemd 验证；实际 Agent 换版、完整存储故障矩阵和生产容量尚未完成验收，范围见 [实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
 
-发版与升级步骤见 [构建打包和上传](docs/ROLLOUT_OPERATIONS.md#构建发版)、[首次安装或宿主更新](docs/ROLLOUT_OPERATIONS.md#首次安装或宿主更新)、[日常灰度升级](docs/ROLLOUT_OPERATIONS.md#日常灰度升级) 和 [异常恢复及降级](docs/ROLLOUT_OPERATIONS.md#结果确认和异常处理)。
+发版与升级步骤见 [构建打包](docs/ROLLOUT_OPERATIONS.md#构建发版)、[安装与升级](docs/ROLLOUT_OPERATIONS.md#安装与升级) 和 [状态、回退和恢复](docs/ROLLOUT_OPERATIONS.md#状态回退和恢复)。
 
 Hermes 接入契约见 [Hermes HTTP 资源适配](docs/HERMES_HTTP_API.md)，原始来源和版本对照见 [会话接口调研](docs/HERMES_SESSION_API_RESEARCH.md)。
 
@@ -122,16 +122,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 
 将产物复制到 Linux 服务器后执行 `sudo ./aiagent-gateway-linux-amd64 install`。
 
-目标服务器需要运行 systemd 247+（支持 LoadCredential），并提供 `systemctl`、`getent`、`groupadd` 和 `useradd`。安装需要 root；运行服务使用独立的 `aiagent-gateway` 系统用户。二进制内嵌所需 unit 文件，目标机器无需 Go、源码或额外脚本。
+当前验收环境为 Debian 12 / systemd 252.39 / Linux arm64；其他系统版本需单独验证。目标服务器需提供 `systemctl`、`getent`、`groupadd` 和 `useradd`。安装需要 root；运行服务使用独立的 `aiagent-gateway` 系统用户。二进制内嵌所需 unit 文件，目标机器无需 Go、源码或额外脚本。
 
 安装命令完成以下工作：
 
-- 首次安装或宿主更新将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`；后续灰度升级保留该 CLI，通过新上传二进制的 `install` 提交业务版本。
+- 首次安装将管理 CLI 放到 `/usr/local/bin/aiagent-gateway`，后续使用新上传二进制的 `install` 提交完整网关版本。
 - 首次安装生成随机管理 Token，保存于 `/etc/aiagent-gateway/config.yaml`，权限 0600；Token 不输出到终端。
-- 安装时预先创建数据目录中的 `config.json`、`routes.json` 和 `route-logs.json`；前台和状态服务启动时也会自动初始化全新的路由存储。
-- 新安装生成部署清单和单个 host service，由 host 启动/回收业务 worker；正常运行 2 个进程，灰度 3 个。通过 `/readyz` 检查，启用开机自启动；host 异常退出由 systemd 清理子进程后重启。
-- 已迁入灰度架构后，安装不同版本会启动另一个端口的 worker，以真实 HTTP/SSE/A2A 代理结果验证后自动切流，失败自动回退；同一 SHA-256 版本已健康运行时直接成功返回，正在发布时接续等待原任务。配置、资源归属和并发额度由共享状态服务统一管理。
-- 宿主自身升级在停机后执行 `install --update-host`，先完整备份，保留业务状态，并以新产物建立发布基线。Linux systemd 实机部署尚待验收，见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
+- 创建路由存储、仅含 `initial_release` 和 `policy` 的部署清单，以及 Type=notify 服务和一次性初始化 unit。
+- `launch` 按持久决定选择不可变产物并 exec，保持一个服务 PID；正常发布为 1 → 2 → 1。
+- 不同版本先验证真实 HTTP/SSE/A2A 样本，再全量观察、排空与交接状态 owner；失败在提交前回退，CLI 退出不取消后台任务。同一健康产物直接成功，活动任务重复提交复用原任务。
+- 冷启动遵守 COMMITTED 决定；卸载保留配置、业务状态、决定和版本归档，重装恢复已提交版本。详细步骤见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
 默认数据面为 `:8080`，管理面为 `:9090`，均监听所有网卡。远程管理使用 `http://<网关IP或域名>:9090`，请求携带管理 Token；自定义 `admin_port` 时同步调整访问端口。
 
@@ -153,7 +153,7 @@ sudo aiagent-gateway uninstall
 
 卸载保留凭据、路由数据和系统用户，后续安装可复用。已有安装缺少凭据或配置文件时，`install` 拒绝覆盖，需先恢复相应文件。
 
-macOS 可前台运行网关，但不支持这些 systemd 管理命令。当前已完成安装控制流程的模拟测试和 Linux 交叉构建，真实 systemd 启停/开机自启需要在 Linux 主机复核。
+macOS 可前台运行和执行本地完整进程验证，不支持 systemd 管理命令。正式安装、MainPID 交接、stop/start 和容器重启已在上述 Linux 环境验证；这不代表生产压力或其他系统版本验收通过。
 
 ## 管理与持久化
 
@@ -190,9 +190,9 @@ curl -fsS -X DELETE http://127.0.0.1:9090/admin/v1/routes/research \
 
 上述部分更新示例要求 `research` 已存在；首次创建还需提供 `expose` 等必要配置。启动参数只从 YAML 读取，环境变量已弃用。管理 API 自动维护三份存储：`config.json` 只保留版本信息，`routes.json` 保存路由和内嵌实例，`route-logs.json` 保存管理幂等回执和审计记录，后两类记录各保留最近 1000 条。文件布局及兼容说明见 [路由存储文件](docs/CONFIGURATION.md#路由存储文件)。
 
-前台模式使用新二进制启动即可启用本次管理接口。灰度部署的管理接口由 host 提供，现有部署需按基础组件维护流程更新宿主；日常 install 只替换业务 worker，不会自动升级管理接口。
+前台模式使用新二进制启动即可启用管理接口。完整网关灰度的 install 同时升级入口、管理、业务、状态和控制代码；发布期间冻结配置写入。
 
-配置先提交 `.config.pending.json` 恢复事务，再逐份原子替换三份文件并同步目录，清理事务后发布内存快照。文件和目录权限默认 0600 / 0700。前台单进程模式下，多个进程不能同时打开同一数据目录；灰度模式由单个状态服务独占目录，worker 通过本机 Socket 访问；恢复事务提交后任何写入失败都会使 ready 失败，需排查存储并重启完成恢复。
+配置先提交 `.config.pending.json` 恢复事务，再逐份原子替换三份文件并同步目录，清理事务后发布内存快照。文件和目录权限默认 0600 / 0700。多个进程不能同时写同一数据目录；完整网关灰度始终由唯一 owner 持锁，候选通过私有 Socket 访问，提交后交接写入权；恢复事务提交后任何写入失败都会使 ready 失败，需排查存储并重启完成恢复。
 
 实例状态支持 active、draining、disabled。draining 不接新会话，已有会话继续访问。有绑定或活跃调用的实例不能删除或替换地址。每个 `interfaces` 项的 `health_url` 可指定主动健康检查地址，默认每 10 秒串行检查，携带该接口的凭据；仅 2xx 表示健康，不跟随重定向。未配置探活或首次探活前默认可调度。两个接口健康互不影响，HTTP 并发共同计入实例上限；实例详情 GET 的 `runtime` 展示接口健康、各接口/实例 HTTP 并发和引用数。
 

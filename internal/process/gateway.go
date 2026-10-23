@@ -24,6 +24,7 @@ import (
 // execution use the same state dispatcher and lease accounting.
 type Gateway struct {
 	owner                 *handoff.Owner
+	previous              handoff.Decision
 	core, business        *gateway.Gateway
 	shared                *shared.Server
 	entry                 *entry.Entry
@@ -71,7 +72,7 @@ func OpenGatewayWithPolicy(cfg appconfig.Config, target p.Target, identity p.Ide
 	if n.owner.Decision().Phase == "" {
 		err = n.owner.Bootstrap()
 	} else {
-		_, err = n.owner.Recover()
+		n.previous, err = n.owner.Recover()
 	}
 	if err != nil {
 		return nil, err
@@ -155,7 +156,14 @@ func (n *Gateway) DataHandler() http.Handler {
 
 func (n *Gateway) AdminHandler() http.Handler { return n.core.AdminHandler() }
 func (n *Gateway) StateHandler() http.Handler { return n.shared.Handler() }
-func (n *Gateway) Identity() p.Identity       { return n.business.WorkerIdentity(n.identity) }
+func (n *Gateway) Identity() p.Identity {
+	id := n.business.WorkerIdentity(n.identity)
+	// The executor refreshes its configuration on the next business request.
+	// Release handshakes compare against the authoritative owner revision,
+	// including configuration changes made while no business traffic is active.
+	id.ConfigRevision = n.core.WorkerIdentity(n.identity).ConfigRevision
+	return id
+}
 
 // StopIngress does not stop execution, state calls, or background work. The
 // retiring entry may still have accepted requests which must finish normally.

@@ -8,16 +8,94 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"aiagent-gateway/internal/gateway/runtime/shared"
 	"aiagent-gateway/internal/handoff"
+	p "aiagent-gateway/internal/releaseprotocol"
 )
+
+type pauseSnapshotReply struct {
+	net.Conn
+	buffer       bytes.Buffer
+	seen, resume chan struct{}
+	once         sync.Once
+}
+
+func (c *pauseSnapshotReply) Read(raw []byte) (int, error) {
+	if c.buffer.Len() == 0 {
+		reply, err := readPeer(c.Conn)
+		if err != nil {
+			return 0, err
+		}
+		if reply.Action == "snapshot" {
+			c.once.Do(func() { close(c.seen); <-c.resume })
+		}
+		if err = writePeer(&c.buffer, reply); err != nil {
+			return 0, err
+		}
+	}
+	return c.buffer.Read(raw)
+}
+
+func TestTransferPreviewTransmissionDoesNotBlockCandidateBusiness(t *testing.T) {
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); fmt.Fprint(w, `{}`) }))
+	defer upstream.Close()
+	policy := p.DefaultHandoffPolicy()
+	policy.StateWaitMillis = 300
+	n, c, opts, address := candidateFixtureWithPolicy(t, upstream.URL, policy)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	traffic := n.entry.Traffic()
+	traffic.Revision++
+	traffic.Candidate, traffic.Percent, traffic.Rollout = &c.target, 100, "preview"
+	if err := n.entry.Apply(traffic.Revision-1, traffic); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Accept(ctx); err != nil {
+		t.Fatal(err)
+	}
+	blocked := &pauseSnapshotReply{Conn: c.channel.conn, seen: make(chan struct{}), resume: make(chan struct{})}
+	c.channel.conn = blocked
+	unblock := sync.OnceFunc(func() { close(blocked.resume) })
+	defer unblock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := n.TransferHandoff(ctx, c, "preview-handoff", "preview", opts.MaxSnapshotBytes)
+		done <- err
+	}()
+	select {
+	case <-blocked.seen:
+	case err := <-done:
+		t.Fatalf("snapshot was not transmitted: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	// The ACK remains withheld while a real public request executes once.
+	// A transport gate kept closed across transfer would exhaust its budget.
+	response := publicRequest(t, address, "ok", "during-preview")
+	_, err := io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if err != nil || calls.Load() != 1 {
+		t.Fatal("request failed or replayed", err, calls.Load())
+	}
+	unblock()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	d, err := handoff.ReadDecision(n.dataDir)
+	if err != nil || d.Phase != handoff.Committed {
+		t.Fatal("final handoff failed", d, err)
+	}
+}
 
 func TestCandidateFollowsLiveStateBeforeFinalHandoff(t *testing.T) {
 	var calls atomic.Int64

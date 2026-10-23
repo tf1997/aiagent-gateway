@@ -43,6 +43,19 @@ func (n *Gateway) TransferHandoff(ctx context.Context, candidate *CandidateProce
 			return result, err
 		}
 	}
+	quiesce, cancelQuiesce := context.WithTimeout(ctx, time.Duration(n.policy.BarrierMillis)*time.Millisecond)
+	_, quiesceErr := candidate.channel.call(quiesce, peerMessage{Action: "quiesce"})
+	cancelQuiesce()
+	if quiesceErr != nil {
+		return result, quiesceErr
+	}
+	defer func() {
+		if n.StorageHealthy() {
+			resume, cancel := context.WithTimeout(context.Background(), time.Duration(n.policy.StateWaitMillis)*time.Millisecond)
+			defer cancel()
+			_, _ = candidate.channel.call(resume, peerMessage{Action: "resume_calls"})
+		}
+	}()
 	barrierCtx, cancel := context.WithTimeout(ctx, time.Duration(n.policy.BarrierMillis)*time.Millisecond)
 	defer cancel()
 	d, err := n.PrepareHandoff(barrierCtx, id, rollout, handoff.Identity{Incarnation: candidate.target.Incarnation, Release: candidate.target.Release}, maxBytes)

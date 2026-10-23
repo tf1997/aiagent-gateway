@@ -23,10 +23,10 @@ func main() { os.Exit(run()) }
 func run() int {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "launch":
+			return runLaunch(os.Args[2:])
 		case "process":
 			return runProcess(os.Args[2:])
-		case "host", "worker":
-			return runRole(os.Args[1], os.Args[2:])
 		case "rollout":
 			if len(os.Args) < 3 || len(os.Args) > 4 || (len(os.Args) == 4 && os.Args[3] != "--json") {
 				fmt.Fprintln(os.Stderr, "Usage: aiagent-gateway rollout status|resume|rollback [--json]")
@@ -38,13 +38,6 @@ func run() int {
 			}
 			return 0
 		}
-		if len(os.Args) == 3 && os.Args[1] == "install" && os.Args[2] == "--update-host" {
-			if err := service.Manage("update-host", os.Stdout); err != nil {
-				slog.Error("host update failed", "error", err)
-				return 1
-			}
-			return 0
-		}
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -52,7 +45,7 @@ func run() int {
 			if len(os.Args) > 2 {
 				if len(os.Args) == 3 && (os.Args[2] == "--help" || os.Args[2] == "-h") {
 					if os.Args[1] == "install" {
-						fmt.Printf("Usage: sudo %s install [--update-host]\n", os.Args[0])
+						fmt.Printf("Usage: sudo %s install\n", os.Args[0])
 					} else {
 						fmt.Printf("Usage: sudo %s %s\n", os.Args[0], os.Args[1])
 					}
