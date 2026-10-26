@@ -72,6 +72,7 @@ func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected 
 		sh = g.shard(k)
 		sh.mu.Lock()
 		defer sh.mu.Unlock()
+		defer func() { g.recordSessionLocked(k, sh.items[k]) }()
 		b = sh.items[k]
 		if b != nil && b.Active == 0 && time.Since(b.Seen) > b.TTL && (entry != "a2a" || !g.hasTask(owner, rt.ID, sid)) {
 			delete(sh.items, k)
@@ -133,6 +134,7 @@ func (g *Gateway) acquireLocked(owner, key, sid, forced, entry string, expected 
 				sh.mu.Lock()
 				b.Active--
 				b.Seen = time.Now()
+				g.recordSessionLocked(k, b)
 				sh.mu.Unlock()
 			}
 		})
@@ -150,6 +152,7 @@ func (g *Gateway) selectEndpoint(r *protocol.Route, entry string) *protocol.Endp
 	g.schedMu.Unlock()
 	schedule.mu.Lock()
 	defer schedule.mu.Unlock()
+	defer func() { g.recorder.Put("schedule/"+scheduleKey, schedule.weights) }()
 	m := schedule.weights
 	for id := range m {
 		if r.Endpoint(id) == nil {

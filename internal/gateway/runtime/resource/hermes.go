@@ -120,6 +120,7 @@ func (d *Directory) AbandonPrepared(created []protocol.Resource, response bool) 
 		for key, op := range d.operations {
 			if op.Resource == r.Key() {
 				delete(d.operations, key)
+				d.recorder.Delete("operation/" + stateKey(key))
 			}
 		}
 		d.removeLocked(r)

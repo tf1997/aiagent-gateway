@@ -43,6 +43,14 @@ func (n *Gateway) TransferHandoff(ctx context.Context, candidate *CandidateProce
 			return result, err
 		}
 	}
+	// Drain the accumulated operation prefix while candidate calls remain open.
+	// The final barrier only sends changes made after this acknowledgement.
+	if candidate.operationStream && n.owner.Decision().Phase != handoff.Sealed {
+		if _, err := candidate.FollowHandoff(ctx, n, id, rollout, maxBytes); err != nil {
+			result.Decision = n.owner.Decision()
+			return result, err
+		}
+	}
 	quiesce, cancelQuiesce := context.WithTimeout(ctx, time.Duration(n.policy.BarrierMillis)*time.Millisecond)
 	_, quiesceErr := candidate.channel.call(quiesce, peerMessage{Action: "quiesce"})
 	cancelQuiesce()

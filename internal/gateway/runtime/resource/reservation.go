@@ -99,6 +99,7 @@ func (d *Directory) Reserve(owner, route string, s protocol.ResourceCreation, ch
 			existing.operationRefs++
 		}
 		d.operations[op] = operationReservation{existing.Key(), s.Fingerprint, now}
+		d.recordOperation(op)
 	}
 	d.touchLocked(existing, now)
 	out := protocol.CreationReservation{Resource: existing.Resource, First: first}

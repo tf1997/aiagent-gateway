@@ -30,10 +30,7 @@ func (c *ListCache) ExportImage() ListImage {
 	defer c.mu.Unlock()
 	v := ListImage{Active: c.active.Load(), Snapshots: []ListEntry{}}
 	for key, snapshot := range c.snapshots {
-		x := ListEntry{Key: key, Owner: snapshot.Owner, Route: snapshot.Route, Filter: snapshot.Filter, Revision: snapshot.Revision, Expires: snapshot.Expires, Size: snapshot.Size, Bytes: snapshot.Bytes, Tasks: [][]byte{}}
-		for _, task := range snapshot.Tasks {
-			x.Tasks = append(x.Tasks, bytes.Clone(task))
-		}
+		x := listEntry(key, snapshot)
 		v.Snapshots = append(v.Snapshots, x)
 	}
 	sort.Slice(v.Snapshots, func(i, j int) bool { return v.Snapshots[i].Key < v.Snapshots[j].Key })
@@ -87,4 +84,12 @@ func (c *ListCache) Peek(key string) (protocol.ListSnapshot, bool) {
 	}
 	s.Tasks = tasks
 	return s, true
+}
+
+func listEntry(key string, snapshot protocol.ListSnapshot) ListEntry {
+	x := ListEntry{Key: key, Owner: snapshot.Owner, Route: snapshot.Route, Filter: snapshot.Filter, Revision: snapshot.Revision, Expires: snapshot.Expires, Size: snapshot.Size, Bytes: snapshot.Bytes, Tasks: [][]byte{}}
+	for _, task := range snapshot.Tasks {
+		x.Tasks = append(x.Tasks, bytes.Clone(task))
+	}
+	return x
 }

@@ -38,6 +38,7 @@ func (d *Directory) Update(r protocol.Resource, state protocol.ResourceState) (e
 
 func (d *Directory) removeLocked(r *resourceRecord) {
 	delete(d.items, r.Key())
+	d.recorder.Delete("resource/" + stateKey(r.Key()))
 	d.counts[r.Kind]--
 	for _, alias := range r.aliases {
 		delete(d.aliases, protocol.ResourceKey{Owner: r.Owner, Route: r.RouteID, Kind: r.Kind, ID: alias})
@@ -52,6 +53,7 @@ func (d *Directory) removeLocked(r *resourceRecord) {
 	if r.ParentID != "" {
 		if parent := d.items[r.Parent()]; parent != nil {
 			parent.ChildRefs--
+			d.recordResource(parent)
 		}
 	}
 }
@@ -93,6 +95,7 @@ func (d *Directory) Abandon(r protocol.Resource) (err error) {
 	for key, op := range d.operations {
 		if op.Resource == r.Key() {
 			delete(d.operations, key)
+			d.recorder.Delete("operation/" + stateKey(key))
 		}
 	}
 	d.removeLocked(current)
@@ -120,7 +123,9 @@ func (d *Directory) Cleanup(busy func(protocol.Resource) bool) {
 		r := d.items[op.Resource]
 		if r != nil && now.Sub(op.Seen) > ttl && r.State != protocol.ResourceReserved && r.State != protocol.ResourceUnknown && r.State != protocol.ResourceWaiting && (r.Kind != protocol.HermesRun && r.Kind != protocol.A2ATask || r.State == protocol.ResourceTerminal) && r.ActiveRefs == 0 {
 			r.operationRefs--
+			d.recordResource(r)
 			delete(d.operations, key)
+			d.recorder.Delete("operation/" + stateKey(key))
 		}
 	}
 	queue := make([]protocol.ResourceKey, 0, len(d.items))

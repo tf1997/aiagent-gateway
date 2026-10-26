@@ -17,6 +17,7 @@ import (
 
 	"aiagent-gateway/internal/gateway/protocol"
 	"aiagent-gateway/internal/releaseprotocol"
+	"aiagent-gateway/internal/state"
 )
 
 type Backend struct {
@@ -34,6 +35,8 @@ type Backend struct {
 // idempotent. State and ownership remain with the runtime backend.
 type Server struct {
 	barrier       *Barrier
+	recorder      *state.Recorder
+	receiptOrder  uint64
 	revision      uint64
 	epoch         string
 	previousEpoch string
@@ -168,11 +171,17 @@ func (s *Server) dispatch(ctx context.Context, q Request) (out Response) {
 	if !readOnly {
 		s.replies[key] = cachedReply{fingerprint: fingerprint, response: copyResponse(out)}
 		s.order = append(s.order, key)
+		if s.recorder.Active() {
+			s.receiptOrder++
+			s.recorder.Put("receipt/"+key, OrderedReceipt{s.receiptOrder, Receipt{key, fingerprint, s.replies[key].response}})
+		}
 		if len(s.order) > 8192 {
 			worker, id, _ := strings.Cut(s.order[0], "/")
 			stream, sequence := operationSequence(id)
 			boundary := worker + "/" + stream
 			s.retired[boundary] = max(s.retired[boundary], sequence)
+			s.recorder.Put("retired/"+boundary, s.retired[boundary])
+			s.recorder.Delete("receipt/" + s.order[0])
 			delete(s.replies, s.order[0])
 			s.order = s.order[1:]
 		}
@@ -292,7 +301,10 @@ func (s *Server) Count(worker string) int64 {
 }
 
 // Leases is used only while Server holds the dispatcher lock.
-type Leases struct{ items map[string]lease }
+type Leases struct {
+	items    map[string]lease
+	recorder *state.Recorder
+}
 
 type lease struct {
 	record  LeaseRecord
@@ -316,6 +328,7 @@ func (l *Leases) Add(record LeaseRecord, release func()) string {
 	id := releaseprotocol.ID("lease_")
 	record.ID = id
 	l.items[id] = lease{record: record, release: release}
+	l.recorder.Put("lease/"+id, record)
 	return id
 }
 
@@ -334,6 +347,7 @@ func (l *Leases) Retire(worker string) {
 		if ref.record.Worker == worker {
 			ref.release()
 			delete(l.items, id)
+			l.recorder.Delete("lease/" + id)
 		}
 	}
 }
@@ -348,5 +362,20 @@ func (l *Leases) Release(worker, id string) (bool, error) {
 	}
 	ref.release()
 	delete(l.items, id)
+	l.recorder.Delete("lease/" + id)
 	return true, nil
+}
+
+type OrderedReceipt struct {
+	Order   uint64
+	Receipt Receipt
+}
+
+func (s *Server) SetRecorder(r *state.Recorder) { s.recorder = r; s.leases.recorder = r }
+
+// StartReceiptOrder aligns existing receipt positions with a newly indexed baseline.
+func (s *Server) StartReceiptOrder() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.receiptOrder = uint64(len(s.order))
 }

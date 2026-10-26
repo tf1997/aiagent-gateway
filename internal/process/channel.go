@@ -16,6 +16,7 @@ import (
 	"aiagent-gateway/internal/gateway/runtime/shared"
 	"aiagent-gateway/internal/handoff"
 	p "aiagent-gateway/internal/releaseprotocol"
+	"aiagent-gateway/internal/state"
 )
 
 const peerProtocol = 2
@@ -24,22 +25,24 @@ const maxPeerFrame = 2 << 20 // includes JSON/base64 framing of a 1 MiB chunk
 // peerMessage travels only over the inherited socketpair. Credentials never
 // appear in argv, persisted reports, or a public management endpoint.
 type peerMessage struct {
-	Sequence  uint64                  `json:"sequence"`
-	Action    string                  `json:"action"`
-	Deadline  time.Time               `json:"deadline,omitempty"`
-	Boot      *candidateBoot          `json:"boot,omitempty"`
-	Identity  p.Identity              `json:"identity,omitempty"`
-	Decision  handoff.Decision        `json:"decision,omitempty"`
-	Manifest  shared.SnapshotManifest `json:"manifest,omitempty"`
-	Chunk     *shared.SnapshotChunk   `json:"chunk,omitempty"`
-	Preview   bool                    `json:"preview,omitempty"`
-	Delta     bool                    `json:"delta,omitempty"`
-	View      *shared.ImageVersion    `json:"view,omitempty"`
-	Policy    *p.HandoffPolicy        `json:"handoff_policy,omitempty"`
-	State     *shared.BarrierStatus   `json:"state,omitempty"`
-	Stats     *p.Statistics           `json:"stats,omitempty"`
-	Lifecycle bool                    `json:"lifecycle_ready,omitempty"`
-	Error     string                  `json:"error,omitempty"`
+	Sequence   uint64                  `json:"sequence"`
+	Action     string                  `json:"action"`
+	Deadline   time.Time               `json:"deadline,omitempty"`
+	Boot       *candidateBoot          `json:"boot,omitempty"`
+	Identity   p.Identity              `json:"identity,omitempty"`
+	Decision   handoff.Decision        `json:"decision,omitempty"`
+	Manifest   shared.SnapshotManifest `json:"manifest,omitempty"`
+	Chunk      *shared.SnapshotChunk   `json:"chunk,omitempty"`
+	Operations bool                    `json:"operations,omitempty"`
+	Cursor     *state.Cursor           `json:"cursor,omitempty"`
+	Preview    bool                    `json:"preview,omitempty"`
+	Delta      bool                    `json:"delta,omitempty"`
+	View       *shared.ImageVersion    `json:"view,omitempty"`
+	Policy     *p.HandoffPolicy        `json:"handoff_policy,omitempty"`
+	State      *shared.BarrierStatus   `json:"state,omitempty"`
+	Stats      *p.Statistics           `json:"stats,omitempty"`
+	Lifecycle  bool                    `json:"lifecycle_ready,omitempty"`
+	Error      string                  `json:"error,omitempty"`
 }
 
 type candidateBoot struct {

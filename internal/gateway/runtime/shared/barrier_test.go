@@ -2,12 +2,69 @@ package shared
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"aiagent-gateway/internal/state"
 )
+
+func TestAbortRecordingPreservesInProgressRevision(t *testing.T) {
+	b := &Barrier{}
+	var recorder state.Recorder
+	b.SetRecorder(&recorder)
+	base := state.Cursor{Epoch: "owner", Handoff: "first", Digest: strings.Repeat("0", 64)}
+	if err := recorder.Start(base, map[string]json.RawMessage{}, 8192); err != nil {
+		t.Fatal(err)
+	}
+	leave, err := b.TryEnter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leave()
+	for i := 0; i < 5; i++ {
+		recorder.Put("in-progress", i)
+	}
+	published := recorder.Cursor().Revision
+	if b.Status().Revision != published || b.Revision() != published {
+		t.Fatal("status hid published operations")
+	}
+	b.StopRecording()
+	if recorder.Active() || b.Revision() != published {
+		t.Fatal("aborting preparation regressed the sequence", b.Status())
+	}
+	leave()
+	if b.Revision() <= published {
+		t.Fatal("operation completion reused an old revision")
+	}
+	base.Handoff, base.Revision = "retry", b.Revision()
+	if err := recorder.Start(base, map[string]json.RawMessage{}, 8192); err != nil {
+		t.Fatal(err)
+	}
+	recorder.Put("next", true)
+	b.StopRecording()
+	if b.Revision() <= base.Revision {
+		t.Fatal("new preparation reused an old revision")
+	}
+	base.Handoff, base.Revision = "overflow", b.Revision()
+	if err := recorder.Start(base, map[string]json.RawMessage{}, 1); err != nil {
+		t.Fatal(err)
+	}
+	recorder.Put("too-large", true)
+	leave, err = b.TryEnter()
+	if err != nil {
+		t.Fatal(err)
+	}
+	leave()
+	if recorder.Err() == nil || b.Revision() <= base.Revision {
+		t.Fatal("overflow stopped the owner's logical sequence")
+	}
+	b.StopRecording()
+}
 
 func TestBarrierPauseMeasurements(t *testing.T) {
 	b := &Barrier{}

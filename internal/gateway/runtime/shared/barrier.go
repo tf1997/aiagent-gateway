@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"aiagent-gateway/internal/state"
 )
 
 // Barrier counts discovery and dispatch together. Sealing waits for accepted
@@ -13,6 +15,7 @@ import (
 // Waiting requests retain their original context and consume a bounded budget.
 type Barrier struct {
 	mu                              sync.Mutex
+	recorder                        *state.Recorder
 	sealed                          bool
 	sealing                         bool
 	captures                        int
@@ -75,7 +78,18 @@ func (b *Barrier) Reconfigure(limits QueueLimits) error {
 	return nil
 }
 
-func (b *Barrier) Revision() uint64 { b.mu.Lock(); defer b.mu.Unlock(); return b.revision }
+func (b *Barrier) Revision() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.revisionLocked()
+}
+
+func (b *Barrier) revisionLocked() uint64 {
+	if b.recorder.Active() {
+		return max(b.revision, b.recorder.Cursor().Revision)
+	}
+	return b.revision
+}
 
 var ErrSealed = errors.New("STATE_HANDOFF_SEALED")
 
@@ -103,7 +117,7 @@ func (b *Barrier) Status() BarrierStatus {
 	}
 	return BarrierStatus{
 		Sealing: b.sealing, Sealed: b.sealed && !b.sealing, Active: b.active, Waiting: b.waiting,
-		Bytes: b.bytes, Captures: b.captures, Revision: b.revision, Timeouts: b.timeouts,
+		Bytes: b.bytes, Captures: b.captures, Revision: b.revisionLocked(), Timeouts: b.timeouts,
 		Rejected: b.rejected, Limits: b.limits.effective(), PauseCount: b.pauseCount,
 		CurrentPauseMicros: current.Microseconds(), LastPauseMicros: b.lastPause.Microseconds(),
 		TotalPauseMicros: b.totalPause.Microseconds(), MaxPauseMicros: b.maxPause.Microseconds(),
@@ -133,6 +147,10 @@ func (b *Barrier) leave() func() {
 			// Every admitted operation may change memory, even a cache lookup.
 			// Advance only after persistence and cleanup have both completed.
 			b.revision++
+			if b.recorder.Active() {
+				b.recorder.Advance()
+				b.revision = max(b.revision, b.recorder.Cursor().Revision)
+			}
 			b.signal()
 			b.mu.Unlock()
 		})
@@ -263,4 +281,16 @@ func (b *Barrier) lockSealed() (func(), bool) {
 		b.captures--
 		b.mu.Unlock()
 	}), true
+}
+
+func (b *Barrier) SetRecorder(r *state.Recorder) { b.mu.Lock(); defer b.mu.Unlock(); b.recorder = r }
+
+// StopRecording preserves every published revision, including changes from
+// operations which are still running when preparation is aborted.
+func (b *Barrier) StopRecording() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.recorder != nil {
+		b.revision = max(b.revision, b.recorder.Stop().Revision)
+	}
 }

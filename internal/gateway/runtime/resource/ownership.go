@@ -41,6 +41,7 @@ func (d *Directory) AssignWorker(resources []protocol.Resource, worker string) e
 		}
 		if r.WorkerOwner == "" {
 			r.WorkerOwner = worker
+			d.recordResource(r)
 			changed = true
 		}
 	}

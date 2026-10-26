@@ -80,6 +80,7 @@ func (n *Gateway) PrepareHandoff(ctx context.Context, id, rollout string, target
 		if err == nil {
 			return
 		}
+		n.core.StopRecording()
 		// Never reopen admission if the durable abort is uncertain.
 		if abortErr := n.owner.Abort(id); abortErr != nil {
 			n.StopIngress()
@@ -102,6 +103,9 @@ func (n *Gateway) PrepareHandoff(ctx context.Context, id, rollout string, target
 	}
 	stateSealed = true
 	if err = ctx.Err(); err != nil {
+		return handoff.Decision{}, err
+	}
+	if err = n.core.Recorder().Err(); err != nil {
 		return handoff.Decision{}, err
 	}
 	encoded, _, err := n.encodeHandoffImage(n.owner.Decision(), maxBytes)
@@ -161,6 +165,7 @@ func (n *Gateway) CheckpointHandoff(ctx context.Context, id, rollout string, tar
 	entrySealed, stateSealed := false, false
 	defer func() {
 		if err != nil {
+			n.core.StopRecording()
 			if abortErr := n.owner.Abort(id); abortErr != nil {
 				n.StopIngress()
 				err = errors.Join(err, abortErr)
@@ -195,6 +200,24 @@ func (n *Gateway) CheckpointHandoff(ctx context.Context, id, rollout string, tar
 		return nil, handoff.Decision{}, err
 	}
 	d.Snapshot = handoff.Snapshot{Digest: digest, Bytes: int64(len(raw)), Revision: n.shared.BarrierStatus().Revision}
+	if n.candidate == nil || !n.candidate.operationStream {
+		return raw, d, nil
+	}
+	_, records, err := processRecords(raw)
+	if err != nil {
+		return nil, handoff.Decision{}, err
+	}
+	n.shared.StartReceiptOrder()
+	limit := n.policy.DeltaBytes
+	if n.candidate != nil {
+		limit = n.candidate.maxDeltaBytes
+	}
+	if err = n.core.Recorder().Start(state.Cursor{Epoch: d.Epoch, Handoff: id, Revision: d.Snapshot.Revision, Digest: digest}, records, limit); err != nil {
+		return nil, handoff.Decision{}, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, handoff.Decision{}, err
+	}
 	return raw, d, nil
 }
 
@@ -206,6 +229,7 @@ func (n *Gateway) AbortHandoff(id string) error {
 	if err := n.owner.Abort(id); err != nil {
 		return err
 	}
+	n.core.StopRecording()
 	if err := n.shared.Resume(); err != nil {
 		return err
 	}
@@ -360,11 +384,13 @@ func openPreparedHandoffGateway(ctx context.Context, cfg appconfig.Config, targe
 		return nil, err
 	}
 	n.entry.SetAdmission(n.shared.Admit)
+	n.entry.SetRecorder(n.core.Recorder())
 	n.releaseJournal, err = state.Open(filepath.Join(cfg.DataDir, "release"))
 	if err != nil {
 		return nil, err
 	}
 	n.releaseJournal.SetAdmission(n.shared.Admit)
+	n.releaseJournal.SetRecorder(n.core.Recorder(), "release/")
 	a, _ := json.Marshal(image.Release)
 	b, _ := json.Marshal(n.releaseJournal.Snapshot())
 	if !bytes.Equal(a, b) {

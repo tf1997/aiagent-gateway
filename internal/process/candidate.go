@@ -19,6 +19,7 @@ import (
 	"aiagent-gateway/internal/gateway/runtime/shared"
 	"aiagent-gateway/internal/handoff"
 	p "aiagent-gateway/internal/releaseprotocol"
+	"aiagent-gateway/internal/state"
 )
 
 const maxCandidateSnapshot = 256 << 20
@@ -26,33 +27,38 @@ const maxCandidateSnapshot = 256 << 20
 // Candidate holds only an executor and remote state access until COMMITTED.
 // The executor is retained during adoption so existing streams keep leases.
 type Candidate struct {
-	frontend       *entry.Entry
-	allocator      *candidateAllocator
-	mu             sync.Mutex
-	cfg            appconfig.Config
-	boot           candidateBoot
-	identity       p.Identity
-	client         *shared.Client
-	business       *gateway.Gateway
-	owner          *Gateway
-	decision       handoff.Decision
-	receiver       *shared.SnapshotReceiver
-	verified       bool
-	sockets        []*Socket
-	public         []*http.Server
-	publicActive   bool
-	preview, delta bool
-	viewRaw        []byte
-	viewDecision   handoff.Decision
-	prepared       *preparedHandoff
-	service        *Service
-	lifetime       context.Context
-	wake           func()
-	serviceCancel  context.CancelFunc
-	serviceDone    chan struct{}
-	serviceErr     error
-	serviceReady   bool
-	callsSealed    bool
+	frontend              *entry.Entry
+	allocator             *candidateAllocator
+	mu                    sync.Mutex
+	cfg                   appconfig.Config
+	boot                  candidateBoot
+	identity              p.Identity
+	client                *shared.Client
+	business              *gateway.Gateway
+	owner                 *Gateway
+	decision              handoff.Decision
+	receiver              *shared.SnapshotReceiver
+	verified              bool
+	sockets               []*Socket
+	public                []*http.Server
+	publicActive          bool
+	preview, delta        bool
+	operations            bool
+	operationStream       bool
+	records               map[string]json.RawMessage
+	recordHeader          gatewayImage
+	cursor, pendingCursor state.Cursor
+	viewRaw               []byte
+	viewDecision          handoff.Decision
+	prepared              *preparedHandoff
+	service               *Service
+	lifetime              context.Context
+	wake                  func()
+	serviceCancel         context.CancelFunc
+	serviceDone           chan struct{}
+	serviceErr            error
+	serviceReady          bool
+	callsSealed           bool
 }
 
 func openCandidate(cfg appconfig.Config, boot candidateBoot, release string) (*Candidate, error) {
@@ -220,16 +226,23 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			server.SetKeepAlivesEnabled(false)
 		}
 		c.publicActive = false
+	case "operation_stream":
+		if c.owner != nil || c.receiver != nil || c.viewRaw != nil {
+			return reply, fmt.Errorf("OPERATION_NEGOTIATION_TOO_LATE")
+		}
+		c.operationStream = true
+		reply.Operations = true
 	case "snapshot":
 		if c.owner != nil || m.Decision.Validate() != nil || (!m.Preview && m.Decision.Phase != handoff.Sealed) || (m.Preview && m.Decision.Phase != handoff.Prepared) ||
 			m.Decision.Source != (handoff.Identity{Incarnation: c.boot.Source.Incarnation, Release: c.boot.Source.Release}) ||
 			m.Decision.Target != (handoff.Identity{Incarnation: c.identity.Incarnation, Release: c.identity.Release}) ||
-			m.Decision.Epoch != c.boot.StateEpoch || (!m.Delta && (m.Manifest.Digest != m.Decision.Snapshot.Digest || int64(m.Manifest.Bytes) != m.Decision.Snapshot.Bytes)) ||
-			(m.Delta && (c.viewRaw == nil || !sameHandoff(c.viewDecision, m.Decision))) {
+			m.Decision.Epoch != c.boot.StateEpoch || (!m.Delta && !m.Operations && (m.Manifest.Digest != m.Decision.Snapshot.Digest || int64(m.Manifest.Bytes) != m.Decision.Snapshot.Bytes)) ||
+			(m.Delta && (c.viewRaw == nil || !sameHandoff(c.viewDecision, m.Decision))) ||
+			(m.Operations && (!c.operationStream || m.Delta || m.Cursor == nil || c.records == nil || !sameHandoff(c.viewDecision, m.Decision) || m.Cursor.Epoch != c.cursor.Epoch || m.Cursor.Handoff != c.cursor.Handoff)) {
 			return reply, handoff.ErrConflict
 		}
 		budget := c.boot.MaxSnapshotBytes
-		if m.Delta {
+		if m.Delta || m.Operations {
 			budget = c.boot.MaxDeltaBytes
 		}
 		receiver, err := shared.NewSnapshotReceiver(m.Manifest, budget)
@@ -238,7 +251,10 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		}
 		c.receiver, c.decision, c.verified = receiver, m.Decision, false
 		c.prepared = nil
-		c.preview, c.delta = m.Preview, m.Delta
+		c.preview, c.delta, c.operations = m.Preview, m.Delta, m.Operations
+		if m.Cursor != nil {
+			c.pendingCursor = *m.Cursor
+		}
 	case "chunk":
 		if c.receiver == nil || m.Chunk == nil || c.verified {
 			return reply, fmt.Errorf("SNAPSHOT_NOT_STARTED")
@@ -258,6 +274,27 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		c.receiver = nil
 		if err != nil {
 			return reply, err
+		}
+		if c.operations {
+			at, applyErr := state.ApplyOperations(c.records, c.cursor, raw, c.boot.MaxDeltaBytes, c.boot.MaxSnapshotBytes)
+			if applyErr != nil {
+				return reply, applyErr
+			}
+			if at != c.pendingCursor {
+				c.records = nil
+				return reply, fmt.Errorf("OPERATION_ACK_MISMATCH")
+			}
+			c.cursor = at
+			if err = ctx.Err(); err != nil {
+				return reply, err
+			}
+			if c.preview {
+				break
+			}
+			raw, err = renderProcessRecords(c.recordHeader, c.records, at, c.boot.MaxSnapshotBytes)
+			if err != nil {
+				return reply, err
+			}
 		}
 		if c.delta {
 			var version shared.ImageVersion
@@ -280,6 +317,14 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		if err = ctx.Err(); err != nil {
 			return reply, err
 		}
+		if !c.operations && c.operationStream {
+			header, records, indexErr := processRecords(raw)
+			if indexErr != nil {
+				return reply, indexErr
+			}
+			c.recordHeader, c.records = header, records
+			c.cursor = state.Cursor{Epoch: c.decision.Epoch, Handoff: c.decision.ID, Revision: c.decision.Snapshot.Revision, Digest: c.decision.Snapshot.Digest}
+		}
 		c.viewRaw, c.viewDecision = raw, c.decision
 		c.verified = !c.preview
 		if c.verified {
@@ -299,6 +344,7 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			_ = c.allocator.gate.Resume()
 			c.callsSealed = false
 			c.viewRaw = nil
+			c.records = nil
 			c.prepared = nil
 		}
 	case "abort":
@@ -323,12 +369,18 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		}
 		c.receiver, c.verified, c.decision = nil, false, handoff.Decision{}
 		c.viewRaw, c.viewDecision = nil, handoff.Decision{}
+		c.records, c.cursor = nil, state.Cursor{}
 		c.prepared = nil
 	default:
 		return reply, fmt.Errorf("UNKNOWN_CANDIDATE_COMMAND")
 	}
 	reply.Identity = c.business.WorkerIdentity(c.identity)
 	reply.Lifecycle = c.serviceReady
+	// Old parents decode strictly; emit extended fields only after negotiation.
+	if c.records != nil && c.operationStream {
+		at := c.cursor
+		reply.Cursor = &at
+	}
 	if !c.allocator.healthy() {
 		reply.Identity.Ready = false
 	}

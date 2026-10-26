@@ -152,9 +152,16 @@ func TestCandidateFollowsLiveStateBeforeFinalHandoff(t *testing.T) {
 	if res := processRequest(n, "/agents/test/ok", "after-baseline"); res.Code != 200 {
 		t.Fatal("source did not resume after checkpoint", res.Code)
 	}
+	if err := n.releaseJournal.Apply(map[string]json.RawMessage{"follow-evidence": json.RawMessage(`{"complete":true}`)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	pauses := n.shared.BarrierStatus().PauseCount
 	second, err := c.FollowHandoff(ctx, n, "follow", "rollout", opts.MaxSnapshotBytes)
-	if err != nil || !second.Delta || second.Version.Revision <= first.Version.Revision || second.Version.Digest == first.Version.Digest {
+	if err != nil || !second.Delta || !second.Operations || second.Cursor.Revision <= first.Cursor.Revision || second.Cursor.Digest == first.Cursor.Digest {
 		t.Fatal("live mutations did not reach candidate", first, second, err)
+	}
+	if n.shared.BarrierStatus().PauseCount != pauses {
+		t.Fatal("operation catchup captured another full checkpoint")
 	}
 	// Changes after the last acknowledgement must also reach the final view.
 	if res := processRequest(n, "/agents/test/ok", "after-delta"); res.Code != 200 {
@@ -170,7 +177,7 @@ func TestCandidateFollowsLiveStateBeforeFinalHandoff(t *testing.T) {
 		}
 	}
 	result, err := n.TransferHandoff(ctx, c, "follow", "rollout", opts.MaxSnapshotBytes)
-	if err != nil || !result.Activated || result.Source != nil || result.Decision.Snapshot.Revision <= second.Version.Revision {
+	if err != nil || !result.Activated || result.Source != nil || result.Decision.Snapshot.Revision <= second.Cursor.Revision {
 		t.Fatal("final delta did not cover latest state", result, err)
 	}
 	close(release)
@@ -267,24 +274,22 @@ func TestCandidateRejectsDeltaFromWrongAcknowledgement(t *testing.T) {
 	if _, err := c.FollowHandoff(ctx, n, "gap", "rollout", opts.MaxSnapshotBytes); err != nil {
 		t.Fatal(err)
 	}
-	base := append([]byte(nil), c.followRaw...)
-	old := c.followDecision
 	if res := processRequest(n, "/agents/test/ok", "changed"); res.Code != 200 {
 		t.Fatal(res.Code)
 	}
-	if _, err := c.FollowHandoff(ctx, n, "gap", "rollout", opts.MaxSnapshotBytes); err != nil {
-		t.Fatal(err)
-	}
-	// Resend a syntactically valid old-base batch over the authenticated wire.
-	raw, err := shared.EncodeDelta(ctx, base, c.followRaw, imageVersion(old), imageVersion(c.followDecision), c.maxDeltaBytes, opts.MaxSnapshotBytes)
+	raw, at, err := n.core.Recorder().Batch(c.followCursor)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = c.FollowHandoff(ctx, n, "gap", "rollout", opts.MaxSnapshotBytes); err != nil {
+		t.Fatal(err)
+	}
+	// Replay an authenticated batch from the previous acknowledgement.
 	snapshot, err := shared.NewSnapshot(raw, c.maxDeltaBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.channel.call(ctx, peerMessage{Action: "snapshot", Decision: c.followDecision, Manifest: snapshot.Manifest(), Preview: true, Delta: true}); err != nil {
+	if _, err = c.channel.call(ctx, peerMessage{Action: "snapshot", Decision: c.followDecision, Manifest: snapshot.Manifest(), Preview: true, Operations: true, Cursor: &at}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < snapshot.Manifest().Chunks; i++ {
@@ -298,5 +303,37 @@ func TestCandidateRejectsDeltaFromWrongAcknowledgement(t *testing.T) {
 	}
 	if !n.Ready() || n.owner.Decision().Phase != handoff.Prepared {
 		t.Fatal("rejected delta changed source authority")
+	}
+}
+
+func TestDivergentOperationRecordRejectsFinalHandoff(t *testing.T) {
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		fmt.Fprint(w, `{}`)
+	}))
+	defer upstream.Close()
+	n, c, opts, _ := candidateFixture(t, upstream.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if _, err := c.FollowHandoff(ctx, n, "missing", "rollout", opts.MaxSnapshotBytes); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.AbortHandoff("unrelated"); err == nil || !n.core.Recorder().Active() {
+		t.Fatal("unrelated abort stopped the current replication stream", err)
+	}
+	// Emulate a missing domain hook. The operation hash chain is valid, but
+	// the mirror no longer matches the independently captured source image.
+	n.core.Recorder().Put("runtime/requests", uint64(999))
+	result, err := n.TransferHandoff(ctx, c, "missing", "rollout", opts.MaxSnapshotBytes)
+	if err == nil || result.Activated || result.Source != n || result.Decision.Phase != handoff.Aborted || !n.Ready() {
+		t.Fatal("incomplete replica was allowed to take ownership", result, err)
+	}
+	if res := processRequest(n, "/agents/test/ok", "after-rejected-image"); res.Code != 200 {
+		t.Fatal("source did not resume", res.Code)
+	}
+	result, err = n.TransferHandoff(ctx, c, "fresh", "rollout", opts.MaxSnapshotBytes)
+	if err != nil || !result.Activated || calls.Load() != 1 {
+		t.Fatal("fresh baseline failed or replayed upstream work", result, err, calls.Load())
 	}
 }

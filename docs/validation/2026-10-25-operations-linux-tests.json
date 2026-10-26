@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "environment": {
+    "system": "Linux-6.10.14-linuxkit-aarch64-with-glibc2.36",
+    "uid": 65534,
+    "temporary_filesystem": "tmpfs, exec"
+  },
+  "packages": [
+    {
+      "package": "./internal/state",
+      "exit_code": 0,
+      "seconds": 0.034,
+      "output": "PASS\n"
+    },
+    {
+      "package": "./internal/entry",
+      "exit_code": 0,
+      "seconds": 0.007,
+      "output": "PASS\n"
+    },
+    {
+      "package": "./internal/gateway/runtime/shared",
+      "exit_code": 0,
+      "seconds": 2.927,
+      "output": "PASS\n"
+    },
+    {
+      "package": "./internal/gateway/runtime",
+      "exit_code": 0,
+      "seconds": 1.316,
+      "output": "PASS\n"
+    },
+    {
+      "package": "./internal/process",
+      "exit_code": 0,
+      "seconds": 2.544,
+      "output": "PASS\nPASS\nPASS\nPASS\n"
+    }
+  ]
+}

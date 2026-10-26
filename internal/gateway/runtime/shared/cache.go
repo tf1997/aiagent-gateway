@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"aiagent-gateway/internal/gateway/protocol"
+	"aiagent-gateway/internal/state"
 )
 
 const listCacheBytes = 32 << 20
@@ -15,6 +16,8 @@ const listCacheBytes = 32 << 20
 // state service shares the same cache across workers during a rollout.
 type ListCache struct {
 	mu        sync.Mutex
+	recorder  *state.Recorder
+	prefix    string
 	active    atomic.Int64
 	snapshots map[string]protocol.ListSnapshot
 	now       func() time.Time
@@ -33,6 +36,7 @@ func (c *ListCache) Get(key string) (protocol.ListSnapshot, bool) {
 	for k, snapshot := range c.snapshots {
 		if !c.now().Before(snapshot.Expires) {
 			delete(c.snapshots, k)
+			c.recorder.Delete(c.prefix + k)
 		}
 	}
 	snapshot, ok := c.snapshots[key]
@@ -46,6 +50,7 @@ func (c *ListCache) Put(snapshot protocol.ListSnapshot) (string, error) {
 	for k, existing := range c.snapshots {
 		if !c.now().Before(existing.Expires) {
 			delete(c.snapshots, k)
+			c.recorder.Delete(c.prefix + k)
 		} else {
 			used += existing.Bytes
 		}
@@ -58,6 +63,9 @@ func (c *ListCache) Put(snapshot protocol.ListSnapshot) (string, error) {
 	}
 	key := protocol.NewID("list_")
 	c.snapshots[key] = snapshot
+	if c.recorder.Active() {
+		c.recorder.Put(c.prefix+key, listEntry(key, snapshot))
+	}
 	return key, nil
 }
 
@@ -68,3 +76,5 @@ func (c *ListCache) Acquire() (func(), error) {
 	}
 	return func() { c.active.Add(-1) }, nil
 }
+
+func (c *ListCache) SetRecorder(r *state.Recorder, prefix string) { c.recorder, c.prefix = r, prefix }

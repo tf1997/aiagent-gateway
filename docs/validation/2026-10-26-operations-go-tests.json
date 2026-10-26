@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "command": [
+    "go",
+    "test",
+    "-count=1",
+    "./..."
+  ],
+  "exit_code": 0,
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "wall_seconds": 34.331,
+  "monotonic_seconds": 34.331,
+  "clock_difference_seconds": -0.0,
+  "output": "ok  \taiagent-gateway/cmd/gateway\t0.559s\n?   \taiagent-gateway/deploy/rollout-systemd/probe\t[no test files]\nok  \taiagent-gateway/internal/appconfig\t0.642s\nok  \taiagent-gateway/internal/entry\t0.927s\n?   \taiagent-gateway/internal/gateway\t[no test files]\n?   \taiagent-gateway/internal/gateway/a2a\t[no test files]\n?   \taiagent-gateway/internal/gateway/hermes\t[no test files]\nok  \taiagent-gateway/internal/gateway/protocol\t0.643s\nok  \taiagent-gateway/internal/gateway/runtime\t13.066s\nok  \taiagent-gateway/internal/gateway/runtime/config\t2.708s\nok  \taiagent-gateway/internal/gateway/runtime/resource\t0.706s\n?   \taiagent-gateway/internal/gateway/runtime/rollout\t[no test files]\nok  \taiagent-gateway/internal/gateway/runtime/shared\t3.151s\nok  \taiagent-gateway/internal/handoff\t11.085s\nok  \taiagent-gateway/internal/host\t0.986s\nok  \taiagent-gateway/internal/process\t32.708s\nok  \taiagent-gateway/internal/releaseprotocol\t0.764s\nok  \taiagent-gateway/internal/rollout\t4.717s\nok  \taiagent-gateway/internal/service\t9.518s\nok  \taiagent-gateway/internal/state\t9.353s\nok  \taiagent-gateway/tests/integration\t28.825s\n",
+  "tested_source": {
+    "base_commit": "6c8b7c3c2eb53a5dd350570ed6fb1c1cf0e8cf73",
+    "modified": true,
+    "code_sha256": "0ecd7f0ddfa62a25a20685b26003ecbee5c47599ede253015d313751866e52f1",
+    "code_sha256_method": "SHA-256 of sorted relative path + NUL + file SHA-256 + newline; go.mod, go.sum, and .go/.py files under cmd, internal, tests, deploy",
+    "go_version": "go version go1.24.4 darwin/arm64"
+  }
+}

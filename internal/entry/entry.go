@@ -22,6 +22,7 @@ import (
 type Resolver func(context.Context, p.Request) (p.Resolution, error)
 type Entry struct {
 	allocator   Allocator
+	recorder    *state.Recorder
 	mu          sync.Mutex
 	j           *state.Journal
 	traffic     p.Traffic
@@ -291,6 +292,7 @@ func (e *Entry) startIngress(key, preferred, ingress, id string) (p.Target, p.Re
 				t = *c
 			} else if worker != t.Incarnation {
 				e.counter++
+				e.recorder.Put("entry/counter", e.counter)
 				if int(e.counter%100) < e.traffic.Percent {
 					t = *c
 				}
@@ -302,9 +304,11 @@ func (e *Entry) startIngress(key, preferred, ingress, id string) (p.Target, p.Re
 			return t, p.Result{}, fmt.Errorf("affinity capacity reached")
 		}
 		e.bindings[key] = t.Incarnation
+		e.recorder.Put("entry/binding/"+key, t.Incarnation)
 	}
 	r := p.Result{Ingress: ingress, ID: id, Instance: t.Instance, Incarnation: t.Incarnation, Release: t.Release, RoutingRevision: e.traffic.Revision, Started: time.Now()}
 	e.active[r.ID] = r
+	e.recorder.Put("entry/active/"+r.ID, r)
 	if e.traffic.Rollout != "" {
 		if len(e.results)+len(e.active) > 8192 {
 			e.lost = true
@@ -315,6 +319,7 @@ func (e *Entry) startIngress(key, preferred, ingress, id string) (p.Target, p.Re
 		}
 		if err := e.j.Apply(values, nil); err != nil {
 			delete(e.active, r.ID)
+			e.recorder.Delete("entry/active/" + r.ID)
 			return t, r, err
 		}
 	}
@@ -350,6 +355,7 @@ func (e *Entry) Complete(ctx context.Context, r p.Result) error {
 		return fmt.Errorf("RESULT_IDENTITY_MISMATCH")
 	}
 	delete(e.active, r.ID)
+	e.recorder.Delete("entry/active/" + r.ID)
 	if e.changed != nil {
 		close(e.changed)
 		e.changed = nil
@@ -600,3 +606,5 @@ func (b *trailerBody) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+func (e *Entry) SetRecorder(r *state.Recorder) { e.recorder = r; e.j.SetRecorder(r, "") }

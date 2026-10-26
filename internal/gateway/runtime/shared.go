@@ -32,6 +32,7 @@ func (g *Gateway) newDispatcher() *SharedServer {
 		Freeze:       g.freezeConfig,
 		RestoreLease: g.restoreSharedLease,
 	})
+	g.SetRecorder(&state.Recorder{})
 	return g.dispatcher
 }
 
@@ -49,6 +50,7 @@ func (g *Gateway) freezeConfig(frozen bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.configFrozen.Store(frozen)
+	g.recorder.Put("runtime/frozen", frozen)
 }
 
 func SharedControl(socket, token, worker, action string, flag bool) (int64, error) {
@@ -113,6 +115,10 @@ func (g *Gateway) executeShared(q shared.Request, leases *shared.Leases) (out sh
 	case "resolve":
 		out.Resolution = g.resolveRollout(q.Request)
 	case "request_result":
+		defer func() {
+			g.recorder.Put("runtime/requests", g.requests.Load())
+			g.recorder.Put("runtime/failures", g.failures.Load())
+		}()
 		g.requests.Add(1)
 		if q.Flag {
 			g.failures.Add(1)
@@ -152,6 +158,7 @@ func (g *Gateway) executeShared(q shared.Request, leases *shared.Leases) (out sh
 				sh.mu.Lock()
 				if b := sh.items[sessionKey{q.Owner, rt.ID, q.Session, q.Entry}]; b != nil && b.WorkerOwner == "" {
 					b.WorkerOwner = q.Worker
+					g.recordSessionLocked(sessionKey{q.Owner, rt.ID, q.Session, q.Entry}, b)
 				}
 				sh.mu.Unlock()
 			}

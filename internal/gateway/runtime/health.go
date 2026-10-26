@@ -85,6 +85,7 @@ func (g *Gateway) discoverHermes(ctx context.Context, rt *protocol.Route) {
 			c.Ready = c.Ready && idem["supported"] == true
 		}()
 		st.discovery.Store(c)
+		g.recordInterface(rt.ID+"/"+ep.ID, st, "proxy")
 		st.discoveryMu.Unlock()
 		if ctx.Err() != nil {
 			return
@@ -156,6 +157,7 @@ func (g *Gateway) discoverA2A(ctx context.Context, rt *protocol.Route) {
 			c.Features = map[string]any{"streaming": card.Capabilities.Streaming, "protocol_version": "1.0"}
 		}()
 		st.discovery.Store(c)
+		g.recordInterface(rt.ID+"/"+ep.ID, st, "a2a")
 		st.discoveryMu.Unlock()
 		if ctx.Err() != nil {
 			return
@@ -193,6 +195,8 @@ func (g *Gateway) state(route, id string) *endpointState {
 		s.proxy.healthy.Store(true)
 		s.a2a.healthy.Store(true)
 		g.states[k] = s
+		g.recordInterface(k, &s.proxy, "proxy")
+		g.recordInterface(k, &s.a2a, "a2a")
 	}
 	return s
 }
@@ -235,7 +239,7 @@ func (g *Gateway) checkHealth(ctx context.Context) {
 				if latest != nil && latest.ID == r.ID {
 					currentEP := latest.Endpoint(ep.ID)
 					if currentEP != nil && currentEP.Interfaces[entry] == iface {
-						g.state(r.ID, ep.ID).iface(entry).healthy.Store(ok)
+						g.setHealth(r.ID, ep.ID, entry, ok)
 					}
 				}
 				g.lifecycle.RUnlock()
@@ -261,7 +265,7 @@ func (g *Gateway) resetHealth(old *configuration.Snapshot, next *protocol.Config
 			}
 			for entry, iface := range ep.Interfaces {
 				if before.Interfaces[entry] != iface {
-					g.state(rt.ID, ep.ID).iface(entry).healthy.Store(true)
+					g.setHealth(rt.ID, ep.ID, entry, true)
 				}
 			}
 		}

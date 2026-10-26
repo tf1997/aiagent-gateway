@@ -47,6 +47,7 @@ type Gateway struct {
 	resolver          rollout.Resolver
 	remote            *shared.Client
 	journal           *state.Journal
+	recorder          *state.Recorder
 	sessionPersist    sync.Mutex
 	configFrozen      atomic.Bool
 	stateBarrier      shared.Barrier
@@ -237,6 +238,7 @@ func (g *Gateway) Close() error {
 	g.BeginShutdown()
 	g.cancel()
 	g.wg.Wait()
+	g.StopRecording()
 	g.transportMu.Lock()
 	for _, t := range g.transports {
 		t.CloseIdleConnections()

@@ -30,16 +30,18 @@ type envelope struct {
 // Journal is exclusively locked for its lifetime. A failed commit poisons the
 // handle: callers must fail closed and reopen rather than guess what committed.
 type Journal struct {
-	mu        sync.Mutex
-	f         journalFile
-	lock      *os.File
-	path      string
-	sequence  uint64
-	values    map[string]json.RawMessage
-	failed    error
-	commits   int
-	admission func() (func(), error)
-	compactIO compactionIO
+	mu           sync.Mutex
+	f            journalFile
+	lock         *os.File
+	path         string
+	sequence     uint64
+	values       map[string]json.RawMessage
+	failed       error
+	commits      int
+	admission    func() (func(), error)
+	compactIO    compactionIO
+	recorder     *Recorder
+	recordPrefix string
 }
 
 // journalFile keeps failures local to one writer, including uncertain writes
@@ -302,6 +304,17 @@ func (j *Journal) commit(f frame) error {
 	for _, k := range f.Delete {
 		delete(j.values, k)
 	}
+	if j.recorder.Active() {
+		put := map[string]json.RawMessage{}
+		for key, value := range f.Values {
+			put[j.recordPrefix+key] = value
+		}
+		remove := make([]string, 0, len(f.Delete))
+		for _, key := range f.Delete {
+			remove = append(remove, j.recordPrefix+key)
+		}
+		j.recorder.Patch(put, remove)
+	}
 	j.sequence = f.Sequence
 	j.commits++
 	if j.commits >= 1024 {
@@ -326,4 +339,10 @@ func (j *Journal) Close() error {
 		j.lock = nil
 	}
 	return err
+}
+
+func (j *Journal) SetRecorder(r *Recorder, prefix string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.recorder, j.recordPrefix = r, prefix
 }

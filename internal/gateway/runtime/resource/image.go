@@ -38,14 +38,17 @@ func (d *Directory) ExportImage() Image {
 	defer d.mu.Unlock()
 	v := Image{Resources: []ResourceImage{}, Operations: []OperationImage{}}
 	for _, r := range d.items {
-		x := ResourceImage{r.Resource, r.fingerprint, append([]string{}, r.aliases...), append([]string{}, r.upstreams...), r.operationRefs}
-		sort.Strings(x.Aliases)
-		sort.Strings(x.Upstreams)
+		x := resourceImage(r)
 		v.Resources = append(v.Resources, x)
 	}
 	for k, op := range d.operations {
 		v.Operations = append(v.Operations, OperationImage{k.Owner, k.Route, k.Operation, k.Key, op.Resource, op.Fingerprint, op.Seen})
 	}
+	SortImage(&v)
+	return v
+}
+
+func SortImage(v *Image) {
 	sort.Slice(v.Resources, func(i, j int) bool {
 		a, b := v.Resources[i].Resource, v.Resources[j].Resource
 		return cmp.Or(cmp.Compare(a.Owner, b.Owner), cmp.Compare(a.RouteID, b.RouteID), cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.ID, b.ID)) < 0
@@ -54,7 +57,6 @@ func (d *Directory) ExportImage() Image {
 		a, b := v.Operations[i], v.Operations[j]
 		return cmp.Or(cmp.Compare(a.Owner, b.Owner), cmp.Compare(a.Route, b.Route), cmp.Compare(a.Operation, b.Operation), cmp.Compare(a.Key, b.Key)) < 0
 	})
-	return v
 }
 
 // RestoreImage builds isolated indexes without opening storage, touching TTLs,

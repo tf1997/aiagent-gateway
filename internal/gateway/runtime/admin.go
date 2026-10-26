@@ -64,6 +64,8 @@ func (g *Gateway) commitConfig(c protocol.Config) *configuration.Error {
 	g.resetHealth(g.current.Load(), &c)
 	g.current.Store(configuration.Build(c))
 	g.legacyRaw = nil
+	g.recorder.Put("runtime/config", c)
+	g.recorder.Put("runtime/legacy", g.legacyRaw)
 	return nil
 }
 

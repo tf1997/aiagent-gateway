@@ -9,6 +9,7 @@ import (
 
 	"aiagent-gateway/internal/gateway/protocol"
 	"aiagent-gateway/internal/gateway/runtime/shared"
+	"aiagent-gateway/internal/state"
 )
 
 type operationKey struct{ Owner, Route, Operation, Key string }
@@ -29,6 +30,7 @@ type operationReservation struct {
 
 type Directory struct {
 	remote    *shared.Client
+	recorder  *state.Recorder
 	persist   func() error
 	onFailure func()
 
@@ -89,6 +91,7 @@ func (d *Directory) lookupLocked(k protocol.ResourceKey) *resourceRecord {
 func (d *Directory) touchLocked(r *resourceRecord, now time.Time) {
 	for r != nil {
 		r.Seen = now
+		d.recordResource(r)
 		if r.ParentID == "" {
 			return
 		}
@@ -141,6 +144,7 @@ func (d *Directory) pin(k protocol.ResourceKey, touch bool) (protocol.Resource, 
 	if touch {
 		d.touchLocked(r, d.now())
 	}
+	d.recordResource(r)
 	out := r.Resource
 	d.mu.Unlock()
 	var once sync.Once
@@ -165,6 +169,7 @@ func (d *Directory) capacityLocked(add map[protocol.ResourceKind]int) bool {
 }
 
 func (d *Directory) insertLocked(r *resourceRecord) {
+	defer d.recordResource(r)
 	d.items[r.Key()] = r
 	d.counts[r.Kind]++
 	if r.Upstream != "" {
@@ -173,6 +178,7 @@ func (d *Directory) insertLocked(r *resourceRecord) {
 	}
 	if r.ParentID != "" {
 		d.items[r.Parent()].ChildRefs++
+		d.recordResource(d.items[r.Parent()])
 	}
 }
 

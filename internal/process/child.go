@@ -20,6 +20,7 @@ import (
 	"aiagent-gateway/internal/handoff"
 	p "aiagent-gateway/internal/releaseprotocol"
 	"aiagent-gateway/internal/service"
+	"aiagent-gateway/internal/state"
 )
 
 type CandidateOptions struct {
@@ -50,6 +51,8 @@ type CandidateProcess struct {
 	stateOwner       atomic.Pointer[shared.Server]
 	runtimeOwner     atomic.Pointer[Gateway]
 	followRaw        []byte
+	followCursor     state.Cursor
+	operationStream  bool
 	followDecision   handoff.Decision
 	followErr        error
 	followDeadline   time.Time
@@ -230,6 +233,19 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 	if err = c.checkIdentity(reply.Identity); err != nil || !reply.Identity.Ready || reply.Identity.ConfigRevision != boot.ConfigRevision || reply.Policy == nil || *reply.Policy != c.policy {
 		return nil, fmt.Errorf("CANDIDATE_NOT_READY: %v", err)
 	}
+	// An explicit capability request preserves both upgrade and rollback with
+	// checkpoint-only peers. A lost or malformed reply is never a downgrade.
+	reply, err = c.channel.call(ctx, peerMessage{Action: "operation_stream"})
+	if err != nil {
+		if reply.Error != "UNKNOWN_CANDIDATE_COMMAND" {
+			return nil, err
+		}
+	} else {
+		if !reply.Operations || c.checkIdentity(reply.Identity) != nil {
+			return nil, fmt.Errorf("INVALID_OPERATION_NEGOTIATION")
+		}
+		c.operationStream = true
+	}
 	if err = n.entry.SetPeer(c.target, token); err != nil {
 		return nil, err
 	}
@@ -282,8 +298,15 @@ func (c *CandidateProcess) ValidateHandoff(ctx context.Context, source *Gateway,
 	if err != nil {
 		return err
 	}
+	if c.verified == d {
+		return nil
+	}
 	c.verified = handoff.Decision{}
-	if _, err = c.sendHandoffImage(ctx, d, raw, maxBytes, false); err != nil {
+	if c.followCursor.Handoff == d.ID {
+		if _, err = c.sendOperations(ctx, source, d, false); err != nil {
+			return err
+		}
+	} else if _, err = c.sendHandoffImage(ctx, d, raw, maxBytes, false); err != nil {
 		return err
 	}
 	// Final validation advances the acknowledged base too. A repeated
@@ -412,6 +435,7 @@ func (c *CandidateProcess) RestoreSource(ctx context.Context, restored *Gateway,
 	}
 	c.verified = handoff.Decision{}
 	c.followRaw, c.followDecision, c.followErr = nil, handoff.Decision{}, nil
+	c.followCursor = state.Cursor{}
 	c.followDeadline = time.Time{}
 	return nil
 }

@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "command": [
+    "python3",
+    "-u",
+    "deploy/rollout-process/complete.py",
+    "/tmp/gateway-operations-resumed-race",
+    "--race"
+  ],
+  "exit_code": 0,
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "wall_seconds": 53.595,
+  "monotonic_seconds": 53.595,
+  "clock_difference_seconds": -0.0,
+  "output": "PASS 1 -> 2 -> 1, automatic canary, direct ingress samples, live SSE across owner commit\nPASS independent B -> C with inherited public/control listeners and no third process\nPASS failed candidate rolls back, source listeners resume and candidate exits\nPASS drain timeout retains both processes, rejects third candidate, resumes to successful release\nPASS missing samples never promote; background controller rolls back without CLI\nPASS read-only launch exec keeps PID, selects durable release and restores existing session\n",
+  "tested_source": {
+    "base_commit": "6c8b7c3c2eb53a5dd350570ed6fb1c1cf0e8cf73",
+    "modified": true,
+    "code_sha256": "0ecd7f0ddfa62a25a20685b26003ecbee5c47599ede253015d313751866e52f1",
+    "code_sha256_method": "SHA-256 of sorted relative path + NUL + file SHA-256 + newline; go.mod, go.sum, and .go/.py files under cmd, internal, tests, deploy",
+    "go_version": "go version go1.24.4 darwin/arm64"
+  },
+  "initial_artifact_sha256": "a719b71759c38c540f4ad65467a457a2ddaea7666dbe6760b8f73153df72e126"
+}

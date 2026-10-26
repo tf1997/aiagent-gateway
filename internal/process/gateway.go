@@ -109,6 +109,7 @@ func OpenGatewayWithPolicy(cfg appconfig.Config, target p.Target, identity p.Ide
 		return nil, err
 	}
 	n.entry.SetAdmission(n.shared.Admit)
+	n.entry.SetRecorder(n.core.Recorder())
 	if err = n.entry.SetLocal(target, n.execute); err != nil {
 		return nil, err
 	}
@@ -121,6 +122,7 @@ func OpenGatewayWithPolicy(cfg appconfig.Config, target p.Target, identity p.Ide
 		return nil, err
 	}
 	n.releaseJournal.SetAdmission(n.shared.Admit)
+	n.releaseJournal.SetRecorder(n.core.Recorder(), "release/")
 	n.execution.Store(true)
 	n.ingress.Store(true)
 	n.core.StartBackground()

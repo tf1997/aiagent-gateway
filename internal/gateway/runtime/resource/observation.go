@@ -170,6 +170,7 @@ func (d *Directory) ObserveBatch(owner, route, ep string, obs []protocol.Resourc
 	}
 	for parent, n := range deltas {
 		d.items[parent].ChildRefs += n
+		d.recordResource(d.items[parent])
 	}
 	out := map[protocol.ResourceReverseKey]protocol.Resource{}
 	for _, o := range obs {

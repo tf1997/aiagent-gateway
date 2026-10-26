@@ -1,0 +1,7 @@
+{
+  "passed": true,
+  "previous_commit": "6c8b7c3",
+  "race": false,
+  "seconds": 45.425,
+  "output": "PASS 1 -> 2 -> 1, automatic canary, direct ingress samples, live SSE across owner commit\nPASS independent B -> C with inherited public/control listeners and no third process\nPASS failed candidate rolls back, source listeners resume and candidate exits\nPASS drain timeout retains both processes, rejects third candidate, resumes to successful release\nPASS missing samples never promote; background controller rolls back without CLI\nPASS read-only launch exec keeps PID, selects durable release and restores existing session\n"
+}

@@ -8,12 +8,15 @@ import (
 
 	"aiagent-gateway/internal/gateway/runtime/shared"
 	"aiagent-gateway/internal/handoff"
+	"aiagent-gateway/internal/state"
 )
 
 type FollowStatus struct {
-	Version shared.ImageVersion `json:"version"`
-	Delta   bool                `json:"delta"`
-	Bytes   int                 `json:"transfer_bytes"`
+	Cursor     state.Cursor        `json:"cursor"`
+	Operations bool                `json:"operations"`
+	Version    shared.ImageVersion `json:"version"`
+	Delta      bool                `json:"delta"`
+	Bytes      int                 `json:"transfer_bytes"`
 }
 
 func imageVersion(d handoff.Decision) shared.ImageVersion {
@@ -58,6 +61,14 @@ func (c *CandidateProcess) FollowHandoff(ctx context.Context, source *Gateway, i
 		}
 		return FollowStatus{}, err
 	}
+	if c.followCursor.Handoff == id {
+		status, sendErr := c.sendOperations(ctx, source, c.followDecision, true)
+		if sendErr != nil {
+			c.followErr = sendErr
+			sendErr = errors.Join(sendErr, source.AbortHandoff(id))
+		}
+		return status, sendErr
+	}
 	// Only the consistent capture needs the candidate transport gate closed.
 	// Snapshot transmission and validation can be slow and must not consume
 	// the bounded wait budget of incoming business requests.
@@ -80,6 +91,7 @@ func (c *CandidateProcess) FollowHandoff(ctx context.Context, source *Gateway, i
 	}
 	if c.followDecision.ID != id {
 		c.followRaw, c.followErr = nil, nil
+		c.followCursor = state.Cursor{}
 		c.followDecision = d
 		c.followDeadline = deadline
 	}
@@ -94,6 +106,10 @@ func (c *CandidateProcess) FollowHandoff(ctx context.Context, source *Gateway, i
 		return status, err
 	}
 	c.followRaw, c.followDecision = raw, d
+	if c.operationStream {
+		c.followCursor = state.Cursor{Epoch: d.Epoch, Handoff: d.ID, Revision: d.Snapshot.Revision, Digest: d.Snapshot.Digest}
+	}
+	status.Cursor = c.followCursor
 	return status, nil
 }
 
@@ -147,4 +163,49 @@ func (c *CandidateProcess) hasFollow(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.followDecision.ID == id
+}
+
+// sendOperations never captures, seals, or executes business state. A batch can
+// end inside a live operation; only the final sealed image authorizes adoption.
+func (c *CandidateProcess) sendOperations(ctx context.Context, source *Gateway, d handoff.Decision, preview bool) (FollowStatus, error) {
+	status := FollowStatus{Delta: true, Operations: true}
+	raw, at, err := source.core.Recorder().Batch(c.followCursor)
+	if err != nil {
+		return status, err
+	}
+	if !preview && at.Revision != d.Snapshot.Revision {
+		return status, handoff.ErrConflict
+	}
+	snapshot, err := shared.NewSnapshot(raw, c.maxDeltaBytes)
+	if err != nil {
+		return status, err
+	}
+	status.Bytes, status.Cursor = len(raw), at
+	if _, err = c.channel.call(ctx, peerMessage{Action: "snapshot", Decision: d, Manifest: snapshot.Manifest(), Preview: preview, Operations: true, Cursor: &at}); err != nil {
+		return status, err
+	}
+	for i := 0; i < snapshot.Manifest().Chunks; i++ {
+		chunk, err := snapshot.Chunk(i)
+		if err != nil {
+			return status, err
+		}
+		if _, err = c.channel.call(ctx, peerMessage{Action: "chunk", Chunk: &chunk}); err != nil {
+			return status, err
+		}
+	}
+	reply, err := c.channel.call(ctx, peerMessage{Action: "validate", Decision: d})
+	if err != nil {
+		return status, err
+	}
+	if reply.Cursor == nil || *reply.Cursor != at || c.checkIdentity(reply.Identity) != nil {
+		return status, fmt.Errorf("CANDIDATE_OPERATION_ACK_MISMATCH")
+	}
+	if !preview && (reply.View == nil || *reply.View != imageVersion(d)) {
+		return status, fmt.Errorf("CANDIDATE_VIEW_ACK_MISMATCH")
+	}
+	if err = source.core.Recorder().Acknowledge(at); err != nil {
+		return status, err
+	}
+	c.followCursor = at
+	return status, nil
 }

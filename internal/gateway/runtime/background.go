@@ -111,6 +111,7 @@ func (g *Gateway) maintainState(shardIndex *int) {
 		for k, b := range sh.items {
 			if b.Active == 0 && time.Since(b.Seen) > b.TTL && (k.Interface != "a2a" || !g.hasTask(k.Owner, k.Route, k.ID)) {
 				delete(sh.items, k)
+				g.recordSessionLocked(k, nil)
 				g.bindings.Add(-1)
 			}
 		}
@@ -146,6 +147,7 @@ func (g *Gateway) retireCaches() {
 	for k, st := range g.states {
 		if !live[k] && st.active.Load() == 0 {
 			delete(g.states, k)
+			g.recorder.Delete("endpoint/proxy/"+k, "endpoint/a2a/"+k)
 		}
 	}
 	g.statesMu.Unlock()
@@ -153,6 +155,7 @@ func (g *Gateway) retireCaches() {
 	for id := range g.sched {
 		if !routes[id] {
 			delete(g.sched, id)
+			g.recorder.Delete("schedule/" + id)
 		}
 	}
 	g.schedMu.Unlock()
