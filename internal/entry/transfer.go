@@ -14,12 +14,14 @@ import (
 // Transfer preserves the allocator sequence, affinity, and evidence. A source
 // entry must drain its public and forwarded requests before relinquishing it.
 type Transfer struct {
-	Active   map[string]p.Result `json:"active,omitempty"`
-	Traffic  p.Traffic           `json:"traffic"`
-	Bindings map[string]string   `json:"bindings"`
-	Results  map[string]p.Result `json:"results"`
-	Counter  uint64              `json:"counter"`
-	Lost     bool                `json:"lost"`
+	Compact  bool                     `json:"compact,omitempty"`
+	Receipts map[string]ResultReceipt `json:"receipts,omitempty"`
+	Active   map[string]p.Result      `json:"active,omitempty"`
+	Traffic  p.Traffic                `json:"traffic"`
+	Bindings map[string]string        `json:"bindings"`
+	Results  map[string]p.Result      `json:"results"`
+	Counter  uint64                   `json:"counter"`
+	Lost     bool                     `json:"lost"`
 }
 
 // SetAdmission connects entry mutations to the same owner sequence as runtime
@@ -77,7 +79,7 @@ func (e *Entry) Export() (Transfer, error) {
 	if err := e.j.Healthy(); err != nil {
 		return Transfer{}, err
 	}
-	v := Transfer{Traffic: e.traffic, Bindings: e.bindings, Results: e.results, Counter: e.counter, Lost: e.lost, Active: e.active}
+	v := Transfer{Traffic: e.traffic, Bindings: e.bindings, Results: e.results, Counter: e.counter, Lost: e.lost, Active: e.active, Compact: e.compact, Receipts: e.receipts}
 	return v.clone(), nil
 }
 
@@ -87,6 +89,7 @@ func (e *Entry) Export() (Transfer, error) {
 func (v Transfer) clone() Transfer {
 	v.Bindings = maps.Clone(v.Bindings)
 	v.Results = maps.Clone(v.Results)
+	v.Receipts = maps.Clone(v.Receipts)
 	v.Active = maps.Clone(v.Active)
 	if v.Traffic.Candidate != nil {
 		candidate := *v.Traffic.Candidate
@@ -96,6 +99,14 @@ func (v Transfer) clone() Transfer {
 }
 
 func (v Transfer) Validate() error {
+	if (!v.Compact && len(v.Receipts) != 0) || (v.Compact && len(v.Results) != 0) || len(v.Receipts) > maxResultReceipts {
+		return fmt.Errorf("INVALID_ENTRY_RECEIPT_MODE")
+	}
+	for key, receipt := range v.Receipts {
+		if key == "" || receipt.validate() != nil {
+			return fmt.Errorf("INVALID_ENTRY_IMAGE_RECEIPT")
+		}
+	}
 	if v.Traffic.Revision == 0 || !validTarget(v.Traffic.Stable) || v.Traffic.Percent < 0 || v.Traffic.Percent > 100 || (v.Traffic.Candidate == nil && v.Traffic.Percent != 0) || len(v.Bindings) > 100000 || len(v.Results) > 8192 {
 		return fmt.Errorf("INVALID_ENTRY_IMAGE")
 	}
@@ -125,6 +136,9 @@ func (v Transfer) Validate() error {
 		if _, duplicate := v.Results[key]; duplicate {
 			return fmt.Errorf("DUPLICATE_ENTRY_RESULT")
 		}
+		if _, duplicate := v.Receipts[key]; duplicate {
+			return fmt.Errorf("DUPLICATE_ENTRY_RESULT")
+		}
 	}
 	return nil
 }
@@ -145,10 +159,13 @@ func Import(j *state.Journal, token string, resolve Resolver, image Transfer) (*
 	if v.Results == nil {
 		v.Results = map[string]p.Result{}
 	}
+	if v.Receipts == nil {
+		v.Receipts = map[string]ResultReceipt{}
+	}
 	if v.Active == nil {
 		v.Active = map[string]p.Result{}
 	}
-	return &Entry{j: j, token: token, resolve: resolve, traffic: v.Traffic, bindings: v.Bindings, results: v.Results, counter: v.Counter, lost: v.Lost, active: v.Active, sealed: true, transport: &http.Transport{Proxy: nil, MaxIdleConns: 1024, MaxIdleConnsPerHost: 256, ResponseHeaderTimeout: 24 * time.Hour}}, nil
+	return &Entry{j: j, token: token, resolve: resolve, traffic: v.Traffic, bindings: v.Bindings, results: v.Results, receipts: v.Receipts, compact: v.Compact, counter: v.Counter, lost: v.Lost, active: v.Active, sealed: true, transport: &http.Transport{Proxy: nil, MaxIdleConns: 1024, MaxIdleConnsPerHost: 256, ResponseHeaderTimeout: 24 * time.Hour}}, nil
 }
 
 func (e *Entry) Active() int { e.mu.Lock(); defer e.mu.Unlock(); return len(e.active) }

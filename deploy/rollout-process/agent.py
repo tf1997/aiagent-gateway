@@ -6,6 +6,7 @@ Creates two disposable Hermes containers with fresh data and credentials, and
 an isolated gateway. Never starts or changes the existing local deployment.
 """
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -45,13 +46,33 @@ def wait(check, seconds=90):
 
 def main(binary, report_path):
     containers, children = [], []
-    report = {"passed": False, "agent": IMAGE, "checks": {}}
+    endpoints = []
+    wall_started, mono_started = time.time(), time.monotonic()
+    report = {"passed": False, "agent": IMAGE, "checks": {},
+              "started_at": datetime.now(timezone.utc).isoformat(),
+              "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+              "source_modified": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True).strip())}
+
+    def save():
+        write_private(Path(report_path), json.dumps(report, indent=2) + "\n")
+
+    def check(name, action):
+        report["active_check"] = name
+        save()
+        print("Checking " + name, flush=True)
+        result = action()
+        report["checks"][name] = result
+        save()
+        print("PASS " + name, flush=True)
+        return result
+
     with tempfile.TemporaryDirectory(prefix="gw-agent-", dir="/tmp") as tmp:
         root = Path(tmp)
         log = (root / "gateway.log").open("w+")
         env = read_env()
         artifacts = []
         try:
+            report["active_check"] = "setup"
             for index in range(2):
                 source = Path(binary)
                 if index:
@@ -63,7 +84,7 @@ def main(binary, report_path):
                 artifact.write_bytes(raw)
                 artifact.chmod(0o755)
                 artifacts.append(str(artifact))
-            endpoints = []
+            report["artifact_sha256"] = [Path(path).parent.name for path in artifacts]
             for index in range(2):
                 name = "gateway-agent-test-" + uuid.uuid4().hex[:10]
                 http_key, a2a_key = secrets.token_hex(24), secrets.token_hex(24)
@@ -124,9 +145,8 @@ def main(binary, report_path):
                          "timeout": {"response_header_ms": 180000, "stream_idle_ms": 120000, "max_duration_ms": 300000}}
             requested["agent_card"]["capabilities"] = {"streaming": True}
             route = require(interop.ADMIN_URL + "/admin/v1/routes", creds["admin_token"], requested)
-            report["checks"]["preflight"] = interop.preflight(creds)
-            before_http = interop.http_sessions(creds, uuid.uuid4().hex[:12])
-            report["checks"]["before_http"] = before_http
+            check("preflight", lambda: interop.preflight(creds))
+            before_http = check("before_http", lambda: interop.http_sessions(creds, uuid.uuid4().hex[:12]))
             # Record only protocol structure when a live upstream yields an
             # empty completed task; never include model text or credentials.
             original_rpc = interop.rpc
@@ -138,33 +158,56 @@ def main(binary, report_path):
                         "artifact_count": len(task.get("artifacts", [])), "history_count": len(task.get("history", []))}
                 return result
             interop.rpc = checked_rpc
-            before_a2a = interop.a2a_context(creds)
-            report["checks"]["before_a2a"] = before_a2a
+            before_a2a = check("before_a2a", lambda: interop.a2a_context(creds))
             print("PASS real HTTP/SSE/A2A, conversation memory, pagination and caller isolation before rollout", flush=True)
+            report["active_check"] = "missing_samples_rollback"
+            control("POST", {"artifact": artifacts[1], "policy": dict(policy, verify_timeout_seconds=2)})
+            rejected = wait(lambda: r if (r := control())["phase"] == "ROLLED_BACK" else None, 30)
+            assert rejected["stable"]["artifact"] == artifacts[0] and not rejected["committed"]
+            assert child.poll() is None
+            report["checks"]["missing_samples_rollback"] = {"phase": rejected["phase"], "reason": rejected["reason"],
+                                                           "source_preserved": True, "committed": False}
+            save()
+            print("PASS missing samples roll back before retrying the real-agent rollout", flush=True)
             control("POST", {"artifact": artifacts[1], "policy": policy})
+            report["active_check"] = "rollout_start"
             wait(lambda: control()["phase"] == "VERIFYING")
             for index in range(12):
                 current = control()
+                report["last_rollout"] = {key: current.get(key) for key in ("phase", "committed", "statistics")}
                 if current["phase"] == "COMPLETED":
                     break
                 assert current["phase"] not in ("FAILED", "ROLLED_BACK", "ROLLING_BACK"), current["phase"]
+                if current["phase"] == "RECOVERY_REQUIRED":
+                    assert current["resume_phase"] == "OBSERVING"
+                    # A paused controller publishes its last persisted sample;
+                    # it does not refresh counts until Resume. Collect all four
+                    # profiles on direct ingress once, then resume explicitly.
+                    check(f"direct_http_{index}", lambda: interop.http_sessions(creds, uuid.uuid4().hex[:12]))
+                    check(f"direct_a2a_{index}", lambda: interop.a2a_context(creds))
+                    control("POST", path="/control/v1/rollout/resume")
+                    report["observation_resumes"] = report.get("observation_resumes", 0) + 1
+                    current = wait(lambda: r if (r := control())["phase"] in
+                                   ("COMPLETED", "RECOVERY_REQUIRED", "ROLLED_BACK", "FAILED") else None)
+                    assert current["phase"] == "COMPLETED", current["phase"]
+                    break
                 statistics = current.get("statistics", {})
-                counts = statistics.get("direct_ingress_counts" if current["phase"] in ("OBSERVING", "RECOVERY_REQUIRED") else "counts", {})
+                counts = statistics.get("direct_ingress_counts" if current["phase"] == "OBSERVING" else "counts", {})
                 def missing(profile):
                     return counts.get(profile, {}).get("success", 0) < 1
                 if missing("http") or missing("sse"):
-                    interop.http_sessions(creds, uuid.uuid4().hex[:12])
+                    check(f"rollout_http_{index}", lambda: interop.http_sessions(creds, uuid.uuid4().hex[:12]))
                 elif missing("a2a") or missing("a2a_sse"):
-                    interop.a2a_context(creds)
-                elif current["phase"] == "RECOVERY_REQUIRED":
-                    assert current["resume_phase"] == "OBSERVING"
-                    control("POST", path="/control/v1/rollout/resume")
+                    check(f"rollout_a2a_{index}", lambda: interop.a2a_context(creds))
                 else:
                     time.sleep(1)
+            report["active_check"] = "rollout_completion"
             current = wait(lambda: r if (r := control())["phase"] == "COMPLETED" else None)
             assert child.wait(timeout=10) == 0
             assert current["stable"]["artifact"] == artifacts[1] and current["committed"]
+            report["last_rollout"] = {key: current.get(key) for key in ("phase", "committed", "statistics")}
             report["checks"]["rollout"] = {"statistics": current["statistics"], "snapshot_bytes": current["snapshot_bytes"], "handoff_milliseconds": current["handoff_milliseconds"]}
+            report["active_check"] = "existing_resources_after_handoff"
             token, other = [c["token"] for c in creds["callers"]]
             session = before_http["session_id"]
             history = require(interop.DATA_URL + "/agents/hermes-local/api/sessions/" + session + "/messages?limit=100&order=latest", token,
@@ -182,11 +225,33 @@ def main(binary, report_path):
             print("PASS real-agent rollout: all four profiles and direct ingress samples; existing resources survive owner handoff", flush=True)
         except BaseException as exc:
             report["error_type"] = type(exc).__name__
+            report["failed_check"] = report.get("active_check", "setup")
+            if isinstance(exc, interop.CheckFailure):
+                report["check_error"] = str(exc)
+                report["diagnostics"] = exc.diagnostics
+                if "a2a" in report["failed_check"]:
+                    report["upstream_task_diagnostics"] = []
+                    for ep in endpoints:
+                        iface = ep["interfaces"]["a2a"]
+                        diagnostic = {"endpoint": ep["name"]}
+                        try:
+                            result = require(iface["url"], iface["token"], {
+                                "jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "ListTasks",
+                                "params": {"pageSize": 20, "includeArtifacts": True}}, timeout=5)
+                            diagnostic["tasks"] = [interop.task_summary(task) for task in result.get("result", {}).get("tasks", [])]
+                        except Exception as diagnostic_error:
+                            diagnostic["error_type"] = type(diagnostic_error).__name__
+                        report["upstream_task_diagnostics"].append(diagnostic)
             # Provider responses and gateway logs can contain conversation data.
             # Preserve only the exception type in the portable report.
             raise
         finally:
-            write_private(Path(report_path), json.dumps(report, indent=2) + "\n")
+            wall, elapsed = time.time() - wall_started, time.monotonic() - mono_started
+            report["timing"] = {"wall_seconds": round(wall, 3), "monotonic_seconds": round(elapsed, 3),
+                                "clock_difference_seconds": round(wall - elapsed, 3)}
+            report["finished_at"] = datetime.now(timezone.utc).isoformat()
+            report.pop("active_check", None)
+            save()
             def owned_pids():
                 rows = subprocess.check_output(["ps", "-axo", "pid=,command="], text=True)
                 return [int(parts[0]) for row in rows.splitlines()

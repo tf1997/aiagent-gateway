@@ -1,6 +1,6 @@
 # 灰度发布操作
 
-更新日期：2026-10-23。完整网关按 1 → 2 → 1 发布，入口、业务、状态和发布控制一起升级。正式安装和 Linux/systemd 生命周期已验证；实际 Agent 完整换版、目标生产容量和存储/系统矩阵未完成。详见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md) 和 [部署全流程](DEPLOYMENT_LIFECYCLE.md)。
+更新日期：2026-10-27。完整网关按 1 → 2 → 1 发布，入口、业务、状态和发布控制一起升级。正式安装和 Linux/systemd 生命周期、隔离 Hermes 四类请求的完整换版及缺样本回退后再发布已验证；目标生产容量和存储/系统矩阵未完成。详见 [实现进度](SINGLE_PROCESS_IMPLEMENTATION_STATUS.md) 和 [部署全流程](DEPLOYMENT_LIFECYCLE.md)。
 
 ## 构建发版
 
@@ -118,3 +118,15 @@ systemd 脚本使用隔离容器，无宿主目录挂载与公开端口，完成
 并发脚本复用上述 Linux 镜像，自动构建三份实际网关产物，以非 root 用户在仅有 loopback 的隔离容器中执行。HTTP 与 SSE 两阶段各保持指定数量的闭环客户端，每次请求使用新会话，分别完成 A→B、B→C；模拟上游耗时为 HTTP 50 ms、SSE 250 ms。默认报告 `/tmp/gateway-concurrent-rollout.json` 包含延迟、完整 SSE 校验、上游重复调用数、队列/屏障、合计 CPU/RSS/FD 与进程数；失败也保存报告并以非零状态退出。测试使用缩短的观察时间，但保留默认 2 秒状态等待和 5 秒最终屏障预算。CPU 为每核 100%，资源按约 100 ms 采样，可能漏掉采样间隙的短峰；容器共享开发机资源，结果不能外推为生产容量上限。
 
 实际 Agent 脚本使用本机已有的模型配置，创建两个临时 Hermes 容器与独立网关，发送少量合成模型请求。报告默认 `/tmp/gateway-real-agent-rollout.json`，仅 passed=true 才表示完整换版通过；上游过载时不修改断言来凑成功。
+
+混合长流与连续发布可使用以下命令：
+
+```sh
+python3 deploy/rollout-process/load.py --concurrency 100 --profiles mixed --cycles 10 \
+  --sessions-per-client 4 --http-ms 50 --sse-ms 3000 --observe-seconds 8 \
+  --report /tmp/gateway-mixed-long-streams.json
+```
+
+`mixed` 将客户端交替分配给 HTTP/SSE；上述参数为两类各 50 并发，每客户端跨发布复用 4 个会话，VERIFYING 另建每轮会话池以获取候选样本。`--cycles` 重复整个 `--profiles` 序列，省略 `--sessions-per-client` 时每次请求创建新会话。观察期应允许完整流结束，原有状态等待和交接屏障预算不变。双方支持 `compact_results` 时单次发布最多保存 65536 条紧凑回执，旧版兼容路径仍为 8192 条完整结果；容量耗尽会阻止凭不完整证据通过发布。
+
+真实 Agent 验收先验证缺样本自动回退，再重新发布。观察期缺直接入口样本而暂停时，脚本补齐四类请求并显式调用 resume；暂停报告中的统计不会自动刷新，不能只轮询旧计数判断样本是否已足够。已完成的验收结果和适用环境见 [验证记录](../VALIDATION.md)。

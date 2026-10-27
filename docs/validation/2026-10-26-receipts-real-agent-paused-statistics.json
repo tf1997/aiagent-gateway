@@ -1,0 +1,309 @@
+{
+  "passed": false,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "preflight": {
+      "card_url": "http://127.0.0.1:51598/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true
+    },
+    "before_http": {
+      "session_id": "session_ef7076c4dde2636d2729644a72dccd0c",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.025,
+        "total_seconds": 7.294,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "before_a2a": {
+      "context_id": "ctx_3f3dbfcadd3329653a8af223af90660d",
+      "task_ids": [
+        "task_2f264da0cc9122f642b8704fa9c65005",
+        "task_8e464baf204d630e68e6a63a6429deec"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.01,
+        "total_seconds": 6.761,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "rollout_http_0": {
+      "session_id": "session_96c681f8d94cb7a6281aa1db85fcf91a",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.016,
+        "total_seconds": 8.241,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_1": {
+      "session_id": "session_786b1381fe115260b401c53db19531c1",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.02,
+        "total_seconds": 16.047,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_a2a_2": {
+      "context_id": "ctx_e639c0a0a79ceeee19a64d7c9be99873",
+      "task_ids": [
+        "task_858033e8c3ea7579b146e34b6fec812b",
+        "task_8dd38b1e60d0f6b244aebd90347ef0c5"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.012,
+        "total_seconds": 11.508,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "rollout_a2a_3": {
+      "context_id": "ctx_5b6e3da05d4ba0a0360fdde3c7a0c65f",
+      "task_ids": [
+        "task_0bf87a8513873c693d2880a1f456ea6d",
+        "task_6eaaf00148e50da33aad4c9cebb8828d"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.015,
+        "total_seconds": 8.927,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "rollout_http_4": {
+      "session_id": "session_e477fd7bf4213877266117cdce238ee8",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.034,
+        "total_seconds": 11.399,
+        "event_count": 14
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_5": {
+      "session_id": "session_ac03c1d75b07d726a6d0129dd39f9685",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.025,
+        "total_seconds": 13.751,
+        "event_count": 17
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_6": {
+      "session_id": "session_8f9e59165a45126bebe685dfc8780eba",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.023,
+        "total_seconds": 13.411,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_7": {
+      "session_id": "session_91a168466aec56dce8de1c33a0daccaf",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.028,
+        "total_seconds": 25.808,
+        "event_count": 14
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_8": {
+      "session_id": "session_24e368131461de3978224c6e546793fa",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.03,
+        "total_seconds": 89.471,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_9": {
+      "session_id": "session_dc5105b8f6202916795784dcfd1d636a",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.026,
+        "total_seconds": 8.741,
+        "event_count": 14
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_10": {
+      "session_id": "session_0e7b7981c4b123ceaab5c1f0cfd0d395",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.03,
+        "total_seconds": 5.303,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_11": {
+      "session_id": "session_449a2d592f4d9fce0b54506c6a5444c6",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.024,
+        "total_seconds": 11.345,
+        "event_count": 16
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    }
+  },
+  "started_at": "2026-10-26T08:48:20.809329+00:00",
+  "source_commit": "ce05e32965e0136ed44363954ba893b24a25ec12",
+  "artifact_sha256": [
+    "89d626f9fc10314d353f8c1e83717f753d4e8053a1aa90442b10cb803e8fc024",
+    "6b83e274f4be9c9fec5c4cc1f8a5bc325cbba4bd0598e6f1e34735263d0c1752"
+  ],
+  "last_rollout": {
+    "phase": "RECOVERY_REQUIRED",
+    "committed": false,
+    "statistics": {
+      "counts": {},
+      "active": 1,
+      "lost": false,
+      "failures": 0,
+      "total": 0,
+      "revision": 3
+    }
+  },
+  "error_type": "RuntimeError",
+  "failed_check": "rollout_completion",
+  "timing": {
+    "wall_seconds": 772.282,
+    "monotonic_seconds": 772.28,
+    "clock_difference_seconds": 0.002
+  },
+  "finished_at": "2026-10-26T09:01:13.091362+00:00"
+}

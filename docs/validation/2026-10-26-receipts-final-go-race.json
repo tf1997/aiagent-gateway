@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "command": [
+    "go",
+    "test",
+    "-race",
+    "-count=1",
+    "./..."
+  ],
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "exit_code": 0,
+  "wall_seconds": 76.111,
+  "monotonic_seconds": 76.111,
+  "clock_difference_seconds": 0.0,
+  "output": "ok  \taiagent-gateway/cmd/gateway\t2.519s\n?   \taiagent-gateway/deploy/rollout-systemd/probe\t[no test files]\nok  \taiagent-gateway/internal/appconfig\t2.396s\nok  \taiagent-gateway/internal/entry\t74.713s\n?   \taiagent-gateway/internal/gateway\t[no test files]\n?   \taiagent-gateway/internal/gateway/a2a\t[no test files]\n?   \taiagent-gateway/internal/gateway/hermes\t[no test files]\nok  \taiagent-gateway/internal/gateway/protocol\t2.306s\nok  \taiagent-gateway/internal/gateway/runtime\t23.235s\nok  \taiagent-gateway/internal/gateway/runtime/config\t4.314s\nok  \taiagent-gateway/internal/gateway/runtime/resource\t2.107s\n?   \taiagent-gateway/internal/gateway/runtime/rollout\t[no test files]\nok  \taiagent-gateway/internal/gateway/runtime/shared\t10.996s\nok  \taiagent-gateway/internal/handoff\t10.806s\nok  \taiagent-gateway/internal/host\t1.490s\nok  \taiagent-gateway/internal/process\t47.222s\nok  \taiagent-gateway/internal/releaseprotocol\t1.444s\nok  \taiagent-gateway/internal/rollout\t5.325s\nok  \taiagent-gateway/internal/service\t9.144s\nok  \taiagent-gateway/internal/state\t8.946s\nok  \taiagent-gateway/tests/integration\t32.191s\n"
+}

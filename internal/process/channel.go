@@ -72,6 +72,10 @@ type peerChannel struct {
 	next uint64
 }
 
+type peerCommandError string
+
+func (e peerCommandError) Error() string { return "candidate: " + string(e) }
+
 func peerPair() (net.Conn, *os.File, error) {
 	syscall.ForkLock.RLock()
 	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
@@ -169,7 +173,7 @@ func (c *peerChannel) call(ctx context.Context, m peerMessage) (peerMessage, err
 		return reply, fmt.Errorf("PEER_REPLY_MISMATCH")
 	}
 	if reply.Error != "" {
-		return reply, fmt.Errorf("candidate: %s", reply.Error)
+		return reply, peerCommandError(reply.Error)
 	}
 	return reply, nil
 }

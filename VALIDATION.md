@@ -1,5 +1,53 @@
 # 验证记录
 
+## 真实 Agent 完整换版与最终复核（2026-10-26，10 月 27 日归档）
+
+续接会话后核对已结束的后台任务，归档此前尚在 `/tmp` 的[真实 Hermes 成功报告](docs/validation/2026-10-26-receipts-real-agent-passed.json)，原始内容未改写。该轮在 10 月 26 日 17:06–17:11（Asia/Shanghai）执行，使用 macOS arm64 网关及两个独立数据目录、凭据的 Linux Hermes 容器；Agent 镜像摘要、两份网关产物 SHA-256 和工作区修改标记均在报告中。它不等于 Linux/systemd 与真实模型组合的验收；Linux 运行与系统接管证据分别见下文。
+
+- 发布前通过 HTTP 会话/记忆续接、原生 SSE、A2A 同步/流式任务、context、任务查询、分页和调用方隔离。
+- 故意不给候选业务样本，确认以 `insufficient_successful_proxy_samples` 自动回退、未提交并保留旧进程；随后再次发布相同候选。
+- 四类真实请求通过候选验证。观察期缺直接入口样本时进入 `RECOVERY_REQUIRED`，补齐 HTTP/SSE/A2A/A2A SSE 后显式 resume，最终达到 `COMPLETED`、确认候选成为已提交稳定产物且源进程正常退出。
+- 完成时四类直接入口成功数分别为 HTTP 3、SSE 1、A2A 5、A2A SSE 2，另有 6 个 excluded 结果；失败 0、活动请求 0、证据无丢失。快照 494765 字节，完整交接窗口 284 ms。总运行 270.910 秒，wall/monotonic 差 0.001 秒。
+- 交接后仍能读取原 HTTP 会话历史和两个原 A2A 任务，公开 task/context ID 保持，另一调用方查询为空，两个 Agent 实例的 HTTP 在途占用均为 0。验收使用缩短的 2 秒观察期和少量合成模型请求，不作为模型服务长期稳定性或生产容量结论。
+
+原报告的 `last_rollout` 是补样本前的暂停诊断快照；最终统计在 `checks.rollout`，交接后断言在 `checks.after`，只有所有断言通过才写 `passed=true`。归档保留这一原始字段；脚本现已在完成时刷新 `last_rollout`，避免后续报告保留过时阶段。
+
+此前两轮失败独立保留：[暂停统计轮](docs/validation/2026-10-26-receipts-real-agent-paused-statistics.json)因脚本重复读取暂停时的旧统计而未 resume；[记忆检查轮](docs/validation/2026-10-26-receipts-real-agent-recall-failed.json)在发布前 HTTP 第二轮未回忆出首轮标识，但诊断确认会话历史仍有首轮内容。修复暂停流程后进行独立复核，记忆、流完成及所有发布断言均未放宽，也不将记忆检查失败归因于换版。
+
+最终输入校验修正后的[全量竞态测试](docs/validation/2026-10-26-receipts-final-go-race.json) `go test -race -count=1 ./...` 和 [vet](docs/validation/2026-10-26-receipts-final-vet.json) 均已通过，耗时 76.111 / 0.620 秒；这些结果来自上一会话已结束的运行，本次归档未重复执行 Go 全量测试。
+
+[最终新会话增长复测](docs/validation/2026-10-26-receipts-concurrency-100-final.json)以非 root Linux arm64 / overlayfs 运行，HTTP 和 SSE 分阶段各保持 100 并发，每个请求使用新会话，完成 A→B→C。HTTP 11371 次、SSE 4116 次，总计 15487 次请求全部成功，无重复上游执行、队列超时或拒绝；HTTP/SSE p95 为 158.109 / 485.755 ms，最长候选分配暂停 1031.200 ms。服务进程峰值 2，合计峰值 RSS 536704 KiB、FD 379；两轮结束单进程 FD 均为 23。总运行 26.412 秒，wall/monotonic 差为 0；测量期间未同时运行 Go 测试。这补充了下文复用会话池的 10 轮长流回归，仍属于开发宿主上的短时测量。
+
+## 紧凑发布回执与混合长流（2026-10-26）
+
+续接长流验收中发现的入口证据容量问题。旧实现单次发布最多保留 8192 个完整结果；原失败轮虽然 14404 个业务请求全部成功，控制器仍因 `result_evidence_lost` 回退，见[原失败报告](docs/validation/2026-10-26-receipts-legacy-capacity-failed.json)。
+
+- 新旧进程通过 `compact_results` 显式协商。双方支持时保存开始时间、执行 incarnation、profile、verdict、是否直接入口及完整结果的 SHA-256，单次发布最多 65536 条；仍按原时间窗口和全部失败统计，不抽样或丢弃失败。达到新上限继续标记证据丢失，禁止凭不完整证据通过发布。
+- 完整结果摘要包含 release、instance、入口身份、路由 revision、状态码、原因和完成时间；时区和单调时钟成分规范化后比较，完全相同的重试可确认，任一内容变化均拒绝。重启时保留已完成回执，在途请求记为失败；换版导入本身不写盘或把在途请求误判成重启失败。
+- 完整镜像、记录索引和操作增量均携带回执格式与内容；导出/导入复制 Map，拒绝混合格式、损坏摘要及活动/完成 ID 重叠。仅在发布外切换格式，发布结束清空证据后可交接回旧版；旧源到新候选继续使用完整结果。
+- 协商降级只接受通过帧、动作和序号校验的明确“不支持”错误；关闭连接、超时、损坏帧、错误动作/序号及错误身份不会被当成兼容确认。旧版错误回复不携带身份，沿用已完成身份握手的继承 socketpair。
+- [全量测试](docs/validation/2026-10-26-receipts-go-tests.json)、[全量竞态](docs/validation/2026-10-26-receipts-go-race.json)与 [vet](docs/validation/2026-10-26-receipts-vet.json)通过。新增专项验证 8200 条真实分配/完成及重启、65536 条边界、统计窗口和直接入口计数、精确重试冲突、无别名交接、增量一致性及旧格式重置。
+- [全新版竞态换版](docs/validation/2026-10-26-receipts-complete-race.json)和[新旧版竞态换版](docs/validation/2026-10-26-receipts-mixed-race.json)通过 A→B→C、失败回退、排空超时/resume、重新发布回 A 和冷启动选版。混合版本 A 来自 `ce05e32`，不支持紧凑发布回执；B/C 来自本轮工作区。耗时分别为 56.730 / 49.241 秒，没有 wall/monotonic 时钟跳变。
+- [Linux 运行报告](docs/validation/2026-10-26-receipts-linux-tests.json)覆盖 entry/process 全包，非 root UID 65534、Linux arm64、网络隔离；entry 测试日志位于 overlayfs，process 临时进程路径位于可执行 tmpfs。Linux amd64 静态构建通过。
+
+[10 轮混合长流报告](docs/validation/2026-10-26-receipts-mixed-long-streams.json)使用 100 个闭环客户端，其中 50 个 HTTP（模拟上游等待 50 ms）、50 个 SSE（首事件后持续 3 秒）；同一状态目录连续切换 A/B/C，共完成 10 次换版。每客户端复用 4 个会话，并在 VERIFYING 使用每轮独立会话池获取候选样本。观察期为 8 秒，状态等待仍为 2 秒、交接屏障仍为 5 秒。
+
+| 指标 | 结果 |
+| --- | --- |
+| HTTP / SSE 请求 | 166565 / 3800 |
+| 总请求 / 失败 / 重复上游执行 | 170365 / 0 / 0 |
+| 发布完成 / 服务进程峰值 | 10 / 2 |
+| HTTP p95（各轮范围） | 71.702–88.296 ms |
+| 完整 SSE p95（各轮范围，含 3 秒流时长） | 3137.623–3333.045 ms |
+| 最长候选分配暂停 | 981.484 ms |
+| 完整快照 | 12717280–13884254 字节 |
+| 两进程合计峰值 RSS / FD | 576084 KiB / 360 |
+| 峰值 CPU（单核记 100%） | 247.606% |
+| 每轮结束单进程 FD | 均为 23 |
+| 总运行时间 / wall 与 monotonic 差 | 233.120 秒 / 0.001 秒 |
+
+运行环境为非 root Linux arm64 / overlayfs、8 个可见 CPU、同容器模拟上游。测量期间没有运行 Go 测试；同一宿主曾同时运行低并发真实 Agent 验收。这是约四分钟、会话池有限的连续换版回归，不能据此宣布生产容量、小时级稳定性或内存无泄漏；发布后的 RSS 为 70964–116028 KiB，未做长期趋势推断。
+
 ## 连续跨进程操作增量（2026-10-25 至 2026-10-26）
 
 本轮继续完成状态交接的连续增量，沿用原 2 秒状态等待、5 秒交接屏障和 32 MiB 增量预算。模拟上游测试不调用实际模型，不改动既有部署。

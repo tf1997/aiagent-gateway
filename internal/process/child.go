@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -237,7 +238,8 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 	// checkpoint-only peers. A lost or malformed reply is never a downgrade.
 	reply, err = c.channel.call(ctx, peerMessage{Action: "operation_stream"})
 	if err != nil {
-		if reply.Error != "UNKNOWN_CANDIDATE_COMMAND" {
+		var rejected peerCommandError
+		if !errors.As(err, &rejected) || rejected != "UNKNOWN_CANDIDATE_COMMAND" {
 			return nil, err
 		}
 	} else {
@@ -246,11 +248,35 @@ func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, arg
 		}
 		c.operationStream = true
 	}
+	compact, err := c.negotiateCompactResults(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err = n.entry.UseCompactResults(compact); err != nil {
+		return nil, err
+	}
 	if err = n.entry.SetPeer(c.target, token); err != nil {
 		return nil, err
 	}
 	n.candidate = c
 	return c, nil
+}
+
+// An old peer explicitly rejects this command. Transport failures or an ACK
+// from another process cannot authorize a different result representation.
+func (c *CandidateProcess) negotiateCompactResults(ctx context.Context) (bool, error) {
+	reply, err := c.channel.call(ctx, peerMessage{Action: "compact_results"})
+	if err != nil {
+		var rejected peerCommandError
+		if errors.As(err, &rejected) && rejected == "UNKNOWN_CANDIDATE_COMMAND" {
+			return false, nil
+		}
+		return false, err
+	}
+	if err = c.checkIdentity(reply.Identity); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *CandidateProcess) checkIdentity(id p.Identity) error {

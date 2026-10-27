@@ -10,7 +10,7 @@ Go 单节点 Agent 网关：HTTP 管理路由、一个路由内嵌多个实例�
 
 首次安装生成哪些文件、运行几个进程、灰度时如何替换产物和交接请求，以及如何更新全部组件，见 [安装、运行文件与升级全流程](docs/DEPLOYMENT_LIFECYCLE.md)。
 
-安装已接入完整网关 1 → 2 → 1 自动发布：稳定时一个非 root 进程，发布时最多两个，入口、业务、状态和发布控制一起换版。正式安装和连续发布已通过隔离 Linux/systemd 验证；实际 Agent 换版、完整存储故障矩阵和生产容量尚未完成验收，范围见 [实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
+安装已接入完整网关 1 → 2 → 1 自动发布：稳定时一个非 root 进程，发布时最多两个，入口、业务、状态和发布控制一起换版。正式安装和连续发布已通过隔离 Linux/systemd 验证；两个隔离 Hermes 实例的 HTTP/SSE/A2A 换版、缺样本回退后再发布及存量资源续接已通过。完整存储故障矩阵和生产容量尚未完成验收，范围见 [实现进度](docs/SINGLE_PROCESS_IMPLEMENTATION_STATUS.md)。
 
 发版与升级步骤见 [构建打包](docs/ROLLOUT_OPERATIONS.md#构建发版)、[安装与升级](docs/ROLLOUT_OPERATIONS.md#安装与升级) 和 [状态、回退和恢复](docs/ROLLOUT_OPERATIONS.md#状态回退和恢复)。
 

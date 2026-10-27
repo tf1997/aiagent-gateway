@@ -60,7 +60,13 @@ def inside(args):
     report = {"passed": False, "concurrency": args.concurrency, "stages": [],
               "scope": "closed-loop clients, synthetic upstream, Linux container; not production capacity",
               "environment": {"system": platform.platform(), "cpus": os.cpu_count(), "uid": os.geteuid()},
-              "upstream_http_ms": 50, "upstream_sse_ms": 250}
+              "cycles": args.cycles, "profiles": args.profiles, "sessions_per_client": args.sessions_per_client,
+              "session_policy": "new session per request" if not args.sessions_per_client else
+                                "persistent client pools; separate pool per release during VERIFYING to obtain candidate samples",
+              "baseline_seconds": args.baseline_seconds,
+              "observe_seconds": args.observe_seconds,
+              "upstream_http_ms": args.http_ms, "upstream_sse_ms": args.sse_ms}
+    wall_started, mono_started = time.time(), time.monotonic()
     calls, active_upstream, peak_upstream = Counter(), 0, 0
     call_lock = threading.Lock()
 
@@ -83,10 +89,10 @@ def inside(args):
                 if sse:
                     self.wfile.write(b'data: {"started":true}\n\n')
                     self.wfile.flush()
-                    time.sleep(.25)
+                    time.sleep(args.sse_ms / 1000)
                     self.wfile.write(b"data: [DONE]\n\n")
                 else:
-                    time.sleep(.05)
+                    time.sleep(args.http_ms / 1000)
                     self.wfile.write(b'{"ok":true}')
             except (BrokenPipeError, ConnectionResetError):
                 pass
@@ -125,7 +131,7 @@ def inside(args):
         config.chmod(0o600)
         policy = {"auto_profiles": False, "canary_percent": 5, "readiness_timeout_seconds": 15,
                   "verify_min_seconds": 2, "verify_timeout_seconds": 30, "min_success_per_profile": 5,
-                  "max_effective_failures": 0, "required_profiles": ["http"], "observe_seconds": 3,
+                  "max_effective_failures": 0, "required_profiles": ["http"], "observe_seconds": args.observe_seconds,
                   "observe_min_success_per_profile": 5, "drain_timeout_seconds": 30}
         manifest = root / "deployment.json"
         manifest.write_text(json.dumps({"initial_release": artifacts[0], "policy": policy}))
@@ -197,11 +203,12 @@ def inside(args):
             response.read()
             conn.close()
             sampler.start()
-            for index, profile in enumerate(("http", "sse"), 1):
+            for index, profile in enumerate(args.profiles * args.cycles, 1):
                 stop = threading.Event()
                 lock = threading.Lock()
                 gate = threading.Barrier(args.concurrency + 1)
                 latencies, first_bytes, handoff_latencies = [], [], []
+                profile_latencies = {name: [] for name in ("http", "sse")}
                 statuses, errors, samples = Counter(), [], 0
                 current_phase = "BASELINE"
                 phases = {}
@@ -210,20 +217,24 @@ def inside(args):
                     nonlocal samples
                     gate.wait()
                     sequence = 0
+                    request_profile = ("http" if number % 2 == 0 else "sse") if profile == "mixed" else profile
                     while not stop.is_set():
                         sequence += 1
-                        rid = f"{profile}-{number}-{sequence}"
+                        rid = f"{index}-{request_profile}-{number}-{sequence}"
+                        pool = f"verify-{index}" if current_phase == "VERIFYING" else "pool"
+                        session = (f"{pool}-{request_profile}-{number}-{(sequence - 1) % args.sessions_per_client}"
+                                   if args.sessions_per_client else rid)
                         phase, start, first, status, error = current_phase, time.monotonic(), None, 0, None
                         conn = http.client.HTTPConnection("127.0.0.1", data, timeout=30)
                         try:
-                            conn.request("POST", "/agents/probe/" + ("sse" if profile == "sse" else "ok"), b"{}",
-                                         {"Authorization": "Bearer " + caller, "X-Session-ID": rid, "X-Load-Request": rid})
+                            conn.request("POST", "/agents/probe/" + ("sse" if request_profile == "sse" else "ok"), b"{}",
+                                         {"Authorization": "Bearer " + caller, "X-Session-ID": session, "X-Load-Request": rid})
                             response = conn.getresponse()
                             status = response.status
-                            prefix = response.readline() if profile == "sse" and status == 200 else b""
+                            prefix = response.readline() if request_profile == "sse" and status == 200 else b""
                             first = (time.monotonic() - start) * 1000
                             body = prefix + response.read()
-                            if status != 200 or (profile == "sse" and b"data: [DONE]" not in body) or (profile == "http" and body != b'{"ok":true}'):
+                            if status != 200 or (request_profile == "sse" and b"data: [DONE]" not in body) or (request_profile == "http" and body != b'{"ok":true}'):
                                 error = body[:250].decode("utf-8", "replace")
                         except (OSError, http.client.HTTPException) as exc:
                             error = type(exc).__name__ + ": " + str(exc)
@@ -232,6 +243,7 @@ def inside(args):
                         elapsed = (time.monotonic() - start) * 1000
                         with lock:
                             latencies.append(elapsed)
+                            profile_latencies[request_profile].append(elapsed)
                             if first is not None:
                                 first_bytes.append(first)
                             if phase == "HANDOFF":
@@ -247,7 +259,9 @@ def inside(args):
                     try:
                         wait(lambda: len(latencies) >= args.concurrency, 45)
                         time.sleep(args.baseline_seconds)
-                        rollout = control(method="POST", value={"artifact": artifacts[index], "policy": dict(policy, required_profiles=[profile])})
+                        required = ["http", "sse"] if profile == "mixed" else [profile]
+                        rollout = control(method="POST", value={"artifact": artifacts[index % len(artifacts)],
+                                          "policy": dict(policy, required_profiles=required)})
                         deadline = time.monotonic() + 90
                         while time.monotonic() < deadline:
                             rollout = control()
@@ -261,11 +275,12 @@ def inside(args):
                         stop.set()
                         for future in futures:
                             future.result()
-                stage = {"profile": profile, "requests": len(latencies), "failures": samples, "statuses": dict(statuses),
+                stage = {"index": index, "profile": profile, "requests": len(latencies), "failures": samples, "statuses": dict(statuses),
                          "duration_seconds": round(time.monotonic() - began, 3), "latency_ms": quantiles(latencies),
+                         "profile_latency_ms": {name: quantiles(values) for name, values in profile_latencies.items() if values},
                          "first_response_ms": quantiles(first_bytes), "handoff_request_ms": quantiles(handoff_latencies),
                          "errors": errors, "phase_times_seconds": phases,
-                         "rollout": {key: rollout.get(key) for key in ("phase", "reason", "snapshot_bytes", "handoff_milliseconds", "state_status", "state_queue", "allocation_queue")}}
+                         "rollout": {key: rollout.get(key) for key in ("phase", "reason", "stable", "statistics", "snapshot_bytes", "handoff_milliseconds", "state_status", "state_queue", "allocation_queue")}}
                 stage["requests_per_second"] = round(stage["requests"] / stage["duration_seconds"], 3)
                 stage["candidate_pause_ms"] = {
                     name: {"last": rollout.get(name, {}).get("LastPauseMicros", 0) / 1000,
@@ -278,6 +293,13 @@ def inside(args):
                 assert samples == 0, "requests failed under load"
                 for name in ("state_status", "state_queue", "allocation_queue"):
                     assert not rollout[name]["Timeouts"] and not rollout[name]["Rejected"], name + " exhausted its wait budget"
+                wait(lambda: len(pids()) == 1)
+                stable_pid = pids()[0]
+                stage["stable_resources"] = {
+                    "rss_kib": int(next(line.split()[1] for line in Path(f"/proc/{stable_pid}/status").read_text().splitlines()
+                                        if line.startswith("VmRSS:"))),
+                    "fds": len(list(Path(f"/proc/{stable_pid}/fd").iterdir())),
+                }
             report["passed"] = True
         except BaseException as exc:
             report["error"] = type(exc).__name__ + ": " + str(exc)
@@ -287,6 +309,9 @@ def inside(args):
             if sampler.ident is not None:
                 sampler.join(timeout=5)
             report["resources"] = {k: round(v, 3) if isinstance(v, float) else v for k, v in metrics.items()}
+            wall, elapsed = time.time() - wall_started, time.monotonic() - mono_started
+            report["timing"] = {"wall_seconds": round(wall, 3), "monotonic_seconds": round(elapsed, 3),
+                                "clock_difference_seconds": round(wall - elapsed, 3)}
             with call_lock:
                 report["upstream_requests"] = sum(calls.values())
                 report["duplicate_upstream_requests"] = sum(n - 1 for n in calls.values())
@@ -318,6 +343,7 @@ def host(args):
     arch = subprocess.check_output(["docker", "info", "--format", "{{.Architecture}}"], text=True).strip()
     goarch = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}[arch]
     name = "gateway-load-" + uuid.uuid4().hex[:10]
+    wall_started, mono_started = time.time(), time.monotonic()
     with tempfile.TemporaryDirectory(prefix="gateway-load-build-") as tmp:
         stage = Path(tmp)
         for version in ("a", "b", "c"):
@@ -327,11 +353,22 @@ def host(args):
             subprocess.run(["docker", "create", "--name", name, "--init", "--network", "none", "--user", "65534:65534",
                             "--entrypoint", "python3", args.image, "/load.py", "--inside", "--artifacts", "/a", "/b", "/c",
                             "--concurrency", str(args.concurrency), "--baseline-seconds", str(args.baseline_seconds),
+                            "--observe-seconds", str(args.observe_seconds),
+                            "--cycles", str(args.cycles), "--profiles", *args.profiles,
+                            "--http-ms", str(args.http_ms), "--sse-ms", str(args.sse_ms),
+                            "--sessions-per-client", str(args.sessions_per_client),
                             "--report", "/tmp/report.json"], check=True, stdout=subprocess.DEVNULL)
             for path in [Path(__file__), *(stage / name for name in ("a", "b", "c"))]:
                 subprocess.run(["docker", "cp", str(path), name + ":/" + path.name], check=True)
             result = subprocess.run(["docker", "start", "-a", name])
             subprocess.run(["docker", "cp", name + ":/tmp/report.json", args.report], check=True)
+            report = json.loads(Path(args.report).read_text())
+            wall, elapsed = time.time() - wall_started, time.monotonic() - mono_started
+            report["host_timing"] = {"wall_seconds": round(wall, 3), "monotonic_seconds": round(elapsed, 3),
+                                     "clock_difference_seconds": round(wall - elapsed, 3)}
+            report["source_commit"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+            report["source_modified"] = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True).strip())
+            Path(args.report).write_text(json.dumps(report, indent=2) + "\n")
             result.check_returncode()
         finally:
             subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL)
@@ -341,13 +378,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--concurrency", type=int, default=100)
     parser.add_argument("--baseline-seconds", type=float, default=2)
+    parser.add_argument("--observe-seconds", type=int, default=3, help="Observation window; allow full stream responses to finish")
+    parser.add_argument("--cycles", type=int, default=1, help="Repeat the selected profile sequence on the same state directory")
+    parser.add_argument("--profiles", choices=("http", "sse", "mixed"), nargs="+", default=["http", "sse"],
+                        help="Mixed assigns alternating clients to HTTP/SSE at the same time")
+    parser.add_argument("--http-ms", type=float, default=50)
+    parser.add_argument("--sse-ms", type=float, default=250)
+    parser.add_argument("--sessions-per-client", type=int, default=0,
+                        help="Reuse a pool across releases, plus a per-release verification pool; 0 uses new sessions per request")
     parser.add_argument("--report", default="/tmp/gateway-concurrent-rollout.json")
     parser.add_argument("--image", default="aiagent-gateway-systemd-test:bookworm")
     parser.add_argument("--inside", action="store_true")
     parser.add_argument("--artifacts", nargs=3)
     args = parser.parse_args()
-    if args.concurrency < 1 or args.baseline_seconds < 0:
-        parser.error("concurrency must be positive and baseline seconds nonnegative")
+    if args.concurrency < 1 or args.cycles < 1 or args.observe_seconds < 1 or args.sessions_per_client < 0 or min(args.baseline_seconds, args.http_ms, args.sse_ms) < 0:
+        parser.error("concurrency/cycles must be positive; durations/session pool must be nonnegative")
+    if "mixed" in args.profiles and args.concurrency < 2:
+        parser.error("mixed requires at least two clients")
     if args.inside and not args.artifacts:
         parser.error("--inside requires three --artifacts")
     (inside if args.inside else host)(args)

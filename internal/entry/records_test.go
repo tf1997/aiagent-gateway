@@ -13,6 +13,12 @@ import (
 )
 
 func TestEntryRecordsTrackAllocationCompletionAndTrafficReset(t *testing.T) {
+	for _, mode := range []string{"legacy", "compact"} {
+		t.Run(mode, func(t *testing.T) { testEntryRecords(t, mode == "compact") })
+	}
+}
+
+func testEntryRecords(t *testing.T, compact bool) {
 	j, err := state.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -23,6 +29,9 @@ func TestEntryRecordsTrackAllocationCompletionAndTrafficReset(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer e.Close()
+	if err := e.UseCompactResults(compact); err != nil {
+		t.Fatal(err)
+	}
 	old := p.Target{Release: "old", Incarnation: "old-boot", Instance: "a", URL: "http://127.0.0.1:18080"}
 	next := p.Target{Release: "new", Incarnation: "new-boot", Instance: "b", URL: "http://127.0.0.1:18081"}
 	if err := e.SetLocal(old, func(http.ResponseWriter, *http.Request, func(p.Result)) {}); err != nil {

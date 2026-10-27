@@ -1,0 +1,390 @@
+{
+  "passed": true,
+  "concurrency": 100,
+  "stages": [
+    {
+      "index": 1,
+      "profile": "http",
+      "requests": 11371,
+      "failures": 0,
+      "statuses": {
+        "200": 11371
+      },
+      "duration_seconds": 12.904,
+      "latency_ms": {
+        "samples": 11371,
+        "p50": 96.634,
+        "p95": 158.109,
+        "p99": 485.953,
+        "max": 1156.593
+      },
+      "profile_latency_ms": {
+        "http": {
+          "samples": 11371,
+          "p50": 96.634,
+          "p95": 158.109,
+          "p99": 485.953,
+          "max": 1156.593
+        }
+      },
+      "first_response_ms": {
+        "samples": 11371,
+        "p50": 24.857,
+        "p95": 65.49,
+        "p99": 168.712,
+        "max": 1082.627
+      },
+      "handoff_request_ms": {
+        "samples": 814,
+        "p50": 135.652,
+        "p95": 1087.435,
+        "p99": 1137.726,
+        "max": 1156.593
+      },
+      "errors": [],
+      "phase_times_seconds": {
+        "PREPARING": 2.173195584000041,
+        "STARTING": 2.224757626000155,
+        "VERIFYING": 2.4501567920001435,
+        "PROMOTING": 4.6399831270000504,
+        "OBSERVING": 4.818818084999975,
+        "DRAINING": 7.993680544999961,
+        "HANDOFF": 8.236122753000018,
+        "ACTIVATING": 10.59339250500011,
+        "COMPLETED": 10.817133130000002
+      },
+      "rollout": {
+        "phase": "COMPLETED",
+        "reason": null,
+        "stable": {
+          "socket": "/tmp/gw-load-yg0mkriz/p/2716722030/exec.sock",
+          "artifact": "/tmp/gw-load-yg0mkriz/releases/1a5317141a42bff557273fda27d09c6d26f4e826d0705bd2d57519ab1d8c2a96/gateway",
+          "release": "1a5317141a42bff557273fda27d09c6d26f4e826d0705bd2d57519ab1d8c2a96",
+          "instance": "b",
+          "incarnation": "process_d590738c94a7735e0ea6e962fbf43fc2",
+          "url": "http://gateway",
+          "admin_url": ""
+        },
+        "statistics": {
+          "direct_ingress_counts": {
+            "http": {
+              "success": 2798,
+              "failure": 0,
+              "excluded": 0,
+              "unknown": 0
+            }
+          },
+          "counts": {
+            "http": {
+              "success": 2814,
+              "failure": 0,
+              "excluded": 0,
+              "unknown": 0
+            }
+          },
+          "active": 87,
+          "lost": false,
+          "failures": 0,
+          "total": 2814,
+          "revision": 3
+        },
+        "snapshot_bytes": 13407149,
+        "handoff_milliseconds": 2358,
+        "state_status": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 0,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 74213,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 1024,
+            "Bytes": 16777216,
+            "Wait": 2000000000
+          },
+          "PauseCount": 1,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 33737,
+          "TotalPauseMicros": 33737,
+          "MaxPauseMicros": 33737
+        },
+        "state_queue": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 0,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 16426,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 1024,
+            "Bytes": 16777216,
+            "Wait": 2000000000
+          },
+          "PauseCount": 2,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 993405,
+          "TotalPauseMicros": 1315564,
+          "MaxPauseMicros": 993405
+        },
+        "allocation_queue": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 0,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 3764,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 1024,
+            "Bytes": 16777216,
+            "Wait": 2000000000
+          },
+          "PauseCount": 2,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 1031200,
+          "TotalPauseMicros": 1370131,
+          "MaxPauseMicros": 1031200
+        }
+      },
+      "requests_per_second": 881.2,
+      "candidate_pause_ms": {
+        "state_queue": {
+          "last": 993.405,
+          "max": 993.405,
+          "count": 2
+        },
+        "allocation_queue": {
+          "last": 1031.2,
+          "max": 1031.2,
+          "count": 2
+        }
+      },
+      "stable_resources": {
+        "rss_kib": 128672,
+        "fds": 23
+      }
+    },
+    {
+      "index": 2,
+      "profile": "sse",
+      "requests": 4116,
+      "failures": 0,
+      "statuses": {
+        "200": 4116
+      },
+      "duration_seconds": 13.392,
+      "latency_ms": {
+        "samples": 4116,
+        "p50": 279.11,
+        "p95": 485.755,
+        "p99": 1095.606,
+        "max": 1267.506
+      },
+      "profile_latency_ms": {
+        "sse": {
+          "samples": 4116,
+          "p50": 279.11,
+          "p95": 485.755,
+          "p99": 1095.606,
+          "max": 1267.506
+        }
+      },
+      "first_response_ms": {
+        "samples": 4116,
+        "p50": 12.44,
+        "p95": 80.545,
+        "p99": 496.76,
+        "max": 571.527
+      },
+      "handoff_request_ms": {
+        "samples": 425,
+        "p50": 375.114,
+        "p95": 1143.289,
+        "p99": 1255.558,
+        "max": 1267.506
+      },
+      "errors": [],
+      "phase_times_seconds": {
+        "PREPARING": 2.3812861679998605,
+        "STARTING": 2.483962584999972,
+        "VERIFYING": 2.6958974179999586,
+        "PROMOTING": 4.872934543999918,
+        "OBSERVING": 5.083199835999949,
+        "DRAINING": 8.27710958800003,
+        "HANDOFF": 8.436229378999997,
+        "ACTIVATING": 10.938352631000043,
+        "COMPLETED": 11.156294338999942
+      },
+      "rollout": {
+        "phase": "COMPLETED",
+        "reason": null,
+        "stable": {
+          "socket": "/tmp/gw-load-yg0mkriz/p/896027800/exec.sock",
+          "artifact": "/tmp/gw-load-yg0mkriz/releases/389dc3dcdf7c60c96b57f2d5240407af7f75664136e4666a434c80ac9bc8b78c/gateway",
+          "release": "389dc3dcdf7c60c96b57f2d5240407af7f75664136e4666a434c80ac9bc8b78c",
+          "instance": "a",
+          "incarnation": "process_fd89a28c3bd80228003784b6bad245fb",
+          "url": "http://gateway",
+          "admin_url": ""
+        },
+        "statistics": {
+          "direct_ingress_counts": {
+            "sse": {
+              "success": 1048,
+              "failure": 0,
+              "excluded": 0,
+              "unknown": 0
+            }
+          },
+          "counts": {
+            "sse": {
+              "success": 1048,
+              "failure": 0,
+              "excluded": 0,
+              "unknown": 0
+            }
+          },
+          "active": 100,
+          "lost": false,
+          "failures": 0,
+          "total": 1048,
+          "revision": 7
+        },
+        "snapshot_bytes": 14159059,
+        "handoff_milliseconds": 2500,
+        "state_status": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 27,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 118406,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 1024,
+            "Bytes": 16777216,
+            "Wait": 2000000000
+          },
+          "PauseCount": 1,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 18777,
+          "TotalPauseMicros": 18777,
+          "MaxPauseMicros": 18777
+        },
+        "state_queue": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 19,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 6292,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 1024,
+            "Bytes": 16777216,
+            "Wait": 2000000000
+          },
+          "PauseCount": 2,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 981035,
+          "TotalPauseMicros": 1363193,
+          "MaxPauseMicros": 981035
+        },
+        "allocation_queue": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 0,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 1573,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 1024,
+            "Bytes": 16777216,
+            "Wait": 2000000000
+          },
+          "PauseCount": 2,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 1027244,
+          "TotalPauseMicros": 1470246,
+          "MaxPauseMicros": 1027244
+        }
+      },
+      "requests_per_second": 307.348,
+      "candidate_pause_ms": {
+        "state_queue": {
+          "last": 981.035,
+          "max": 981.035,
+          "count": 2
+        },
+        "allocation_queue": {
+          "last": 1027.244,
+          "max": 1027.244,
+          "count": 2
+        }
+      },
+      "stable_resources": {
+        "rss_kib": 148272,
+        "fds": 23
+      }
+    }
+  ],
+  "scope": "closed-loop clients, synthetic upstream, Linux container; not production capacity",
+  "environment": {
+    "system": "Linux-6.10.14-linuxkit-aarch64-with-glibc2.36",
+    "cpus": 8,
+    "uid": 65534
+  },
+  "cycles": 1,
+  "profiles": [
+    "http",
+    "sse"
+  ],
+  "sessions_per_client": 0,
+  "session_policy": "new session per request",
+  "baseline_seconds": 2.0,
+  "observe_seconds": 3,
+  "upstream_http_ms": 50.0,
+  "upstream_sse_ms": 250.0,
+  "artifact_sha256": [
+    "8b4a1798624c89b306a1c2631e2d18d2e728101d25650e56589307d45cd70398",
+    "1a5317141a42bff557273fda27d09c6d26f4e826d0705bd2d57519ab1d8c2a96",
+    "389dc3dcdf7c60c96b57f2d5240407af7f75664136e4666a434c80ac9bc8b78c"
+  ],
+  "resources": {
+    "peak_rss_kib": 536704,
+    "peak_fds": 379,
+    "peak_service_pids": 2,
+    "cpu_seconds": 21.5,
+    "peak_cpu_percent": 247.561
+  },
+  "timing": {
+    "wall_seconds": 26.412,
+    "monotonic_seconds": 26.412,
+    "clock_difference_seconds": 0.0
+  },
+  "upstream_requests": 15487,
+  "duplicate_upstream_requests": 0,
+  "peak_upstream_requests": 100,
+  "host_timing": {
+    "wall_seconds": 29.365,
+    "monotonic_seconds": 29.365,
+    "clock_difference_seconds": 0.0
+  },
+  "source_commit": "ce05e32965e0136ed44363954ba893b24a25ec12",
+  "source_modified": true
+}

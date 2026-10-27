@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "environment": {
+    "system": "Linux-6.10.14-linuxkit-aarch64-with-glibc2.36",
+    "uid": 65534,
+    "filesystem": "entry journals on overlayfs via TMPDIR; process fixtures on exec tmpfs"
+  },
+  "linux_amd64_build": true,
+  "packages": [
+    {
+      "package": "entry",
+      "exit_code": 0,
+      "seconds": 5.383,
+      "output": "PASS\n"
+    },
+    {
+      "package": "process",
+      "exit_code": 0,
+      "seconds": 2.922,
+      "output": "PASS\nPASS\nPASS\nPASS\n"
+    }
+  ]
+}

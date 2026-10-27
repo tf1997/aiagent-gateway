@@ -16,9 +16,16 @@ MAX_EVENT = 2 << 20
 MAX_RESPONSE = 8 << 20
 
 
-def expect(condition, message):
+class CheckFailure(RuntimeError):
+    """A fixed assertion message with optional diagnostics that exclude model text."""
+    def __init__(self, message, diagnostics=None):
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
+
+
+def expect(condition, message, diagnostics=None):
     if not condition:
-        raise RuntimeError(message)
+        raise CheckFailure(message, diagnostics)
 
 
 def events(response, with_ids=False):
@@ -80,6 +87,11 @@ def task_text(task):
     return "\n".join(p.get("text", "") for p in parts if isinstance(p, dict))
 
 
+def task_summary(task):
+    return {"state": task.get("status", {}).get("state"), "text_bytes": len(task_text(task).encode()),
+            "artifact_count": len(task.get("artifacts", [])), "history_count": len(task.get("history", []))}
+
+
 def rpc(token, method, params):
     q = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": method, "params": params}
     env = require(DATA_URL + "/agents/hermes-local/a2a", token, q)
@@ -129,12 +141,18 @@ def http_sessions(creds, run_id):
     expect("error" not in names and "run.failed" not in names, "Native session SSE reported failure")
     expect("run.completed" in names and "done" in names, "Native session SSE did not complete")
     completed = [v for name, v in frames if name == "assistant.completed" and isinstance(v, dict)]
-    expect(any(marker in v.get("content", "") for v in completed), "Second HTTP turn did not recall the first turn's code")
     for _, value in frames:
         if isinstance(value, dict) and value.get("session_id"):
             expect(value["session_id"] == session_id, "SSE event changed session ID")
     history = require(base + "/" + session_id + "/messages?limit=100&order=latest", token, headers=headers)
     messages = history.get("data", [])
+    expect(any(marker in v.get("content", "") for v in completed), "Second HTTP turn did not recall the first turn's code", {
+        "session_identity_preserved": True, "history_messages": len(messages),
+        "history_contains_first_marker": any(marker in json.dumps(m, ensure_ascii=False) for m in messages if m.get("role") == "user"),
+        "history_user_turns": sum(m.get("role") == "user" for m in messages),
+        "history_assistant_turns": sum(m.get("role") == "assistant" for m in messages),
+        "reply_text_bytes": sum(len(v.get("content", "").encode()) for v in completed),
+    })
     expect(sum(m.get("role") == "user" for m in messages) >= 2, "Session history lacks both user turns")
     expect(sum(m.get("role") == "assistant" for m in messages) >= 2, "Session history lacks both assistant turns")
     return {"session_id": session_id, "history_messages": len(messages), "recall": True, "sse": timing,
@@ -167,7 +185,7 @@ def a2a_context(creds):
     task = first.get("task")
     expect(isinstance(task, dict), "Hermes SendMessage did not return a Task")
     expect(task["status"]["state"] == "TASK_STATE_COMPLETED", "First A2A task did not complete")
-    expect(bool(task_text(task)), "First A2A task contains no response text")
+    expect(bool(task_text(task)), "First A2A task contains no response text", task_summary(task))
     task_id, context_id = task["id"], task["contextId"]
     expect(task_id.startswith("task_") and context_id.startswith("ctx_"), "A2A public IDs were not mapped")
     query = rpc(token, "GetTask", {"id": task_id})
@@ -198,7 +216,10 @@ def a2a_context(creds):
             states.append(value["status"]["state"])
             texts.append(task_text(value))
     expect(states[-1] == "TASK_STATE_COMPLETED", "A2A stream did not reach completed state")
-    expect(marker in "".join(texts), "Second A2A turn did not recall the first turn's code")
+    expect(marker in "".join(texts), "Second A2A turn did not recall the first turn's code", {
+        "context_identity_preserved": True, "task_identity_preserved": True,
+        "reply_text_bytes": len("".join(texts).encode()), "states": states,
+    })
     listed = rpc(token, "ListTasks", {"contextId": context_id, "pageSize": 1})
     expect(listed["totalSize"] == 2 and len(listed["tasks"]) == 1 and listed["nextPageToken"], "A2A owned task pagination failed")
     last = rpc(token, "ListTasks", {"contextId": context_id, "pageSize": 1, "pageToken": listed["nextPageToken"]})

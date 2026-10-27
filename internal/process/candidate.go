@@ -45,6 +45,7 @@ type Candidate struct {
 	preview, delta        bool
 	operations            bool
 	operationStream       bool
+	compactResults        bool
 	records               map[string]json.RawMessage
 	recordHeader          gatewayImage
 	cursor, pendingCursor state.Cursor
@@ -232,6 +233,11 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		}
 		c.operationStream = true
 		reply.Operations = true
+	case "compact_results":
+		if c.owner != nil || c.receiver != nil || c.viewRaw != nil {
+			return reply, fmt.Errorf("RESULT_NEGOTIATION_TOO_LATE")
+		}
+		c.compactResults = true
 	case "snapshot":
 		if c.owner != nil || m.Decision.Validate() != nil || (!m.Preview && m.Decision.Phase != handoff.Sealed) || (m.Preview && m.Decision.Phase != handoff.Prepared) ||
 			m.Decision.Source != (handoff.Identity{Incarnation: c.boot.Source.Incarnation, Release: c.boot.Source.Release}) ||
@@ -313,6 +319,9 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		image, view, err := decodeGatewayImage(raw, validation, c.boot.MaxSnapshotBytes, c.cfg.Options())
 		if err != nil {
 			return reply, err
+		}
+		if image.Entry.Compact && !c.compactResults {
+			return reply, fmt.Errorf("ENTRY_RECEIPTS_NOT_NEGOTIATED")
 		}
 		if err = ctx.Err(); err != nil {
 			return reply, err

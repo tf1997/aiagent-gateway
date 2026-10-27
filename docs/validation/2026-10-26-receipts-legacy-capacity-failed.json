@@ -1,0 +1,217 @@
+{
+  "passed": false,
+  "concurrency": 100,
+  "stages": [
+    {
+      "index": 1,
+      "profile": "mixed",
+      "requests": 14404,
+      "failures": 0,
+      "statuses": {
+        "200": 14404
+      },
+      "duration_seconds": 18.341,
+      "latency_ms": {
+        "samples": 14404,
+        "p50": 57.901,
+        "p95": 94.589,
+        "p99": 3033.882,
+        "max": 3114.045
+      },
+      "profile_latency_ms": {
+        "http": {
+          "samples": 14104,
+          "p50": 57.684,
+          "p95": 88.175,
+          "p99": 107.58,
+          "max": 142.44
+        },
+        "sse": {
+          "samples": 300,
+          "p50": 3031.423,
+          "p95": 3096.471,
+          "p99": 3106.627,
+          "max": 3114.045
+        }
+      },
+      "first_response_ms": {
+        "samples": 14404,
+        "p50": 3.289,
+        "p95": 23.369,
+        "p99": 42.665,
+        "max": 74.97
+      },
+      "handoff_request_ms": {
+        "samples": 0
+      },
+      "errors": [],
+      "phase_times_seconds": {
+        "PREPARING": 2.2234082929999204,
+        "STARTING": 2.3768286679999164,
+        "VERIFYING": 2.634210042999939,
+        "PROMOTING": 9.380964546999962,
+        "OBSERVING": 9.604147796999996,
+        "ROLLING_BACK": 12.801903589999938,
+        "ROLLED_BACK": 15.3823063829999
+      },
+      "rollout": {
+        "phase": "ROLLED_BACK",
+        "reason": "result_evidence_lost",
+        "stable": {
+          "socket": "/tmp/gw-load-_3wtud95/p/process_9053d9e10b2f5685369041ddeef5bdc9/business.sock",
+          "artifact": "/tmp/gw-load-_3wtud95/releases/1c55211ddb553ffc2949c42aa56386d59f7efe2f2a4b98ab6b88736cdfe70c43/gateway",
+          "release": "1c55211ddb553ffc2949c42aa56386d59f7efe2f2a4b98ab6b88736cdfe70c43",
+          "instance": "a",
+          "incarnation": "process_9053d9e10b2f5685369041ddeef5bdc9",
+          "url": "http://gateway",
+          "admin_url": ""
+        },
+        "statistics": {
+          "direct_ingress_counts": {
+            "http": {
+              "success": 2352,
+              "failure": 0,
+              "excluded": 0,
+              "unknown": 0
+            }
+          },
+          "counts": {
+            "http": {
+              "success": 2365,
+              "failure": 0,
+              "excluded": 0,
+              "unknown": 0
+            }
+          },
+          "active": 93,
+          "lost": true,
+          "failures": 0,
+          "total": 2365,
+          "revision": 3
+        },
+        "snapshot_bytes": 0,
+        "handoff_milliseconds": 0,
+        "state_status": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 0,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 87766,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 1024,
+            "Bytes": 16777216,
+            "Wait": 2000000000
+          },
+          "PauseCount": 0,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 0,
+          "TotalPauseMicros": 0,
+          "MaxPauseMicros": 0
+        },
+        "state_queue": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 0,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 0,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 0,
+            "Bytes": 0,
+            "Wait": 0
+          },
+          "PauseCount": 0,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 0,
+          "TotalPauseMicros": 0,
+          "MaxPauseMicros": 0
+        },
+        "allocation_queue": {
+          "Sealing": false,
+          "Sealed": false,
+          "Active": 0,
+          "Waiting": 0,
+          "Bytes": 0,
+          "Captures": 0,
+          "Revision": 0,
+          "Timeouts": 0,
+          "Rejected": 0,
+          "Limits": {
+            "Requests": 0,
+            "Bytes": 0,
+            "Wait": 0
+          },
+          "PauseCount": 0,
+          "CurrentPauseMicros": 0,
+          "LastPauseMicros": 0,
+          "TotalPauseMicros": 0,
+          "MaxPauseMicros": 0
+        }
+      },
+      "requests_per_second": 785.344,
+      "candidate_pause_ms": {
+        "state_queue": {
+          "last": 0.0,
+          "max": 0.0,
+          "count": 0
+        },
+        "allocation_queue": {
+          "last": 0.0,
+          "max": 0.0,
+          "count": 0
+        }
+      }
+    }
+  ],
+  "scope": "closed-loop clients, synthetic upstream, Linux container; not production capacity",
+  "environment": {
+    "system": "Linux-6.10.14-linuxkit-aarch64-with-glibc2.36",
+    "cpus": 8,
+    "uid": 65534
+  },
+  "cycles": 10,
+  "profiles": [
+    "mixed"
+  ],
+  "sessions_per_client": 4,
+  "session_policy": "persistent client pools; separate pool per release during VERIFYING to obtain candidate samples",
+  "baseline_seconds": 2.0,
+  "observe_seconds": 8,
+  "upstream_http_ms": 50.0,
+  "upstream_sse_ms": 3000.0,
+  "artifact_sha256": [
+    "1c55211ddb553ffc2949c42aa56386d59f7efe2f2a4b98ab6b88736cdfe70c43",
+    "5c6827ce512d3d834579c97938e7d3bbb378529795fd0695ebfe769738cb1dc0",
+    "a192b40fabad1ea77ccb322e448d5bbe4fa91df43805b71e9951ea6ea806b50b"
+  ],
+  "error": "AssertionError: rollout did not complete under load",
+  "resources": {
+    "peak_rss_kib": 165188,
+    "peak_fds": 321,
+    "peak_service_pids": 2,
+    "cpu_seconds": 9.78,
+    "peak_cpu_percent": 117.583
+  },
+  "timing": {
+    "wall_seconds": 18.498,
+    "monotonic_seconds": 18.498,
+    "clock_difference_seconds": -0.0
+  },
+  "upstream_requests": 14404,
+  "duplicate_upstream_requests": 0,
+  "peak_upstream_requests": 100,
+  "host_timing": {
+    "wall_seconds": 21.162,
+    "monotonic_seconds": 21.164,
+    "clock_difference_seconds": -0.002
+  },
+  "source_commit": "ce05e32965e0136ed44363954ba893b24a25ec12",
+  "source_modified": true
+}

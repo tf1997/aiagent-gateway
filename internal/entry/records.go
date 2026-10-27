@@ -9,6 +9,12 @@ import (
 
 func StateRecords(v Transfer) map[string]json.RawMessage {
 	records := map[string]json.RawMessage{"entry/traffic": jsonValue(v.Traffic), "entry/counter": jsonValue(v.Counter), "entry/lost": jsonValue(v.Lost)}
+	if v.Compact {
+		records["entry/compact"] = jsonValue(true)
+	}
+	for k, value := range v.Receipts {
+		records["entry/receipt/"+k] = jsonValue(value)
+	}
 	for k, value := range v.Bindings {
 		records["entry/binding/"+k] = jsonValue(value)
 	}
@@ -22,7 +28,7 @@ func StateRecords(v Transfer) map[string]json.RawMessage {
 }
 
 func RenderStateRecords(records map[string]json.RawMessage) (Transfer, error) {
-	v := Transfer{Bindings: map[string]string{}, Results: map[string]p.Result{}, Active: map[string]p.Result{}}
+	v := Transfer{Bindings: map[string]string{}, Results: map[string]p.Result{}, Active: map[string]p.Result{}, Receipts: map[string]ResultReceipt{}}
 	found := 0
 	for k, raw := range records {
 		var err error
@@ -36,6 +42,12 @@ func RenderStateRecords(records map[string]json.RawMessage) (Transfer, error) {
 		case k == "entry/lost":
 			err = json.Unmarshal(raw, &v.Lost)
 			found++
+		case k == "entry/compact":
+			err = json.Unmarshal(raw, &v.Compact)
+		case strings.HasPrefix(k, "entry/receipt/"):
+			var value ResultReceipt
+			err = json.Unmarshal(raw, &value)
+			v.Receipts[strings.TrimPrefix(k, "entry/receipt/")] = value
 		case strings.HasPrefix(k, "entry/binding/"):
 			var value string
 			err = json.Unmarshal(raw, &value)

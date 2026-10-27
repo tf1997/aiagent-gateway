@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "command": [
+    "go",
+    "vet",
+    "./..."
+  ],
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "exit_code": 0,
+  "wall_seconds": 0.62,
+  "monotonic_seconds": 0.62,
+  "clock_difference_seconds": 0.0,
+  "output": ""
+}

@@ -1,0 +1,35 @@
+{
+  "passed": false,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "preflight": {
+      "card_url": "http://127.0.0.1:56837/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true
+    }
+  },
+  "started_at": "2026-10-26T09:04:33.402288+00:00",
+  "source_commit": "ce05e32965e0136ed44363954ba893b24a25ec12",
+  "source_modified": true,
+  "artifact_sha256": [
+    "89d626f9fc10314d353f8c1e83717f753d4e8053a1aa90442b10cb803e8fc024",
+    "6b83e274f4be9c9fec5c4cc1f8a5bc325cbba4bd0598e6f1e34735263d0c1752"
+  ],
+  "error_type": "CheckFailure",
+  "failed_check": "before_http",
+  "check_error": "Second HTTP turn did not recall the first turn's code",
+  "diagnostics": {
+    "session_identity_preserved": true,
+    "history_messages": 4,
+    "history_contains_first_marker": true,
+    "history_user_turns": 2,
+    "history_assistant_turns": 2,
+    "reply_text_bytes": 45
+  },
+  "timing": {
+    "wall_seconds": 70.56,
+    "monotonic_seconds": 70.56,
+    "clock_difference_seconds": 0.0
+  },
+  "finished_at": "2026-10-26T09:05:43.962307+00:00"
+}

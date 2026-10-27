@@ -1,0 +1,272 @@
+{
+  "passed": true,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "preflight": {
+      "card_url": "http://127.0.0.1:57257/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true
+    },
+    "before_http": {
+      "session_id": "session_89d7523084a15de92b6d21991a9fab28",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.013,
+        "total_seconds": 7.18,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "before_a2a": {
+      "context_id": "ctx_13de538efcfa4accfbc3971182527e6d",
+      "task_ids": [
+        "task_b418cc916883fbed738008b74b0c4b36",
+        "task_c73daba33185bf3b933494d5e61166a5"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.009,
+        "total_seconds": 11.814,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "missing_samples_rollback": {
+      "phase": "ROLLED_BACK",
+      "reason": "insufficient_successful_proxy_samples",
+      "source_preserved": true,
+      "committed": false
+    },
+    "rollout_http_0": {
+      "session_id": "session_2394baacbd87409decc54bc5301367ce",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.02,
+        "total_seconds": 20.044,
+        "event_count": 17
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_1": {
+      "session_id": "session_ce68477af9b207482a910396caa428f4",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.016,
+        "total_seconds": 3.922,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_a2a_2": {
+      "context_id": "ctx_4117061060347ba11f9564b9274bd61f",
+      "task_ids": [
+        "task_5286686fe18411dd387392399b0abfc0",
+        "task_c6e3173a3b856aebeb5e0ca8fdf98d09"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.014,
+        "total_seconds": 5.715,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "rollout_a2a_3": {
+      "context_id": "ctx_1f33495f4983a11869af83c4a1adcdab",
+      "task_ids": [
+        "task_6bfb7dbe46f9b453a470ef1b70b3f40f",
+        "task_f6fb7fb38aeafb9b229f1baf7321ba65"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.015,
+        "total_seconds": 28.834,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "direct_http_4": {
+      "session_id": "session_046b5eff1d13ffd8da4d51fc4c2da443",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.048,
+        "total_seconds": 28.959,
+        "event_count": 14
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "direct_a2a_4": {
+      "context_id": "ctx_379ab636d034afefc27f74d273333ca8",
+      "task_ids": [
+        "task_206976652ef3f2f5e6244bc065bc441d",
+        "task_7d36bae6c9170379d06834b784f8a062"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.033,
+        "total_seconds": 7.753,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "rollout": {
+      "statistics": {
+        "direct_ingress_counts": {
+          "a2a": {
+            "success": 5,
+            "failure": 0,
+            "excluded": 6,
+            "unknown": 0
+          },
+          "a2a_sse": {
+            "success": 2,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "http": {
+            "success": 3,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "sse": {
+            "success": 1,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          }
+        },
+        "counts": {
+          "a2a": {
+            "success": 5,
+            "failure": 0,
+            "excluded": 6,
+            "unknown": 0
+          },
+          "a2a_sse": {
+            "success": 2,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "http": {
+            "success": 3,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "sse": {
+            "success": 1,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          }
+        },
+        "active": 0,
+        "lost": false,
+        "failures": 0,
+        "total": 17,
+        "revision": 6
+      },
+      "snapshot_bytes": 494765,
+      "handoff_milliseconds": 284
+    },
+    "after": {
+      "http_history_preserved": true,
+      "a2a_identity_preserved": true,
+      "caller_isolation": true,
+      "inflight_zero": true
+    }
+  },
+  "started_at": "2026-10-26T09:06:49.606092+00:00",
+  "source_commit": "ce05e32965e0136ed44363954ba893b24a25ec12",
+  "source_modified": true,
+  "artifact_sha256": [
+    "89d626f9fc10314d353f8c1e83717f753d4e8053a1aa90442b10cb803e8fc024",
+    "6b83e274f4be9c9fec5c4cc1f8a5bc325cbba4bd0598e6f1e34735263d0c1752"
+  ],
+  "last_rollout": {
+    "phase": "RECOVERY_REQUIRED",
+    "committed": false,
+    "statistics": {
+      "counts": {},
+      "active": 1,
+      "lost": false,
+      "failures": 0,
+      "total": 0,
+      "revision": 6
+    }
+  },
+  "observation_resumes": 1,
+  "timing": {
+    "wall_seconds": 270.911,
+    "monotonic_seconds": 270.91,
+    "clock_difference_seconds": 0.001
+  },
+  "finished_at": "2026-10-26T09:11:20.517145+00:00"
+}

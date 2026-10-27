@@ -28,6 +28,8 @@ type Entry struct {
 	traffic     p.Traffic
 	bindings    map[string]string
 	results     map[string]p.Result
+	receipts    map[string]ResultReceipt
+	compact     bool
 	active      map[string]p.Result
 	lost        bool
 	counter     uint64
@@ -45,6 +47,8 @@ type Entry struct {
 
 func Open(j *state.Journal, token string, resolve Resolver) (*Entry, error) {
 	e := &Entry{j: j, token: token, resolve: resolve, bindings: map[string]string{}, results: map[string]p.Result{}, active: map[string]p.Result{}, transport: &http.Transport{Proxy: nil, MaxIdleConns: 1024, MaxIdleConnsPerHost: 256, ResponseHeaderTimeout: 24 * time.Hour}}
+	e.receipts = map[string]ResultReceipt{}
+	var interrupted []p.Result
 	for k, v := range j.Snapshot() {
 		switch {
 		case k == "entry/traffic":
@@ -53,6 +57,16 @@ func Open(j *state.Journal, token string, resolve Resolver) (*Entry, error) {
 			}
 		case k == "entry/lost":
 			_ = json.Unmarshal(v, &e.lost)
+		case k == "entry/compact":
+			if err := json.Unmarshal(v, &e.compact); err != nil {
+				return nil, err
+			}
+		case strings.HasPrefix(k, "entry/receipt/"):
+			var receipt ResultReceipt
+			if strings.TrimPrefix(k, "entry/receipt/") == "" || json.Unmarshal(v, &receipt) != nil || receipt.validate() != nil {
+				return nil, fmt.Errorf("invalid result receipt")
+			}
+			e.receipts[strings.TrimPrefix(k, "entry/receipt/")] = receipt
 		case strings.HasPrefix(k, "entry/binding/"):
 			var worker string
 			if json.Unmarshal(v, &worker) != nil {
@@ -73,6 +87,23 @@ func Open(j *state.Journal, token string, resolve Resolver) (*Entry, error) {
 			r.Verdict = "failure"
 			r.Reason = "entry_restarted"
 			r.Completed = time.Now()
+			interrupted = append(interrupted, r)
+		}
+	}
+	if (!e.compact && len(e.receipts) != 0) || (e.compact && len(e.results) != 0) || len(e.receipts) > maxResultReceipts {
+		return nil, fmt.Errorf("invalid result receipt mode")
+	}
+	for _, r := range interrupted {
+		if e.compact {
+			if _, duplicate := e.receipts[r.ID]; duplicate {
+				return nil, fmt.Errorf("duplicate result receipt")
+			}
+			if len(e.receipts) < maxResultReceipts {
+				e.receipts[r.ID] = resultReceipt(r)
+			} else {
+				e.lost = true
+			}
+		} else {
 			e.results[r.ID] = r
 		}
 	}
@@ -84,6 +115,12 @@ func Open(j *state.Journal, token string, resolve Resolver) (*Entry, error) {
 func jsonValue(v any) json.RawMessage { b, _ := json.Marshal(v); return b }
 func (e *Entry) save() error {
 	v := map[string]json.RawMessage{"entry/traffic": jsonValue(e.traffic), "entry/lost": jsonValue(e.lost)}
+	if e.compact {
+		v["entry/compact"] = jsonValue(true)
+	}
+	for k, receipt := range e.receipts {
+		v["entry/receipt/"+k] = jsonValue(receipt)
+	}
 	for k, b := range e.bindings {
 		v["entry/binding/"+k] = jsonValue(b)
 	}
@@ -184,6 +221,7 @@ func (e *Entry) Apply(expected uint64, next p.Traffic) error {
 	}
 	if next.Rollout != e.traffic.Rollout {
 		e.results = map[string]p.Result{}
+		e.receipts = map[string]ResultReceipt{}
 		e.lost = false
 		e.bindings = map[string]string{}
 	}
@@ -206,18 +244,18 @@ func (e *Entry) Stats(since time.Time, worker string) p.Statistics {
 			out.Active++
 		}
 	}
-	for _, r := range e.results {
-		if r.Incarnation != worker {
-			continue
+	add := func(incarnation, profile, verdict string, started time.Time, direct bool) {
+		if incarnation != worker {
+			return
 		}
-		if r.Verdict == "failure" {
+		if verdict == "failure" {
 			out.Failures++
 		}
-		if r.Started.Before(since) {
-			continue
+		if started.Before(since) {
+			return
 		}
-		c := out.Counts[r.Profile]
-		switch r.Verdict {
+		c := out.Counts[profile]
+		switch verdict {
 		case "success":
 			c.Success++
 		case "failure":
@@ -227,10 +265,10 @@ func (e *Entry) Stats(since time.Time, worker string) p.Statistics {
 		default:
 			c.Unknown++
 		}
-		out.Counts[r.Profile] = c
-		if r.Ingress == worker {
-			direct := out.IngressCounts[r.Profile]
-			switch r.Verdict {
+		out.Counts[profile] = c
+		if direct {
+			direct := out.IngressCounts[profile]
+			switch verdict {
 			case "success":
 				direct.Success++
 			case "failure":
@@ -240,9 +278,15 @@ func (e *Entry) Stats(since time.Time, worker string) p.Statistics {
 			default:
 				direct.Unknown++
 			}
-			out.IngressCounts[r.Profile] = direct
+			out.IngressCounts[profile] = direct
 		}
 		out.Total++
+	}
+	for _, r := range e.results {
+		add(r.Incarnation, r.Profile, r.Verdict, r.Started, r.Ingress == worker)
+	}
+	for _, r := range e.receipts {
+		add(r.Incarnation, r.Profile, r.Verdict, r.Started, r.Direct)
 	}
 	return out
 }
@@ -271,6 +315,9 @@ func (e *Entry) startIngress(key, preferred, ingress, id string) (p.Target, p.Re
 		return p.Target{}, p.Result{}, fmt.Errorf("REQUEST_ALREADY_ALLOCATED")
 	}
 	if _, exists := e.results[id]; exists {
+		return p.Target{}, p.Result{}, fmt.Errorf("REQUEST_ALREADY_COMPLETED")
+	}
+	if _, exists := e.receipts[id]; exists {
 		return p.Target{}, p.Result{}, fmt.Errorf("REQUEST_ALREADY_COMPLETED")
 	}
 	if ingress != "" && ingress != e.traffic.Stable.Incarnation && (e.traffic.Candidate == nil || ingress != e.traffic.Candidate.Incarnation) {
@@ -310,7 +357,11 @@ func (e *Entry) startIngress(key, preferred, ingress, id string) (p.Target, p.Re
 	e.active[r.ID] = r
 	e.recorder.Put("entry/active/"+r.ID, r)
 	if e.traffic.Rollout != "" {
-		if len(e.results)+len(e.active) > 8192 {
+		limit, completed := 8192, len(e.results)
+		if e.compact {
+			limit, completed = maxResultReceipts, len(e.receipts)
+		}
+		if completed+len(e.active) > limit {
 			e.lost = true
 		}
 		values := map[string]json.RawMessage{"entry/active/" + r.ID: jsonValue(r), "entry/lost": jsonValue(e.lost)}
@@ -340,6 +391,19 @@ func (e *Entry) Complete(ctx context.Context, r p.Result) error {
 	defer leave()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	var receipt ResultReceipt
+	if e.compact {
+		receipt = resultReceipt(r)
+		if receipt.validate() != nil {
+			return fmt.Errorf("INVALID_ENTRY_RESULT_RECEIPT")
+		}
+	}
+	if old, ok := e.receipts[r.ID]; ok {
+		if old.Digest == receipt.Digest && e.j.Healthy() == nil {
+			return nil
+		}
+		return fmt.Errorf("RESULT_CONFLICT")
+	}
 	if old, ok := e.results[r.ID]; ok {
 		old.Started = old.Started.Round(0).UTC()
 		old.Completed = old.Completed.Round(0).UTC()
@@ -362,7 +426,10 @@ func (e *Entry) Complete(ctx context.Context, r p.Result) error {
 	}
 	if e.traffic.Rollout != "" {
 		values := map[string]json.RawMessage{}
-		if len(e.results) < 8192 {
+		if e.compact && len(e.receipts) < maxResultReceipts {
+			e.receipts[r.ID] = receipt
+			values["entry/receipt/"+r.ID] = jsonValue(e.receipts[r.ID])
+		} else if !e.compact && len(e.results) < 8192 {
 			e.results[r.ID] = r
 			values["entry/result/"+r.ID] = jsonValue(r)
 		} else {
