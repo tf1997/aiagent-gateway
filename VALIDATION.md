@@ -1,5 +1,17 @@
 # 验证记录
 
+## Linux/systemd 与真实 Agent 联合验收完成（2026-10-27）
+
+[完整通过报告](docs/validation/2026-10-27-systemd-real-agent-passed.json)已取得 passed=true。使用 Debian 12 / systemd 252.39 / Linux arm64 容器内的正式安装器和两个隔离 Hermes 实例，沿用原模型配置与安全策略；本轮没有修改 Go 运行时代码。
+
+- [直连上游诊断](docs/validation/2026-10-27-real-agent-startup-diagnostic.json)复现启动竞态：Hermes HTTP/A2A 已监听、状态已标记 running，但启动恢复的入站门禁尚未打开。四个请求被入队，同时返回空的 COMPLETED；日志确认模型在门禁释放后才执行。验收现在等待固定镜像在完成启动恢复后写出的结束标记，再发业务请求；不会用重试任务掩盖空回复，也不导出完整 Agent 日志。
+- 仅补就绪等待后的[独立运行](docs/validation/2026-10-27-systemd-real-agent-startup-gate-recall-failed.json)仍在发布前未通过标签回忆检查。另一次直连观察到模型明确拒绝执行 A2A 中的嵌入指令；将原先“记住标签、仅回复 SAVED”改为讨论带随机名称的虚构水果展览，第二轮询问展览名称。报告标记 fictional_exhibition_v1；仍要求回复包含首轮的精确随机名称，保留非空回复、完整流、task/context 身份、分页与调用方隔离断言。没有关闭 A2A 安全包装或替换模型。
+- 发布前四类真实请求、会话记忆和隔离通过；故意不给候选样本时自动 ROLLED_BACK，未提交、旧进程保留。随后重新发布，在观察期补齐直接入口样本并 resume 一次，最终 COMPLETED 且 committed=true。
+- MainPID 从 179 接管为 332，始终使用非 root UID 986，正常发布的 systemd 重启数为 0，完成后只剩一个服务进程。最终 HTTP/SSE/A2A/A2A SSE 直接入口成功数为 6/2/3/1，另有 3 个 excluded，失败和活动请求为 0，证据无丢失。快照 491978 字节，交接窗口 317 ms；整轮 194.893 秒，wall/monotonic 无差异。
+- 交接后和网关 Linux 容器重启后，原 HTTP 历史、A2A task/context ID 与调用方隔离均通过。重启选择已提交版本，MainPID 为 75；运行中清理被拒绝，冷启动删除两个过期额外产物和临时快照、保留两个近期额外产物。两个 Hermes 实例在网关重启期间继续运行。
+
+本轮修改仅涉及验收脚本、报告和文档；脚本语法与报告完整性另行检查。原失败报告保留，不将先前失败改为通过。按用户最新要求，物理断电暂缓；长期稳定性与容量边界验证继续跳过，未测项不标为通过。此前 ext4/XFS、Debian/Ubuntu 生命周期和 Go 检查仍按各自报告范围有效。
+
 ## 冷启动清理、文件系统恢复与快照复核（2026-10-27）
 
 先按用户要求提交已有改动为 63f243c，再继续本轮工作。长期稳定性与容量边界验收按本轮用户指示跳过；以下系统生命周期、存储故障测试和定向内存基准不作为长期容量证明。
@@ -12,11 +24,11 @@
 - [8 MiB 快照定向基准](docs/validation/2026-10-27-maintenance-snapshot-memory.json)，每路径 10 次：原 LoadSnapshot 后比较为 41,705,161 B/op、49 次分配；逐块比较为 34,184 B/op、13 次分配。测得约 7.22 / 3.77 ms，仅描述该文件复核操作，分配总量不是进程峰值 RSS，也不是生产交接时延或吞吐结论。
 - 最终版本的[全量竞态](docs/validation/2026-10-27-maintenance-final-go-race.json)、[vet](docs/validation/2026-10-27-maintenance-final-vet.json)及 [Linux amd64 构建](docs/validation/2026-10-27-maintenance-linux-amd64-build.json)通过。竞态使用 count=1；Python 脚本语法另行检查。
 
-Linux/systemd 与真实 Hermes 的联合脚本已接入正式安装、非 root/凭据、MainPID 接管、零 systemd 重启、旧会话/任务恢复和启动清理。一次[运行](docs/validation/2026-10-27-systemd-real-agent-reboot-port-failed.json)通过四 profile、缺样本回退后成功发布、交接后资源检查及重启选版，但在重启后的宿主请求因 Docker 随机端口变化失败；脚本已固定 loopback 端口。其后模型请求分别出现[需要输入](docs/validation/2026-10-27-systemd-real-agent-stream-failed.json)、[空任务](docs/validation/2026-10-27-systemd-real-agent-cleanup-empty-task.json)和[标签回忆失败](docs/validation/2026-10-27-systemd-real-agent-recall-failed.json)，最新失败发生在发布前，公开 task/context ID 保持且流到达 COMPLETED，但回复未包含首轮标签。没有修改模型配置或放宽记忆/流结束断言；联合验收仍未取得整轮 passed=true。此前 macOS 网关配合真实 Hermes 的通过报告仍按原环境保留。
+Linux/systemd 与真实 Hermes 的联合脚本已接入正式安装、非 root/凭据、MainPID 接管、零 systemd 重启、旧会话/任务恢复和启动清理。一次[运行](docs/validation/2026-10-27-systemd-real-agent-reboot-port-failed.json)通过四 profile、缺样本回退后成功发布、交接后资源检查及重启选版，但在重启后的宿主请求因 Docker 随机端口变化失败；脚本已固定 loopback 端口。其后模型请求分别出现[需要输入](docs/validation/2026-10-27-systemd-real-agent-stream-failed.json)、[空任务](docs/validation/2026-10-27-systemd-real-agent-cleanup-empty-task.json)和[标签回忆失败](docs/validation/2026-10-27-systemd-real-agent-recall-failed.json)，该阶段最后一次失败发生在发布前，公开 task/context ID 保持且流到达 COMPLETED，但回复未包含首轮标签。该阶段尚未取得整轮通过；后续定位和最终联合通过记录见本文首节。此前 macOS 网关配合真实 Hermes 的通过报告仍按原环境保留。
 
 [Ubuntu 24.04 / systemd 255.4 验证](docs/validation/2026-10-27-systemd-noble.json)使用独立 Noble 镜像，通过相同的正式安装、A→B→C、失败回退、CLI 断开、SIGKILL、双进程停启、卸载重装和容器重启流程；启动清理的运行中拒绝、过期产物回收、近期版本保留和临时文件删除均通过。671 次串行模拟请求无意外失败或队列超时/拒绝，服务进程峰值 2。Debian 与 Ubuntu 是不同用户空间/systemd 版本，仍共享 Docker Linux VM 内核；这里未声明所有 Linux 发行版或物理设备通过。
 
-物理掉电、具体生产存储设备以及完整真实模型联合验收仍不能据本轮结果标为完成。旧实验部署自动迁移在既定方案中明确不做，不作为本轮遗漏功能。
+上述存储测试不能证明物理掉电和具体生产存储设备已经验收；断电现按用户要求暂缓。完整真实模型联合验收后续已通过，见本文首节。旧实验部署自动迁移在既定方案中明确不做，不作为本轮遗漏功能。
 
 ## 真实 Agent 完整换版与最终复核（2026-10-26，10 月 27 日归档）
 

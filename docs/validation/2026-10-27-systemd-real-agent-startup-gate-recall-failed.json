@@ -1,0 +1,104 @@
+{
+  "passed": false,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "agent_startup_0": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.826
+    },
+    "agent_startup_1": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.785
+    },
+    "systemd_before": {
+      "main_pid": 185,
+      "pids": [
+        185
+      ],
+      "uids": [
+        986
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "preflight": {
+      "card_url": "http://127.0.0.1:64507/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true
+    },
+    "before_http": {
+      "session_id": "session_8e2541cb55215088e4d0e4cba981dccd",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.006,
+        "total_seconds": 3.973,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    }
+  },
+  "started_at": "2026-10-27T04:23:33.660597+00:00",
+  "source_commit": "b88ca1b0b277f3db966e46d841f9b2a127ffdfe2",
+  "source_modified": true,
+  "artifact_sha256": [
+    "f27ed03faebb58055076d6822b6a53748af04243aaeeb8779847078ead982f4f",
+    "f58668a1269f9a27873f5f9bf76ee627e6ae76f92e8ace1b0c4805d09fa4bbda"
+  ],
+  "error_type": "CheckFailure",
+  "failed_check": "before_a2a",
+  "check_error": "Second A2A turn did not recall the first turn's code",
+  "diagnostics": {
+    "context_identity_preserved": true,
+    "task_identity_preserved": true,
+    "reply_text_bytes": 66,
+    "states": [
+      "TASK_STATE_SUBMITTED",
+      "TASK_STATE_WORKING",
+      "TASK_STATE_COMPLETED"
+    ]
+  },
+  "upstream_task_diagnostics": [
+    {
+      "endpoint": "isolated-0",
+      "tasks": [
+        {
+          "state": "TASK_STATE_COMPLETED",
+          "text_bytes": 133,
+          "artifact_count": 1,
+          "history_count": 0
+        },
+        {
+          "state": "TASK_STATE_COMPLETED",
+          "text_bytes": 11,
+          "artifact_count": 1,
+          "history_count": 0
+        }
+      ]
+    },
+    {
+      "endpoint": "isolated-1",
+      "tasks": []
+    }
+  ],
+  "timing": {
+    "wall_seconds": 81.026,
+    "monotonic_seconds": 81.026,
+    "clock_difference_seconds": 0.0
+  },
+  "finished_at": "2026-10-27T04:24:54.687097+00:00"
+}

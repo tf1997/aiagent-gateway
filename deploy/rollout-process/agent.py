@@ -45,6 +45,32 @@ def wait(check, seconds=90):
     raise RuntimeError("acceptance condition timed out")
 
 
+def wait_agent_startup(name):
+    """The pinned Hermes image opens HTTP/A2A before its inbound restore gate.
+
+    Its status file also says running before that gate opens. In a fresh test
+    container, the end-of-startup log marker is emitted only after
+    _finish_startup_restore returns. Read it in place without exporting logs.
+    Sending a probe task too early would itself become an empty completed task.
+    """
+    script = """import json, time
+from pathlib import Path
+started = time.monotonic()
+log = Path('/opt/data/logs/gateway.log')
+while time.monotonic() - started < 180:
+    if log.is_file() and ' INFO gateway.run: Press Ctrl+C to stop' in log.read_text(errors='replace'):
+        print(json.dumps({'startup_restore_complete': True,
+                          'wait_seconds': round(time.monotonic() - started, 3)}))
+        break
+    time.sleep(.2)
+else:
+    raise SystemExit('Hermes startup restore did not finish')
+"""
+    result = subprocess.run(["docker", "exec", name, "python3", "-c", script],
+                            capture_output=True, text=True, timeout=190, check=True)
+    return json.loads(result.stdout)
+
+
 def main(binary, report_path, systemd_image=None):
     containers, children = [], []
     endpoints, host_endpoints = [], []
@@ -111,6 +137,7 @@ def main(binary, report_path, systemd_image=None):
                 a2a_url = "http://127.0.0.1:" + ports["9900/tcp"][0]["HostPort"]
                 wait(lambda: require(http_url + "/health", timeout=3), 180)
                 wait(lambda: require(a2a_url + "/.well-known/agent-card.json", a2a_key, timeout=3), 180)
+                check("agent_startup_" + str(index), lambda: wait_agent_startup(name))
                 host_endpoints.append({"name": "isolated-" + str(index), "interfaces": {
                     "proxy": {"url": http_url, "token": http_key, "health_url": http_url + "/health"},
                     "a2a": {"url": a2a_url, "token": a2a_key, "protocol_version": "1.0", "health_url": a2a_url + "/health"}}})

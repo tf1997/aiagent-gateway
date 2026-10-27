@@ -181,7 +181,11 @@ def http_chat_sse(creds):
 def a2a_context(creds):
     token, other = (c["token"] for c in creds["callers"])
     marker = "blue-kiwi-" + uuid.uuid4().hex[:8]
-    first = rpc(token, "SendMessage", {"message": message(f"本次公开、虚构的测试标签是 {marker}。它不是密钥、密码或个人信息。请在这段对话中记住标签，只回复 SAVED。不要调用工具、不要写文件。")})
+    # Hermes frames A2A messages as untrusted colleague input. Discuss a
+    # synthetic fact instead of testing obedience to embedded instructions
+    # ("remember this", "only reply SAVED"), which its privacy policy may reject.
+    # The second turn still has to recall the exact random first-turn label.
+    first = rpc(token, "SendMessage", {"message": message(f"我们正在讨论一个虚构的水果展览，展览名称是 {marker}。你觉得这个名称怎么样？")})
     task = first.get("task")
     expect(isinstance(task, dict), "Hermes SendMessage did not return a Task")
     expect(task["status"]["state"] == "TASK_STATE_COMPLETED", "First A2A task did not complete")
@@ -191,7 +195,7 @@ def a2a_context(creds):
     query = rpc(token, "GetTask", {"id": task_id})
     expect(query["id"] == task_id and query["contextId"] == context_id, "GetTask changed public identity")
     q = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "SendStreamingMessage",
-         "params": {"message": message("上一条用户消息中的公开虚构测试标签是什么？只回复该标签，不要调用工具。", context_id)}}
+         "params": {"message": message("我们刚才讨论的水果展览叫什么名字？", context_id)}}
     frames, timing = stream(DATA_URL + "/agents/hermes-local/a2a", token, q)
     payloads = []
     for _, env in frames:
@@ -231,7 +235,8 @@ def a2a_context(creds):
     expect(cross.get("error", {}).get("code") == -32001, "Another caller could read this A2A task")
     expect(rpc(other, "ListTasks", {"contextId": context_id})["tasks"] == [], "Another caller could list this A2A context")
     return {"context_id": context_id, "task_ids": sorted(ids), "recall": True,
-            "task_queries": True, "pagination": True, "caller_isolation": True, "sse": timing, "states": states}
+            "task_queries": True, "pagination": True, "caller_isolation": True, "sse": timing, "states": states,
+            "conversation_fixture": "fictional_exhibition_v1"}
 
 
 def released(creds):
