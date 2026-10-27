@@ -158,8 +158,7 @@ func Serve(ctx context.Context, cfg appconfig.Config, configPath, deploymentPath
 		{"unix", cfg.StateSocket, shared.Handler(), false},
 		{"unix", cfg.EntrySocket, e.Control(), true},
 		{"unix", cfg.ControlSocket, c.Handler(cfg.AdminToken), true},
-		{"tcp", cfg.ListenAddress(), dataHandler(e, &accepting, ready), false},
-		{"tcp", cfg.AdminListenAddress(), g.AdminHandler(), false},
+		{"tcp", cfg.ListenAddress(), gateway.PublicHandler(dataHandler(e, &accepting, ready), g.AdminHandler()), false},
 	} {
 		if err = add(ep.network, ep.address, ep.handler, ep.restricted); err != nil {
 			return err
@@ -189,7 +188,7 @@ func Serve(ctx context.Context, cfg appconfig.Config, configPath, deploymentPath
 			}
 		}
 	}()
-	slog.Info("gateway host started", "pid", os.Getpid(), "data", cfg.ListenAddress(), "admin", cfg.AdminListenAddress())
+	slog.Info("gateway host started", "pid", os.Getpid(), "http", cfg.ListenAddress())
 	select {
 	case <-ctx.Done():
 	case err = <-errs:

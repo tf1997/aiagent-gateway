@@ -52,7 +52,7 @@ func (c *CandidateProcess) sourceHandler() http.Handler {
 			http.Error(w, "STATE_UNAVAILABLE", 503)
 			return
 		}
-		if r.URL.Path == "/_process/admin" || strings.HasPrefix(r.URL.Path, "/_process/admin/") {
+		if r.URL.Path == "/_process/metrics" || r.URL.Path == "/_process/admin" || strings.HasPrefix(r.URL.Path, "/_process/admin/") {
 			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/_process")
 			n.AdminHandler().ServeHTTP(w, r)
 			return

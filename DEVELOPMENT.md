@@ -41,7 +41,7 @@
 
 YAML 文件提供监听端口、数据目录和管理 Token；消费者通过路由 consumers 动态登记，只持久化 Token 哈希。消费者 ID 是资源隔离键，每条路由独立授权。上游 Token 直接保存在路由接口的 token 中，代理移除客户端 Authorization、Cookie 和不可信身份头后注入可信身份/上游凭据。
 
-启动时自动初始化缺失的路由存储，已有文件直接读取；损坏或不可读时拒绝启动。ready 要求有效快照及持久化健康。数据和公共管理端口默认监听所有网卡（`:8080`、`:9090`），管理请求使用管理 Token 认证。完整候选的执行与状态通信使用私有 Unix Socket；发布控制额外核对 Unix peer UID。
+启动时自动初始化缺失的路由存储，已有文件直接读取；损坏或不可读时拒绝启动。ready 要求有效快照及持久化健康。数据和公共管理接口共用一个 HTTP 端口（默认 `:8080`），监听所有网卡，管理请求和 `/metrics` 使用管理 Token 认证。完整候选的执行与状态通信使用私有 Unix Socket；发布控制额外核对 Unix peer UID。
 
 ## 5. 验收与测试
 
@@ -113,7 +113,7 @@ P4 的本地协议实现已完成；后续已补齐第 12 节所列单实例 Her
 
 ## 12. 本机 Hermes 代理联调（2026-10-04）
 
-已部署的 Hermes 使用独立 HTTP/A2A 端点。`deploy/hermes-local/gateway.py` 编译启动本机独立网关（18080/19090），加载已有上游凭据、生成隔离的本机调用凭据，通过管理 API 注册 `hermes-local` generic 双入口路由，并根据上游 Card 配置 A2A 1.0 流式能力。重复执行保留凭据和端点身份，路由 PATCH 使用版本条件；模型请求使用更长的响应头超时。
+已部署的 Hermes 使用独立 HTTP/A2A 端点。`deploy/hermes-local/gateway.py` 编译启动本机独立网关（18080），加载已有上游凭据、生成隔离的本机调用凭据，通过管理 API 注册 `hermes-local` generic 双入口路由，并根据上游 Card 配置 A2A 1.0 流式能力。重复执行保留凭据和端点身份，路由 PATCH 使用版本条件；模型请求使用更长的响应头超时。
 
 `check_gateway.py` 提供真实 HTTP session 同步/SSE 两轮续接、Chat Completions SSE、A2A Task/context 续接、查询分页、调用方隔离及 HTTP 并发释放检查，结果保存在忽略目录中的 JSON。脚本离线检查及 Go 竞态回归通过；用户手动执行后，本地日志和注册结果确认网关及路由启动成功。端到端检查最初遇到自动审批服务 HTTP 404，随后用户在本机执行，全部五项检查通过；代理核对了 `integration-all.json` 的 `passed: true`、两轮 recall、四条 HTTP 历史、两个 A2A 任务和零 inflight 结果。
 

@@ -1,0 +1,390 @@
+{
+  "passed": true,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "agent_startup_0": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.614
+    },
+    "agent_startup_1": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.718
+    },
+    "systemd_before": {
+      "main_pid": 178,
+      "pids": [
+        178
+      ],
+      "uids": [
+        986
+      ],
+      "tcp_listen_ports": [
+        8080
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "preflight": {
+      "card_url": "http://127.0.0.1:54547/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true,
+      "shared_port_management": true,
+      "management_authentication": true,
+      "metrics": true
+    },
+    "before_http": {
+      "session_id": "session_97cb071854ae0264c636bdd7ae6a563d",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.008,
+        "total_seconds": 7.232,
+        "event_count": 17
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "before_a2a": {
+      "context_id": "ctx_a742a7106738925cdb65a77044a7fd88",
+      "task_ids": [
+        "task_18b6b9b6cb8bdec30eb863173e987509",
+        "task_cf088f947b56adfa7619fa392e9088b2"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.004,
+        "total_seconds": 4.338,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ],
+      "conversation_fixture": "fictional_exhibition_v1"
+    },
+    "missing_samples_rollback": {
+      "phase": "ROLLED_BACK",
+      "reason": "insufficient_successful_proxy_samples",
+      "source_preserved": true,
+      "committed": false
+    },
+    "rollout_http_0": {
+      "session_id": "session_88d41cc113056f3e9689cc6cf66c2567",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.015,
+        "total_seconds": 9.961,
+        "event_count": 16
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_a2a_1": {
+      "context_id": "ctx_887acdbc7c0c1d4e1535a3cc5c88a37b",
+      "task_ids": [
+        "task_6225e66a3de2d1789bd1edfc1674a2d6",
+        "task_c44510ebeb83b828ccab86b11cc068fd"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.005,
+        "total_seconds": 3.715,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ],
+      "conversation_fixture": "fictional_exhibition_v1"
+    },
+    "rollout_a2a_2": {
+      "context_id": "ctx_69f5f81d5aec9bd509ac4a21b3b61c27",
+      "task_ids": [
+        "task_0ffd4b887f814f7fbd87bf01cc27eea1",
+        "task_37be7c80ee59934a2bffa966598c34b2"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.006,
+        "total_seconds": 3.376,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ],
+      "conversation_fixture": "fictional_exhibition_v1"
+    },
+    "direct_http_3": {
+      "session_id": "session_f941fbf3cf7450c1a0ba188c47da4227",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.012,
+        "total_seconds": 8.902,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "direct_a2a_3": {
+      "context_id": "ctx_e39acac31d3ee89d517d554004f8d043",
+      "task_ids": [
+        "task_906962b873baf71a1ce66751848f4552",
+        "task_e3d6bf416f6c1c087fe4cd8c73192cdf"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.006,
+        "total_seconds": 36.76,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ],
+      "conversation_fixture": "fictional_exhibition_v1"
+    },
+    "systemd_after": {
+      "main_pid": 332,
+      "pids": [
+        332
+      ],
+      "uids": [
+        986
+      ],
+      "tcp_listen_ports": [
+        8080
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "rollout": {
+      "statistics": {
+        "direct_ingress_counts": {
+          "a2a": {
+            "success": 5,
+            "failure": 0,
+            "excluded": 6,
+            "unknown": 0
+          },
+          "a2a_sse": {
+            "success": 2,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "http": {
+            "success": 3,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "sse": {
+            "success": 1,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          }
+        },
+        "counts": {
+          "a2a": {
+            "success": 5,
+            "failure": 0,
+            "excluded": 6,
+            "unknown": 0
+          },
+          "a2a_sse": {
+            "success": 2,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "http": {
+            "success": 3,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "sse": {
+            "success": 1,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          }
+        },
+        "active": 0,
+        "lost": false,
+        "failures": 0,
+        "total": 17,
+        "revision": 6
+      },
+      "snapshot_bytes": 447007,
+      "handoff_milliseconds": 294
+    },
+    "after": {
+      "http_history_preserved": true,
+      "a2a_identity_preserved": true,
+      "caller_isolation": true,
+      "inflight_zero": true
+    },
+    "systemd_reboot": {
+      "main_pid": 73,
+      "pids": [
+        73
+      ],
+      "uids": [
+        986
+      ],
+      "tcp_listen_ports": [
+        8080
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "cleanup": {
+      "active_cleanup_refused": true,
+      "obsolete_releases_removed": 2,
+      "recent_releases_retained": 2,
+      "orphan_removed": true
+    },
+    "after_reboot": {
+      "http_history_preserved": true,
+      "a2a_identity_preserved": true,
+      "caller_isolation": true
+    }
+  },
+  "started_at": "2026-10-27T08:04:59.614779+00:00",
+  "source_commit": "b84da6df4757e7f003a46ad85c11e65f59a76e27",
+  "source_modified": true,
+  "artifact_sha256": [
+    "cb64f9421203f3cf4df3666454f161446e6f3eaffe3d2aafcaecd4950e4fc6e0",
+    "25f6718b5cfc1e556463bbdd76da9511dcf1b95ed64f34bcab5ea663f55e741f"
+  ],
+  "last_rollout": {
+    "phase": "COMPLETED",
+    "committed": true,
+    "statistics": {
+      "direct_ingress_counts": {
+        "a2a": {
+          "success": 5,
+          "failure": 0,
+          "excluded": 6,
+          "unknown": 0
+        },
+        "a2a_sse": {
+          "success": 2,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "http": {
+          "success": 3,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "sse": {
+          "success": 1,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        }
+      },
+      "counts": {
+        "a2a": {
+          "success": 5,
+          "failure": 0,
+          "excluded": 6,
+          "unknown": 0
+        },
+        "a2a_sse": {
+          "success": 2,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "http": {
+          "success": 3,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "sse": {
+          "success": 1,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        }
+      },
+      "active": 0,
+      "lost": false,
+      "failures": 0,
+      "total": 17,
+      "revision": 6
+    }
+  },
+  "observation_resumes": 1,
+  "timing": {
+    "wall_seconds": 215.25,
+    "monotonic_seconds": 215.249,
+    "clock_difference_seconds": 0.0
+  },
+  "finished_at": "2026-10-27T08:08:34.864829+00:00"
+}

@@ -30,6 +30,34 @@ func publicRequest(t *testing.T, address, path, session string) *http.Response {
 	return res
 }
 
+func assertPublicManagement(t *testing.T, address string) {
+	t.Helper()
+	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
+	for _, path := range []string{"/admin/v1/routes", "/metrics"} {
+		for _, token := range []string{"", "alice-secret", "admin-secret"} {
+			req, _ := http.NewRequest("GET", address+path, nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			res, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(res.Body)
+			res.Body.Close()
+			want := http.StatusUnauthorized
+			if token == "admin-secret" {
+				want = http.StatusOK
+			}
+			if err != nil || res.StatusCode != want {
+				t.Fatalf("management %s: status=%d want=%d body=%s err=%v", path, res.StatusCode, want, body, err)
+			}
+			if want == 200 && path == "/metrics" && !strings.Contains(string(body), "gateway_requests_total") {
+				t.Fatal("metrics were not forwarded to the current owner")
+			}
+		}
+	}
+}
+
 func TestCandidateDirectIngressSurvivesHandoff(t *testing.T) {
 	var calls atomic.Int64
 	release := make(chan struct{})
@@ -70,6 +98,7 @@ func TestCandidateDirectIngressSurvivesHandoff(t *testing.T) {
 	if err := c.Accept(ctx); err != nil {
 		t.Fatal(err)
 	}
+	assertPublicManagement(t, address)
 	res := publicRequest(t, address, "ok", "direct-ok")
 	io.Copy(io.Discard, res.Body)
 	res.Body.Close()
@@ -111,6 +140,7 @@ func TestCandidateDirectIngressSurvivesHandoff(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	c.Detach()
+	assertPublicManagement(t, address)
 	res = publicRequest(t, address, "ok", "independent")
 	io.Copy(io.Discard, res.Body)
 	res.Body.Close()

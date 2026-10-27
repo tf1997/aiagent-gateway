@@ -22,7 +22,7 @@ func TestLoadYAMLDefaultsPathsAndEnvironmentIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.AdminToken != "admin-secret" || c.Port != "8080" || c.AdminPort != "9090" || c.MaxInflight != 4096 {
+	if c.AdminToken != "admin-secret" || c.Port != "8080" || c.MaxInflight != 4096 {
 		t.Fatal("YAML defaults were overridden")
 	}
 	if c.DataDir != filepath.Join(dir, "data") || c.StateSocket != filepath.Join(dir, "run/state.sock") {
@@ -34,43 +34,33 @@ func TestLoadYAMLDefaultsPathsAndEnvironmentIgnored(t *testing.T) {
 }
 
 func TestListenerPorts(t *testing.T) {
-	for _, tt := range []struct {
-		name         string
-		config       string
-		dataAddress  string
-		adminAddress string
-	}{
-		{"defaults", "", ":8080", ":9090"},
-		{"numeric_ports", "port: 18080\nadmin_port: 19090\n", ":18080", ":19090"},
-		{"quoted_ports", "port: \"18080\"\nadmin_port: \"19090\"\n", ":18080", ":19090"},
-		{"minimum_ports", "port: 1\nadmin_port: 1\n", ":1", ":1"},
-		{"maximum_ports", "port: 65535\nadmin_port: 65535\n", ":65535", ":65535"},
+	for _, tt := range []struct{ name, config, address string }{
+		{"defaults", "", ":8080"},
+		{"numeric_port", "port: 18080\n", ":18080"},
+		{"quoted_port", "port: \"18080\"\n", ":18080"},
+		{"minimum_port", "port: 1\n", ":1"},
+		{"maximum_port", "port: 65535\n", ":65535"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c, err := Parse([]byte(minimal + tt.config))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := c.ListenAddress(); got != tt.dataAddress {
-				t.Errorf("data listener = %q, want %q (all interfaces)", got, tt.dataAddress)
-			}
-			if got := c.AdminListenAddress(); got != tt.adminAddress {
-				t.Errorf("admin listener = %q, want %q (all interfaces)", got, tt.adminAddress)
+			if got := c.ListenAddress(); got != tt.address {
+				t.Errorf("HTTP listener = %q, want %q (all interfaces)", got, tt.address)
 			}
 		})
 	}
-	for _, field := range []string{"port", "admin_port"} {
-		for _, value := range []string{"0", "-1", "65536", `""`, "true", "8080.5", `"+8080"`, `" 8080 "`, `":8080"`, `"127.0.0.1:8080"`, `"[::1]:8080"`} {
-			if _, err := Parse([]byte(minimal + field + ": " + value + "\n")); err == nil {
-				t.Fatalf("accepted invalid %s: %s", field, value)
-			}
+	for _, value := range []string{"0", "-1", "65536", `""`, "true", "8080.5", `"+8080"`, `" 8080 "`, `":8080"`, `"127.0.0.1:8080"`, `"[::1]:8080"`} {
+		if _, err := Parse([]byte(minimal + "port: " + value + "\n")); err == nil {
+			t.Fatalf("accepted invalid port: %s", value)
 		}
 	}
 }
 
 func TestStrictYAMLValidationAndSecretRedaction(t *testing.T) {
 	for _, input := range []string{
-		"", "null", "[]", minimal + "unknown_field: true\n", minimal + "max_inflight: 0\n",
+		"", "null", "[]", minimal + "unknown_field: true\n", minimal + "admin_port: 9090\n", minimal + "max_inflight: 0\n",
 		minimal + "max_sessions: -1\n", minimal + "max_inflight: null\n", minimal + "port: invalid\n", minimal + "public_url: not-a-url\n",
 		minimal + "admin_token: duplicate-secret\n", minimal + "---\nadmin_token: second-document\n",
 		minimal + "callers: []\n", minimal + "credentials: {upstream: ''}\n",

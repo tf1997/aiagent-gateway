@@ -1,8 +1,7 @@
 # Copy to config.yaml and replace the example tokens.
 # Relative paths are resolved from this file's directory.
-# Ports only: data and administration listen on all interfaces.
+# One HTTP port for agents, administration and metrics; listens on all interfaces.
 port: 8080
-admin_port: 9090
 data_dir: "./data"
 public_url: "http://127.0.0.1:8080"
 admin_token: "replace-with-admin-secret"

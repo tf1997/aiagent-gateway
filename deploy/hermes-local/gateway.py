@@ -19,7 +19,7 @@ REPO = ROOT.parent.parent
 STATE = RUNTIME / "gateway"
 BINARY = STATE / "gateway"
 DATA_URL = "http://127.0.0.1:18080"
-ADMIN_URL = "http://127.0.0.1:19090"
+ADMIN_URL = DATA_URL
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect)
 
 
@@ -70,7 +70,7 @@ def credentials():
 def write_config(creds):
     # JSON is a YAML subset; avoid a Python YAML dependency in the helper.
     config = {"admin_token": creds["admin_token"], "data_dir": str(STATE / "data"),
-              "port": 18080, "admin_port": 19090,
+              "port": 18080,
               "public_url": DATA_URL}
     path = STATE / "config.yaml"
     write_private(path, json.dumps(config, indent=2) + "\n")
@@ -148,7 +148,7 @@ def start():
         register()
         print("Existing local gateway reused.", flush=True)
         return
-    for port in (18080, 19090):
+    for port in (18080,):
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
                 raise RuntimeError(f"Port {port} is already occupied; no existing service was modified")
@@ -218,7 +218,7 @@ def main():
             if not pid:
                 raise RuntimeError("Local gateway is not running")
             require(ADMIN_URL + "/admin/v1/config/status", credentials()["admin_token"], timeout=5)
-            print(f"Gateway running: PID {pid}; data {DATA_URL}; admin {ADMIN_URL}")
+            print(f"Gateway running: PID {pid}; HTTP {DATA_URL}")
 
 
 if __name__ == "__main__":

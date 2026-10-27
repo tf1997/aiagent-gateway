@@ -35,7 +35,7 @@ func runProcess(args []string) int {
 		}
 		return 2
 	}
-	if fs.NArg() != 0 || (*candidateFD != 0 && *candidateFD != 7) {
+	if fs.NArg() != 0 || (*candidateFD != 0 && *candidateFD != process.CandidateChannelFD) {
 		return 2
 	}
 	path, err := os.Executable()

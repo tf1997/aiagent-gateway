@@ -116,7 +116,7 @@ def inside(after_reboot=False, cycles=0):
 
     if after_reboot:
         stable(artifacts[2])
-        assert request(9090, "/admin/v1/routes", cfg["admin_token"])[0] == 200
+        assert request(8080, "/admin/v1/routes", cfg["admin_token"])[0] == 200
         print("PASS complete gateway container reboot selects committed C and restores configuration", flush=True)
         return
 
@@ -172,7 +172,7 @@ def inside(after_reboot=False, cycles=0):
     assert output(["stat", "-c", "%u", f"/proc/{a['pid']}"]) != "0"
     assert prop("NotifyAccess") == "main" and prop("KillMode") == "mixed"
     print("PASS complete gateway non-root startup, credentials, one serving PID and READY barrier", flush=True)
-    status, body = request(9090, "/admin/v1/routes", cfg["admin_token"], "POST", {
+    status, body = request(8080, "/admin/v1/routes", cfg["admin_token"], "POST", {
         "key": "probe", "protocol": "proxy", "consumers": [{"id": "alice", "token": caller}],
         "endpoints": [{"url": "http://127.0.0.1:18090"}]})
     assert status == 201, (status, body)

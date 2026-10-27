@@ -1,0 +1,44 @@
+{
+  "systemd": "systemd 252 (252.39-1~deb12u2)",
+  "release_windows_ms": {
+    "samples": 4,
+    "p50": 322,
+    "p95": 371,
+    "p99": 371
+  },
+  "snapshot_bytes": [
+    483700,
+    1060259,
+    600804,
+    1176640
+  ],
+  "request_ms": {
+    "samples": 678,
+    "p50": 3.879,
+    "p95": 7.631,
+    "p99": 22.618
+  },
+  "handoff_request_ms": {
+    "samples": 31,
+    "p50": 4.764,
+    "p95": 60.515,
+    "p99": 64.264
+  },
+  "queue_timeouts": 0,
+  "queue_rejected": 0,
+  "peak_rss_kib": 71264,
+  "peak_fds": 43,
+  "peak_service_pids": 2,
+  "request_failures": 0,
+  "passed": true,
+  "extra_release_cycles": 0,
+  "scope": "small-state serial HTTP workload; not a production capacity ceiling",
+  "cleanup": {
+    "active_cleanup_refused": true,
+    "obsolete_releases_removed": 2,
+    "recent_releases_retained": 2,
+    "orphan_removed": true
+  },
+  "source_commit": "b84da6df4757e7f003a46ad85c11e65f59a76e27",
+  "source_modified": true
+}

@@ -69,7 +69,7 @@ python3 deploy/hermes-local/check_gateway.py
 | 网关 HTTP 入口 | `http://127.0.0.1:18080/agents/hermes-local`，后接原生 API 路径 |
 | 网关 A2A | `http://127.0.0.1:18080/agents/hermes-local/a2a` |
 | 网关 Card | `http://127.0.0.1:18080/agents/hermes-local/.well-known/agent-card.json` |
-| 管理接口 | `http://127.0.0.1:19090/admin/v1` |
+| 管理接口 | `http://127.0.0.1:18080/admin/v1` |
 | 网关启动配置 | `.runtime/gateway/config.yaml`，使用 YAML 兼容的 JSON 表示，权限 0600 |
 | 本机调用凭据 | `.runtime/gateway/client.env`，包含管理 Token 和主调用方 Token |
 | 二进制、日志、路由数据 | `.runtime/gateway/gateway`、`gateway.log`、`data/` |

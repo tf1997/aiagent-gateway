@@ -88,8 +88,8 @@ func candidateFixtureWithPolicy(t *testing.T, upstream string, policy p.HandoffP
 		t.Fatal(err)
 	}
 	f.Close()
-	var sockets [3]*Socket
-	for i, addr := range []struct{ network, address string }{{"tcp", "127.0.0.1:0"}, {"tcp", "127.0.0.1:0"}, {"unix", filepath.Join(base, "control.sock")}} {
+	var sockets [inheritedSocketCount]*Socket
+	for i, addr := range []struct{ network, address string }{{"tcp", "127.0.0.1:0"}, {"unix", filepath.Join(base, "control.sock")}} {
 		sockets[i], err = Listen(addr.network, addr.address)
 		if err != nil {
 			t.Fatal(err)
@@ -99,7 +99,7 @@ func candidateFixtureWithPolicy(t *testing.T, upstream string, policy p.HandoffP
 	cfg := appconfig.Defaults()
 	cfg.DataDir, cfg.StateSocket, cfg.AdminToken = filepath.Join(base, "data"), filepath.Join(base, "state.sock"), "admin-secret"
 	_, cfg.Port, _ = net.SplitHostPort(sockets[0].Addr().String())
-	_, cfg.AdminPort, _ = net.SplitHostPort(sockets[1].Addr().String())
+	cfg.ControlSocket = sockets[controlSocket].Addr().String()
 	configPath := filepath.Join(base, "config.yaml")
 	encoded, _ := yaml.Marshal(cfg)
 	if err = os.WriteFile(configPath, encoded, 0600); err != nil {

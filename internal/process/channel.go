@@ -19,7 +19,8 @@ import (
 	"aiagent-gateway/internal/state"
 )
 
-const peerProtocol = 2
+// Version 3 inherits one public HTTP socket and one private control socket.
+const peerProtocol = 3
 const maxPeerFrame = 2 << 20 // includes JSON/base64 framing of a 1 MiB chunk
 
 // peerMessage travels only over the inherited socketpair. Credentials never

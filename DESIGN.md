@@ -292,8 +292,10 @@ GET  /readyz
 
 ### 7.2 管理面
 
+与数据面共用 HTTP 端口，管理接口与指标保持管理员鉴权。
+
 ```text
-:9090
+:8080
 POST   /admin/v1/routes
 GET    /admin/v1/routes
 GET    /admin/v1/routes/{key}

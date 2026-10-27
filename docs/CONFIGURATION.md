@@ -34,13 +34,14 @@ go build -o bin/aiagent-gateway ./cmd/gateway
 
 ```yaml
 port: 8080
-admin_port: 9090
 data_dir: "./data"
 public_url: "http://127.0.0.1:8080"
 admin_token: "replace-with-admin-secret"
 ```
 
-`port` 和 `admin_port` 只填写 1–65535 的端口号，支持数字或带引号的数字，不填写 IP 或冒号。数据面和公共管理面均监听所有网卡，默认地址分别为 `:8080`、`:9090`。远程管理访问 `http://<网关IP或域名>:9090/admin/v1/...`，请求携带 `Authorization: Bearer <admin_token>`；自定义 `admin_port` 时使用对应端口。
+`port` 填写 1–65535 的端口号，支持数字或带引号的数字，不填写 IP 或冒号。Agent、管理接口和 `/metrics` 共用监听器，默认地址为 `:8080`，监听所有网卡。远程管理访问 `http://<网关IP或域名>:8080/admin/v1/...`，请求携带 `Authorization: Bearer <admin_token>`。
+
+`admin_port` 已移除，旧配置需删除该字段；未知字段仍会被拒绝。
 
 YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials` 字段**。消费者通过路由管理 API 的 `consumers` 动态配置，上游 Token 放在路由各个接口的 `token` 中，见 [使用说明](USAGE.md#动态配置消费者)。Token 按字面读取，不展开 `$VAR` / `${VAR}`。
 
@@ -77,8 +78,7 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 | YAML 字段 | 默认值 | 用途 |
 | --- | --- | --- |
 | `admin_token` | 必填 | 管理及本机控制认证 |
-| `port` | `8080` | 数据端口，监听所有网卡 |
-| `admin_port` | `9090` | 公共管理端口，监听所有网卡，支持远程访问 |
+| `port` | `8080` | Agent、管理接口和指标共用的 HTTP 端口，监听所有网卡 |
 | `data_dir` | `./data` | 路由与共享状态目录 |
 | `public_url` | 空 | A2A Card 对外基础地址；使用 Card 时必须设置 |
 | `max_inflight` | 4096 | 全局并发上限 |

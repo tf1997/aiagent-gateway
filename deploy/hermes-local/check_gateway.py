@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from gateway import ADMIN_URL, DATA_URL, STATE, HTTP, credentials, load, require
+from gateway import ADMIN_URL, DATA_URL, STATE, HTTP, api, credentials, load, require
 from manage import write_private
 
 MAX_EVENT = 2 << 20
@@ -111,6 +111,14 @@ def message(text, context_id=None):
 def preflight(creds):
     token = creds["callers"][0]["token"]
     require(DATA_URL + "/readyz", timeout=5)
+    require(DATA_URL + "/admin/v1/routes", creds["admin_token"])
+    for path in ("/admin/v1/routes", "/metrics"):
+        expect(api(DATA_URL + path)[0] == 401, "Management endpoint accepts an unauthenticated caller")
+        expect(api(DATA_URL + path, token)[0] == 401, "Consumer token grants management access")
+    request = urllib.request.Request(DATA_URL + "/metrics", headers={"Authorization": "Bearer " + creds["admin_token"]})
+    with HTTP.open(request, timeout=5) as response:
+        metrics = response.read(MAX_RESPONSE + 1)
+        expect(len(metrics) <= MAX_RESPONSE and b"gateway_requests_total " in metrics, "Shared-port metrics unavailable")
     caps = require(DATA_URL + "/agents/hermes-local/v1/capabilities", token,
                    headers={"X-Session-ID": "interop-preflight"})
     card = require(DATA_URL + "/agents/hermes-local/.well-known/agent-card.json", token)
@@ -118,7 +126,8 @@ def preflight(creds):
     expect(iface["url"] == DATA_URL + "/agents/hermes-local/a2a" and iface["protocolVersion"] == "1.0", "Gateway Card URL/version mismatch")
     expect(card.get("capabilities", {}).get("streaming") is True, "Route does not advertise A2A streaming")
     expect(isinstance(caps.get("features"), dict), "Invalid Hermes capability response")
-    return {"card_url": iface["url"], "streaming": True, "capabilities_received": True}
+    return {"card_url": iface["url"], "streaming": True, "capabilities_received": True,
+            "shared_port_management": True, "management_authentication": True, "metrics": True}
 
 
 def http_sessions(creds, run_id):

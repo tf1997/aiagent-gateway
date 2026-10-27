@@ -122,12 +122,12 @@ def inside(args):
             with socket.socket() as s:
                 s.bind(("127.0.0.1", 0))
                 return s.getsockname()[1]
-        data, admin = free_port(), free_port()
+        data = admin = free_port()
         token, caller = secrets.token_hex(24), secrets.token_hex(24)
         config = root / "config.yaml"
         config.write_text(json.dumps({"admin_token": token, "data_dir": str(root / "data"),
                                      "state_socket": str(root / "state.sock"), "control_socket": str(root / "control.sock"),
-                                     "port": str(data), "admin_port": str(admin)}))
+                                     "port": str(data)}))
         config.chmod(0o600)
         policy = {"auto_profiles": False, "canary_percent": 5, "readiness_timeout_seconds": 15,
                   "verify_min_seconds": 2, "verify_timeout_seconds": 30, "min_success_per_profile": 5,

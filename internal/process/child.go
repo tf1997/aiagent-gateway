@@ -27,7 +27,7 @@ import (
 type CandidateOptions struct {
 	ConfigPath, Artifact, ReleasesDir string
 	OwnerUID                          uint32
-	Listeners                         [3]*Socket
+	Listeners                         [inheritedSocketCount]*Socket
 	MaxSnapshotBytes                  int
 	MaxDeltaBytes                     int
 	Output                            io.Writer
@@ -93,7 +93,7 @@ func (c *CandidateProcess) Takeover(ctx context.Context) error {
 // StartCandidate enforces the two-process limit while the current owner is
 // alive. A failed or stopped child is reaped and its leases retired first.
 func (n *Gateway) StartCandidate(ctx context.Context, opts CandidateOptions) (*CandidateProcess, error) {
-	return n.startCandidate(ctx, opts, []string{"process", "--candidate-fd=7"})
+	return n.startCandidate(ctx, opts, []string{"process", fmt.Sprintf("--candidate-fd=%d", CandidateChannelFD)})
 }
 
 func (n *Gateway) startCandidate(ctx context.Context, opts CandidateOptions, args []string) (_ *CandidateProcess, err error) {

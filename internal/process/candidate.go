@@ -220,9 +220,7 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			return reply, err
 		}
 	case "pause":
-		for _, socket := range c.sockets[:2] {
-			_ = socket.Pause()
-		}
+		_ = c.sockets[publicSocket].Pause()
 		for _, server := range c.public {
 			server.SetKeepAlivesEnabled(false)
 		}
@@ -409,7 +407,7 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 }
 
 // activate is serialized with commands, including recovery after a lost reply.
-// Both listeners must succeed; a partial activation remains retryable.
+// The shared HTTP listener starts accepting only once per activation.
 func (c *Candidate) activate(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -427,19 +425,12 @@ func (c *Candidate) acceptPublic(ctx context.Context) error {
 	if c.publicActive {
 		return nil
 	}
-	if len(c.sockets) != 3 {
+	if len(c.sockets) != inheritedSocketCount {
 		return fmt.Errorf("MISSING_PUBLIC_LISTENERS")
 	}
-	var listeners []net.Listener
-	for _, socket := range c.sockets[:2] {
-		listener, err := socket.Activate()
-		if err != nil {
-			for i := range listeners {
-				_ = c.sockets[i].Pause()
-			}
-			return err
-		}
-		listeners = append(listeners, listener)
+	listener, err := c.sockets[publicSocket].Activate()
+	if err != nil {
+		return err
 	}
 	data := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if n := c.allocator.owner.Load(); n != nil {
@@ -448,11 +439,9 @@ func (c *Candidate) acceptPublic(ctx context.Context) error {
 		}
 		c.frontend.ServeHTTP(w, r)
 	})
-	for i, handler := range []http.Handler{data, c.publicAdmin()} {
-		server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
-		c.public = append(c.public, server)
-		go func() { _ = server.Serve(listeners[i]) }()
-	}
+	server := &http.Server{Handler: gateway.PublicHandler(data, c.publicAdmin()), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
+	c.public = append(c.public, server)
+	go func() { _ = server.Serve(listener) }()
 	c.publicActive = true
 	return nil
 }
@@ -465,7 +454,7 @@ func (c *Candidate) takeover(ctx context.Context) error {
 		return nil
 	}
 	if c.service == nil {
-		var sockets [3]*Socket
+		var sockets [inheritedSocketCount]*Socket
 		copy(sockets[:], c.sockets)
 		s, err := newService(c.owner, sockets, ServiceOptions{ConfigPath: c.boot.ConfigPath, ReleasesDir: c.boot.ReleasesDir, Unit: c.boot.Unit, OwnerUID: c.boot.ArtifactUID, Output: os.Stderr}, true)
 		if err != nil {
@@ -504,7 +493,7 @@ func (c *Candidate) committed() bool {
 	return c.owner != nil
 }
 
-// ServeCandidate is the process --candidate-fd=7 entry. Exactly three listening
+// ServeCandidate is the process --candidate-fd=6 entry. Exactly two listening
 // descriptors, one read-only config and the private channel are inherited.
 // Public listeners remain dormant until the complete owner has committed.
 func ServeCandidate(ctx context.Context, release string) (err error) {
@@ -514,7 +503,7 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 			s.Close()
 		}
 	}()
-	for fd := 3; fd <= 5; fd++ {
+	for fd := 3; fd < candidateConfigFD; fd++ {
 		if err := validateListener(fd); err != nil {
 			return err
 		}
@@ -526,10 +515,10 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 		}
 		sockets = append(sockets, s)
 	}
-	if sockets[0].Addr().Network() != "tcp" || sockets[1].Addr().Network() != "tcp" || sockets[2].Addr().Network() != "unix" {
+	if sockets[publicSocket].Addr().Network() != "tcp" || sockets[controlSocket].Addr().Network() != "unix" {
 		return fmt.Errorf("INVALID_CANDIDATE_LISTENER_SET")
 	}
-	f := os.NewFile(7, "candidate-channel")
+	f := os.NewFile(CandidateChannelFD, "candidate-channel")
 	conn, err := net.FileConn(f)
 	f.Close()
 	if err != nil {
@@ -552,17 +541,15 @@ func ServeCandidate(ctx context.Context, release string) (err error) {
 			_ = writePeer(conn, peerMessage{Sequence: first.Sequence, Action: first.Action, Error: err.Error()})
 		}
 	}()
-	config := os.NewFile(6, "candidate-configuration")
+	config := os.NewFile(candidateConfigFD, "candidate-configuration")
 	cfg, err := appconfig.LoadReader(config, first.Boot.ConfigPath)
 	config.Close()
 	if err != nil {
 		return err
 	}
-	for i, port := range []string{cfg.Port, cfg.AdminPort} {
-		_, actual, err := net.SplitHostPort(sockets[i].Addr().String())
-		if err != nil || actual != port {
-			return fmt.Errorf("CANDIDATE_LISTENER_CONFIG_MISMATCH")
-		}
+	_, actual, err := net.SplitHostPort(sockets[publicSocket].Addr().String())
+	if err != nil || actual != cfg.Port || sockets[controlSocket].Addr().String() != cfg.ControlSocket {
+		return fmt.Errorf("CANDIDATE_LISTENER_CONFIG_MISMATCH")
 	}
 	c, err := openCandidate(cfg, *first.Boot, release)
 	if err != nil {

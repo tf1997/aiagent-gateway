@@ -1,0 +1,116 @@
+{
+  "passed": false,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "agent_startup_0": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.351
+    },
+    "agent_startup_1": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.728
+    },
+    "systemd_before": {
+      "main_pid": 186,
+      "pids": [
+        186
+      ],
+      "uids": [
+        986
+      ],
+      "tcp_listen_ports": [
+        8080
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "preflight": {
+      "card_url": "http://127.0.0.1:53727/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true,
+      "shared_port_management": true,
+      "management_authentication": true,
+      "metrics": true
+    },
+    "before_http": {
+      "session_id": "session_4379919f47ada7e023f0412fbf417e8d",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.011,
+        "total_seconds": 16.395,
+        "event_count": 16
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "before_a2a": {
+      "context_id": "ctx_d1094caccce22b24d45a06be9206a667",
+      "task_ids": [
+        "task_06262ecc5f020b5f1dd48d0c9fef1885",
+        "task_393922e8e27f1f92389a47d6dda17f04"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.005,
+        "total_seconds": 5.323,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ],
+      "conversation_fixture": "fictional_exhibition_v1"
+    },
+    "missing_samples_rollback": {
+      "phase": "ROLLED_BACK",
+      "reason": "insufficient_successful_proxy_samples",
+      "source_preserved": true,
+      "committed": false
+    }
+  },
+  "started_at": "2026-10-27T07:59:41.808475+00:00",
+  "source_commit": "b84da6df4757e7f003a46ad85c11e65f59a76e27",
+  "source_modified": true,
+  "artifact_sha256": [
+    "cb64f9421203f3cf4df3666454f161446e6f3eaffe3d2aafcaecd4950e4fc6e0",
+    "25f6718b5cfc1e556463bbdd76da9511dcf1b95ed64f34bcab5ea663f55e741f"
+  ],
+  "last_rollout": {
+    "phase": "VERIFYING",
+    "committed": false,
+    "statistics": {
+      "counts": null,
+      "active": 0,
+      "lost": false,
+      "failures": 0,
+      "total": 0,
+      "revision": 0
+    }
+  },
+  "error_type": "AttributeError",
+  "failed_check": "rollout_start",
+  "timing": {
+    "wall_seconds": 115.264,
+    "monotonic_seconds": 115.264,
+    "clock_difference_seconds": 0.0
+  },
+  "finished_at": "2026-10-27T08:01:37.072988+00:00"
+}

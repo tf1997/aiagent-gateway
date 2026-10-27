@@ -148,15 +148,15 @@ def main(binary, report_path, systemd_image=None):
                         endpoint["interfaces"][profile]["health_url"] = f"http://{name}:{number}/health"
                 endpoints.append(endpoint)
             print("PASS two isolated real Hermes instances are ready", flush=True)
-            data, admin = (linux.data_port, linux.admin_port) if linux else (port(), port())
-            interop.DATA_URL, interop.ADMIN_URL = f"http://127.0.0.1:{data}", f"http://127.0.0.1:{admin}"
+            data = linux.data_port if linux else port()
+            interop.DATA_URL = interop.ADMIN_URL = f"http://127.0.0.1:{data}"
             creds = {"admin_token": secrets.token_hex(24), "callers": [{"id": "alice", "token": secrets.token_hex(24)}, {"id": "bob", "token": secrets.token_hex(24)}]}
             cfg = root / "config.yaml"
             settings = {"admin_token": creds["admin_token"], "data_dir": str(root / "data"), "port": data,
-                        "admin_port": admin, "public_url": interop.DATA_URL,
+                        "public_url": interop.DATA_URL,
                         "state_socket": str(root / "state.sock"), "control_socket": str(root / "control.sock")}
             if linux:
-                settings.update(data_dir="/var/lib/aiagent-gateway", port=8080, admin_port=9090,
+                settings.update(data_dir="/var/lib/aiagent-gateway", port=8080,
                                 state_socket="/run/aiagent-gateway/state.sock",
                                 control_socket="/run/aiagent-gateway-control/controller.sock")
             write_private(cfg, json.dumps(settings))
@@ -247,8 +247,8 @@ def main(binary, report_path, systemd_image=None):
                                    ("COMPLETED", "RECOVERY_REQUIRED", "ROLLED_BACK", "FAILED") else None)
                     assert current["phase"] == "COMPLETED", current["phase"]
                     break
-                statistics = current.get("statistics", {})
-                counts = statistics.get("direct_ingress_counts" if current["phase"] == "OBSERVING" else "counts", {})
+                statistics = current.get("statistics") or {}
+                counts = statistics.get("direct_ingress_counts" if current["phase"] == "OBSERVING" else "counts") or {}
                 def missing(profile):
                     return counts.get(profile, {}).get("success", 0) < 1
                 if missing("http") or missing("sse"):

@@ -1,5 +1,17 @@
 # 验证记录
 
+## 管理与业务共用 HTTP 端口（2026-10-27）
+
+移除 admin_port 配置与独立管理 listener；默认通过同一 8080 端口访问 Agent、/admin/v1/... 和 /metrics。管理接口与指标保留管理 Token 鉴权，调用方 Token 无管理权限。前台、完整 process、正式 systemd 服务及候选进程统一使用同一套分发；管理请求单独设置 I/O 期限并在返回时清除，SSE 没有继承管理响应期限。发布控制仍通过 UDS 验证本机 UID 与凭据。
+
+- 全量 go test -race -count=1 ./...、go vet ./... 通过。新增真实 HTTP 同端口鉴权及私有路径隔离检查；实际候选子进程在交接前将管理与指标转发到源 owner，交接后改由新 owner 处理，前后认证和指标内容均通过。
+- 普通前台和 process 两种入口分别通过单 PID、同端口创建路由、管理员/调用方权限隔离、上游精确一次执行、活动 SSE 停机排空及重启恢复。Linux amd64 静态构建通过。
+- [Debian/systemd 完整流程](docs/validation/2026-10-27-single-port-systemd.json)通过正式安装、A→B→C、CLI 断开继续、失败回退、SIGKILL 恢复、双进程 stop/start、保留数据卸载重装、容器重启与启动清理。678 个短时模拟请求无意外失败或队列超时/拒绝，服务进程最多两个。没有额外长期压测。
+- [真实 Hermes 联合验收](docs/validation/2026-10-27-single-port-real-agent.json)整轮 passed=true，含同端口管理/指标与鉴权、HTTP/SSE/A2A/A2A SSE、记忆与调用方隔离、缺样本回退后再发布、MainPID 接管和重启后旧会话/任务恢复及启动清理。通过 /proc 将服务进程 socket inode 与 TCP LISTEN 表匹配，启动、换版后和重启后实际监听端口均为 [8080]。MainPID 178 → 332，正常发布 systemd 重启数 0；重启后 MainPID 73。最终四类直接入口成功数 HTTP/SSE/A2A/A2A SSE 为 3/1/5/2，失败 0、活动请求 0、证据无丢失；交接窗口 294 ms，整轮约 215.25 秒。
+- [真实 Agent 首轮脚本失败](docs/validation/2026-10-27-single-port-real-agent-counts-failed.json)保留：已通过发布前四 profile，但 VERIFYING 初始报告的 counts 为 null，脚本未处理空统计而抛出 AttributeError。将空统计视为尚无样本后独立重跑通过，没有改变样本门槛或模型断言。
+
+继承布局由两个公共 TCP socket 加控制 UDS 缩为一个公共 TCP socket 加控制 UDS，候选协议升级为 3。旧双端口候选与该布局不兼容，会在启动/握手阶段被拒绝；没有实施旧部署自动迁移。旧 YAML 需删除 admin_port 字段。历史双端口报告按原版本保留；物理断电与长期容量仍按用户要求暂缓。
+
 ## Linux/systemd 与真实 Agent 联合验收完成（2026-10-27）
 
 [完整通过报告](docs/validation/2026-10-27-systemd-real-agent-passed.json)已取得 passed=true。使用 Debian 12 / systemd 252.39 / Linux arm64 容器内的正式安装器和两个隔离 Hermes 实例，沿用原模型配置与安全策略；本轮没有修改 Go 运行时代码。

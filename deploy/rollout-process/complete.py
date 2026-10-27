@@ -64,7 +64,7 @@ def main(binary):
     with tempfile.TemporaryDirectory(prefix="gw-full-", dir="/tmp") as tmp:
         root = Path(tmp)
         log = (root / "process.log").open("w+")
-        data, admin = port(), port()
+        data = admin = port()
         token, caller = secrets.token_hex(24), secrets.token_hex(24)
         artifacts = []
         for name in ("a", "b", "c"):
@@ -83,7 +83,7 @@ def main(binary):
         cfg.write_text(json.dumps({"admin_token": token, "data_dir": str(root / "data"),
                                    "state_socket": str(root / "state.sock"),
                                    "control_socket": str(root / "control.sock"),
-                                   "port": str(data), "admin_port": str(admin)}))
+                                   "port": str(data)}))
         cfg.chmod(0o600)
         policy = {"auto_profiles": False, "canary_percent": 5,
                   "readiness_timeout_seconds": 10, "verify_min_seconds": 1,

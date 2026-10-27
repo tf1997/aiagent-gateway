@@ -101,12 +101,10 @@ func runForeground(args []string) int {
 		slog.Info("configuration initialized or validated")
 		return 0
 	}
-	data := &http.Server{Addr: cfg.ListenAddress(), Handler: g.DataHandler(), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
-	admin := &http.Server{Addr: cfg.AdminListenAddress(), Handler: g.AdminHandler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 64 << 10}
-	errs := make(chan error, 2)
+	data := &http.Server{Addr: cfg.ListenAddress(), Handler: gateway.PublicHandler(g.DataHandler(), g.AdminHandler()), ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
+	errs := make(chan error, 1)
 	go func() { errs <- data.ListenAndServe() }()
-	go func() { errs <- admin.ListenAndServe() }()
-	slog.Info("gateway started", "data", data.Addr, "admin", admin.Addr)
+	slog.Info("gateway started", "http", data.Addr)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	failed := false
@@ -119,7 +117,6 @@ func runForeground(args []string) int {
 	g.BeginShutdown()
 	shutdown, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	_ = admin.Shutdown(shutdown)
 	if data.Shutdown(shutdown) != nil {
 		_ = data.Close()
 	}

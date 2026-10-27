@@ -23,7 +23,6 @@ type Config struct {
 	AdminToken         string `yaml:"admin_token"`
 	DataDir            string `yaml:"data_dir"`
 	Port               string `yaml:"port"`
-	AdminPort          string `yaml:"admin_port"`
 	PublicURL          string `yaml:"public_url"`
 	MaxInflight        int    `yaml:"max_inflight"`
 	MaxPerCaller       int    `yaml:"max_per_caller"`
@@ -41,7 +40,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		DataDir: "./data", Port: "8080", AdminPort: "9090",
+		DataDir: "./data", Port: "8080",
 		MaxInflight: 4096, MaxPerCaller: 1024, MaxPerEndpoint: 256,
 		MaxSessions: 100000, MaxTasks: 100000, MaxResources: 200000,
 		MaxResourceAliases: 200000, MaxDataIdempotency: 100000,
@@ -128,11 +127,9 @@ func (c Config) Validate() error {
 	if err := gateway.ValidateOptions(c.Options()); err != nil {
 		return err
 	}
-	for name, port := range map[string]string{"port": c.Port, "admin_port": c.AdminPort} {
-		n, err := strconv.Atoi(port)
-		if err != nil || strings.Trim(port, "0123456789") != "" || n < 1 || n > 65535 {
-			return fmt.Errorf("%s must be a port number from 1 to 65535", name)
-		}
+	n, err := strconv.Atoi(c.Port)
+	if err != nil || strings.Trim(c.Port, "0123456789") != "" || n < 1 || n > 65535 {
+		return fmt.Errorf("port must be a port number from 1 to 65535")
 	}
 	for name, n := range map[string]int{
 		"max_inflight": c.MaxInflight, "max_per_caller": c.MaxPerCaller, "max_per_endpoint": c.MaxPerEndpoint,
@@ -153,10 +150,6 @@ func (c Config) Validate() error {
 
 func (c Config) ListenAddress() string {
 	return net.JoinHostPort("", c.Port)
-}
-
-func (c Config) AdminListenAddress() string {
-	return net.JoinHostPort("", c.AdminPort)
 }
 
 func (c Config) Options() gateway.Options {

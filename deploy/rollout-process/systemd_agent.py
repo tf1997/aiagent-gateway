@@ -35,20 +35,15 @@ class LinuxGateway:
         self.created_network = self.created_container = False
 
     def start(self):
-        reservations = [socket.socket(), socket.socket()]
-        try:
-            for sock in reservations:
-                sock.bind(("127.0.0.1", 0))
-            data_port, admin_port = [sock.getsockname()[1] for sock in reservations]
-        finally:
-            for sock in reservations:
-                sock.close()
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            data_port = reservation.getsockname()[1]
         subprocess.run(["docker", "network", "create", self.network], check=True, stdout=subprocess.DEVNULL)
         self.created_network = True
         subprocess.run(["docker", "create", "--name", self.name, "--network", self.network,
                         "--label", "aiagent-gateway.test=systemd-real-agent", "--privileged", "--cgroupns=private",
                         "--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp",
-                        "--publish", f"127.0.0.1:{data_port}:8080", "--publish", f"127.0.0.1:{admin_port}:9090", self.image],
+                        "--publish", f"127.0.0.1:{data_port}:8080", self.image],
                        check=True, stdout=subprocess.DEVNULL)
         self.created_container = True
         subprocess.run(["docker", "start", self.name], check=True, stdout=subprocess.DEVNULL)
@@ -57,7 +52,6 @@ class LinuxGateway:
         self.copy(Path(__file__), "/test/systemd_agent.py")
         ports = json.loads(subprocess.check_output(["docker", "inspect", "--format", "{{json .NetworkSettings.Ports}}", self.name], text=True))
         self.data_port = int(ports["8080/tcp"][0]["HostPort"])
-        self.admin_port = int(ports["9090/tcp"][0]["HostPort"])
 
     def output(self, *args):
         return subprocess.check_output(["docker", "exec", self.name, *args], text=True).strip()
@@ -117,6 +111,7 @@ class LinuxGateway:
             if state["main_pid"] != pid or state["pids"] != [pid] or pid == previous:
                 return False
             assert state["uids"] == [state["service_uid"]] and state["service_uid"] != 0
+            assert state["tcp_listen_ports"] == [8080], state["tcp_listen_ports"]
             assert state["notify_access"] == "main" and state["kill_mode"] == "mixed"
             if restarts is not None:
                 assert state["restarts"] == restarts
@@ -167,7 +162,23 @@ def guest():
                     uids.append(Path(f"/proc/{item}").stat().st_uid)
             except FileNotFoundError:
                 pass
+        listen_ports = set()
+        for pid in pids:
+            inodes = set()
+            for fd in Path(f"/proc/{pid}/fd").iterdir():
+                try:
+                    link = os.readlink(fd)
+                except FileNotFoundError:
+                    continue
+                if link.startswith("socket:["):
+                    inodes.add(link[8:-1])
+            for family in ("tcp", "tcp6"):
+                for line in Path(f"/proc/{pid}/net/{family}").read_text().splitlines()[1:]:
+                    fields = line.split()
+                    if fields[3] == "0A" and fields[9] in inodes:
+                        listen_ports.add(int(fields[1].split(":")[-1], 16))
         result = {"main_pid": int(prop("MainPID")), "pids": pids, "uids": uids,
+                  "tcp_listen_ports": sorted(listen_ports),
                   "service_uid": int(subprocess.check_output(["id", "-u", "aiagent-gateway"], text=True)),
                   "restarts": int(prop("NRestarts")), "notify_access": prop("NotifyAccess"), "kill_mode": prop("KillMode"),
                   "systemd": subprocess.check_output(["systemctl", "--version"], text=True).splitlines()[0],

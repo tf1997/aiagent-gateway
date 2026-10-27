@@ -157,6 +157,9 @@ func (n *Gateway) DataHandler() http.Handler {
 }
 
 func (n *Gateway) AdminHandler() http.Handler { return n.core.AdminHandler() }
+func (n *Gateway) PublicHandler() http.Handler {
+	return gateway.PublicHandler(n.DataHandler(), n.AdminHandler())
+}
 func (n *Gateway) StateHandler() http.Handler { return n.shared.Handler() }
 func (n *Gateway) Identity() p.Identity {
 	id := n.business.WorkerIdentity(n.identity)
@@ -223,12 +226,12 @@ func ServeGateway(ctx context.Context, cfg appconfig.Config, target p.Target, id
 			s.Close()
 		}
 	}()
-	errs := make(chan error, 2)
+	errs := make(chan error, 1)
 	for _, ep := range []struct {
 		address string
 		handler http.Handler
 	}{
-		{cfg.ListenAddress(), n.DataHandler()}, {cfg.AdminListenAddress(), n.AdminHandler()},
+		{cfg.ListenAddress(), n.PublicHandler()},
 	} {
 		socket, e := Listen("tcp", ep.address)
 		if e != nil {

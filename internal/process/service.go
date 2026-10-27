@@ -29,13 +29,22 @@ type ServiceOptions struct {
 
 type controlPeer struct{}
 
+const (
+	publicSocket = iota
+	controlSocket
+	inheritedSocketCount
+	candidateConfigFD = 3 + inheritedSocketCount
+	// CandidateChannelFD follows the HTTP listener, control listener and config.
+	CandidateChannelFD = candidateConfigFD + 1
+)
+
 // Service owns the listeners and release controller in the complete gateway
 // PID. A committed child receives those responsibilities before the source exits.
 type Service struct {
 	node                        atomic.Pointer[Gateway]
 	controller                  *ProcessController
 	opts                        ServiceOptions
-	sockets                     [3]*Socket
+	sockets                     [inheritedSocketCount]*Socket
 	mu                          sync.Mutex
 	servers                     []*http.Server
 	publicActive, controlActive bool
@@ -47,7 +56,7 @@ type Service struct {
 	queueStatus                 func() (shared.BarrierStatus, shared.BarrierStatus)
 }
 
-func newService(n *Gateway, sockets [3]*Socket, opts ServiceOptions, inherited bool) (*Service, error) {
+func newService(n *Gateway, sockets [inheritedSocketCount]*Socket, opts ServiceOptions, inherited bool) (*Service, error) {
 	s := &Service{opts: opts, sockets: sockets, exit: make(chan struct{}), errs: make(chan error, 1), publicActive: inherited}
 	s.node.Store(n)
 	var err error
@@ -68,7 +77,7 @@ func (s *Service) serve(index int, handler http.Handler) error {
 		return err
 	}
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
-	if index == 2 {
+	if index == controlSocket {
 		server.ConnContext = func(ctx context.Context, conn net.Conn) context.Context {
 			uid, err := peerUID(conn)
 			return context.WithValue(ctx, controlPeer{}, err == nil && uid == s.opts.OwnerUID)
@@ -92,21 +101,10 @@ func (s *Service) acceptPublic() error {
 	if s.publicActive {
 		return nil
 	}
-	for i := 0; i < 2; i++ {
-		index := i
-		if err := s.serve(i, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			n := s.node.Load()
-			if index == 0 {
-				n.DataHandler().ServeHTTP(w, r)
-			} else {
-				n.AdminHandler().ServeHTTP(w, r)
-			}
-		})); err != nil {
-			for j := 0; j < i; j++ {
-				_ = s.sockets[j].Pause()
-			}
-			return err
-		}
+	if err := s.serve(publicSocket, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.node.Load().PublicHandler().ServeHTTP(w, r)
+	})); err != nil {
+		return err
 	}
 	s.publicActive = true
 	return nil
@@ -115,9 +113,7 @@ func (s *Service) acceptPublic() error {
 func (s *Service) pausePublic() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, socket := range s.sockets[:2] {
-		_ = socket.Pause()
-	}
+	_ = s.sockets[publicSocket].Pause()
 	for _, server := range s.servers {
 		server.SetKeepAlivesEnabled(false)
 	}
@@ -130,7 +126,7 @@ func (s *Service) acceptControl() error {
 	if s.controlActive {
 		return nil
 	}
-	if err := s.serve(2, s.controlHandler()); err != nil {
+	if err := s.serve(controlSocket, s.controlHandler()); err != nil {
 		return err
 	}
 	s.controlActive = true
@@ -140,7 +136,7 @@ func (s *Service) acceptControl() error {
 func (s *Service) pauseControl() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_ = s.sockets[2].Pause()
+	_ = s.sockets[controlSocket].Pause()
 	s.controlActive = false
 	for _, server := range s.servers {
 		server.SetKeepAlivesEnabled(false)
@@ -291,7 +287,7 @@ func ServeService(ctx context.Context, cfg appconfig.Config, target p.Target, id
 		return err
 	}
 	defer func() { _ = n.Close() }()
-	var sockets [3]*Socket
+	var sockets [inheritedSocketCount]*Socket
 	defer func() {
 		for _, socket := range sockets {
 			if socket != nil {
@@ -312,7 +308,7 @@ func ServeService(ctx context.Context, cfg appconfig.Config, target p.Target, id
 	} else if !os.IsNotExist(statErr) {
 		return statErr
 	}
-	for i, ep := range []struct{ network, address string }{{"tcp", cfg.ListenAddress()}, {"tcp", cfg.AdminListenAddress()}, {"unix", cfg.ControlSocket}} {
+	for i, ep := range []struct{ network, address string }{{"tcp", cfg.ListenAddress()}, {"unix", cfg.ControlSocket}} {
 		sockets[i], err = Listen(ep.network, ep.address)
 		if err != nil {
 			return err

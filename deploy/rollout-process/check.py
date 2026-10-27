@@ -39,7 +39,7 @@ def request(number, path, token="", method="GET", value=None, session=""):
         conn.close()
 
 
-def main(binary):
+def main(binary, foreground=False):
     stream_finish = threading.Event()
     calls = []
 
@@ -73,16 +73,16 @@ def main(binary):
     try:
         with tempfile.TemporaryDirectory(prefix="gateway-process-") as temporary:
             root = Path(temporary)
-            data, admin = port(), port()
+            data = admin = port()
             token, caller = secrets.token_hex(24), secrets.token_hex(24)
             config = root / "config.yaml"
             config.write_text(json.dumps({"admin_token": token, "data_dir": str(root / "data"),
-                                         "port": str(data), "admin_port": str(admin),
+                                         "port": str(data),
                                          "state_socket": str(root / "state.sock")}))
             config.chmod(0o600)
             with (root / "process.log").open("w+") as log:
                 def start():
-                    child = subprocess.Popen([binary, "process", "--config=" + str(config)], stdout=log, stderr=log)
+                    child = subprocess.Popen([binary, *([] if foreground else ["process"]), "--config=" + str(config)], stdout=log, stderr=log)
                     deadline = time.monotonic() + 15
                     try:
                         while time.monotonic() < deadline and child.poll() is None:
@@ -108,9 +108,12 @@ def main(binary):
                     "endpoints": [{"url": f"http://127.0.0.1:{upstream.server_port}"}],
                 })
                 assert status == 201, (status, body)
+                assert request(data, "/admin/v1/routes")[0] == 401
+                assert request(data, "/admin/v1/routes", caller)[0] == 401
                 assert request(data, "/agents/test/once", caller, "POST", {"input": "hello"}, "session")[0] == 200
                 assert calls == ["/once"], calls
                 assert request(data, "/agents/test/denied", "wrong-token")[0] == 401
+                assert request(data, "/agents/test/denied", token)[0] == 401
                 assert calls == ["/once"], "unauthorized request reached upstream"
                 print("PASS complete gateway serves HTTP in one PID, authorization, one upstream execution", flush=True)
 
@@ -147,4 +150,4 @@ def main(binary):
 
 
 if __name__ == "__main__":
-    main(str(Path(sys.argv[1]).resolve()))
+    main(str(Path(sys.argv[1]).resolve()), "--foreground" in sys.argv[2:])
