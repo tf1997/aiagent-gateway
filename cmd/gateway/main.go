@@ -41,7 +41,7 @@ func run() int {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "install", "uninstall", "start", "stop", "restart", "status":
+		case "install", "uninstall", "start", "stop", "restart", "status", "cleanup", "cleanup-startup":
 			if len(os.Args) > 2 {
 				if len(os.Args) == 3 && (os.Args[2] == "--help" || os.Args[2] == "-h") {
 					if os.Args[1] == "install" {

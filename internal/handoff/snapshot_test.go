@@ -73,3 +73,84 @@ func TestSnapshotRejectsSymlinkAndIncompletePublication(t *testing.T) {
 		t.Fatal("accepted truncated snapshot")
 	}
 }
+
+func TestMatchSnapshotChecksDurableBytesAndDigest(t *testing.T) {
+	dir := t.TempDir()
+	a := acquire(t, dir, identity("A"))
+	must(t, a.Bootstrap())
+	must(t, a.Prepare("h", "r", identity("B")))
+	raw := bytes.Repeat([]byte("state"), 20000)
+	snapshot, err := a.PersistSnapshot("h", raw, 1, len(raw))
+	must(t, err)
+	must(t, a.Seal("h", snapshot))
+	must(t, a.MatchSnapshot("h", len(raw), raw))
+	if err = a.MatchSnapshot("other", len(raw), raw); err == nil {
+		t.Fatal("wrong handoff accepted")
+	}
+	if err = a.MatchSnapshot("h", len(raw)-1, raw); err == nil {
+		t.Fatal("budget ignored")
+	}
+	changed := bytes.Clone(raw)
+	changed[32769] ^= 1
+	if err = a.MatchSnapshot("h", len(raw), changed); err == nil {
+		t.Fatal("changed cached image accepted")
+	}
+	path := filepath.Join(dir, "handoff", "snapshots", snapshot.Digest+".snapshot")
+	must(t, os.WriteFile(path, changed, 0600))
+	if err = a.MatchSnapshot("h", len(raw), raw); err == nil {
+		t.Fatal("changed disk image accepted")
+	}
+	if err = a.MatchSnapshot("h", len(raw), changed); err == nil {
+		t.Fatal("matching corruption bypassed independent digest")
+	}
+	if err = VerifySnapshot(dir, snapshot); err == nil {
+		t.Fatal("corrupt retained snapshot accepted")
+	}
+	must(t, os.WriteFile(path, raw, 0600))
+	must(t, VerifySnapshot(dir, snapshot))
+	must(t, os.Remove(path))
+	outside := filepath.Join(t.TempDir(), "image")
+	must(t, os.WriteFile(outside, raw, 0600))
+	must(t, os.Symlink(outside, path))
+	if err = a.MatchSnapshot("h", len(raw), raw); err == nil {
+		t.Fatal("followed snapshot symlink")
+	}
+}
+
+func BenchmarkPreparedSnapshotVerification(b *testing.B) {
+	a, err := Acquire(b.TempDir(), identity("A"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer a.Close()
+	if err = a.Bootstrap(); err != nil {
+		b.Fatal(err)
+	}
+	if err = a.Prepare("h", "r", identity("B")); err != nil {
+		b.Fatal(err)
+	}
+	raw := bytes.Repeat([]byte("snapshot"), 1<<20)
+	snapshot, err := a.PersistSnapshot("h", raw, 1, len(raw))
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err = a.Seal("h", snapshot); err != nil {
+		b.Fatal(err)
+	}
+	for _, mode := range []string{"load_and_compare", "stream_and_compare"} {
+		b.Run(mode, func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(len(raw)))
+			for i := 0; i < b.N; i++ {
+				if mode == "load_and_compare" {
+					copy, err := a.LoadSnapshot("h", len(raw))
+					if err != nil || !bytes.Equal(copy, raw) {
+						b.Fatal(err)
+					}
+				} else if err := a.MatchSnapshot("h", len(raw), raw); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

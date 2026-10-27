@@ -1,0 +1,376 @@
+{
+  "passed": false,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "systemd_before": {
+      "main_pid": 173,
+      "pids": [
+        173
+      ],
+      "uids": [
+        986
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "preflight": {
+      "card_url": "http://127.0.0.1:62662/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true
+    },
+    "before_http": {
+      "session_id": "session_62b38565dcbf248461e622b24cf36607",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.006,
+        "total_seconds": 13.558,
+        "event_count": 16
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "before_a2a": {
+      "context_id": "ctx_d0fcd039a0ad53446faefb95a6467d15",
+      "task_ids": [
+        "task_3c1d3a80ac84fc7c85a6b19d916c83cd",
+        "task_537852d0370245c448d429f7aa3682e0"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.005,
+        "total_seconds": 7.593,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "missing_samples_rollback": {
+      "phase": "ROLLED_BACK",
+      "reason": "insufficient_successful_proxy_samples",
+      "source_preserved": true,
+      "committed": false
+    },
+    "rollout_http_0": {
+      "session_id": "session_e0e190fe437b316284c928f505383cc0",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.013,
+        "total_seconds": 5.347,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_http_1": {
+      "session_id": "session_237d94a6c68411b2061b1855b779bd02",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.01,
+        "total_seconds": 5.553,
+        "event_count": 16
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "rollout_a2a_2": {
+      "context_id": "ctx_7934aef22e05ef803a4a0841d1fe301b",
+      "task_ids": [
+        "task_a80a156cc57f53e5ac363516b8bac6f0",
+        "task_c3a03edd5c787c68085b7273d7fabcce"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.005,
+        "total_seconds": 4.284,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "rollout_a2a_3": {
+      "context_id": "ctx_730af5f1927fda5bc01d8e5cd843fbf3",
+      "task_ids": [
+        "task_03ce3fe977a1acdcda03354164a14cb9",
+        "task_8ccd11691872c2c48af207d3422a1048"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.004,
+        "total_seconds": 7.53,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "direct_http_4": {
+      "session_id": "session_0c34fb84e932b27e6c284b05efb70fef",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.01,
+        "total_seconds": 6.945,
+        "event_count": 14
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    },
+    "direct_a2a_4": {
+      "context_id": "ctx_be77f4518b7665bc7056d3ffa936b898",
+      "task_ids": [
+        "task_a92f503a8d38ed2dc316e85f47bb3faf",
+        "task_f2dfc0556277288f94de31b85640b914"
+      ],
+      "recall": true,
+      "task_queries": true,
+      "pagination": true,
+      "caller_isolation": true,
+      "sse": {
+        "first_event_seconds": 0.005,
+        "total_seconds": 6.857,
+        "event_count": 4
+      },
+      "states": [
+        "TASK_STATE_SUBMITTED",
+        "TASK_STATE_WORKING",
+        "TASK_STATE_COMPLETED"
+      ]
+    },
+    "systemd_after": {
+      "main_pid": 328,
+      "pids": [
+        328
+      ],
+      "uids": [
+        986
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "rollout": {
+      "statistics": {
+        "direct_ingress_counts": {
+          "a2a": {
+            "success": 5,
+            "failure": 0,
+            "excluded": 6,
+            "unknown": 0
+          },
+          "a2a_sse": {
+            "success": 2,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "http": {
+            "success": 3,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "sse": {
+            "success": 1,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          }
+        },
+        "counts": {
+          "a2a": {
+            "success": 5,
+            "failure": 0,
+            "excluded": 6,
+            "unknown": 0
+          },
+          "a2a_sse": {
+            "success": 2,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "http": {
+            "success": 3,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          },
+          "sse": {
+            "success": 1,
+            "failure": 0,
+            "excluded": 0,
+            "unknown": 0
+          }
+        },
+        "active": 0,
+        "lost": false,
+        "failures": 0,
+        "total": 17,
+        "revision": 6
+      },
+      "snapshot_bytes": 500056,
+      "handoff_milliseconds": 307
+    },
+    "after": {
+      "http_history_preserved": true,
+      "a2a_identity_preserved": true,
+      "caller_isolation": true,
+      "inflight_zero": true
+    },
+    "systemd_reboot": {
+      "main_pid": 55,
+      "pids": [
+        55
+      ],
+      "uids": [
+        986
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    }
+  },
+  "started_at": "2026-10-27T01:45:43.324172+00:00",
+  "source_commit": "63f243cba3673901347eac81a099654f3b42e6b0",
+  "source_modified": true,
+  "artifact_sha256": [
+    "18bc6f254f9c98e0e8d703b05cb57432553cd1ca7ab65bfb41f3f3816d3dcacc",
+    "6f3bf2a7aeb633ace88070b40b48f54558fff95659d785066c9e6262c6d7a87f"
+  ],
+  "last_rollout": {
+    "phase": "COMPLETED",
+    "committed": true,
+    "statistics": {
+      "direct_ingress_counts": {
+        "a2a": {
+          "success": 5,
+          "failure": 0,
+          "excluded": 6,
+          "unknown": 0
+        },
+        "a2a_sse": {
+          "success": 2,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "http": {
+          "success": 3,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "sse": {
+          "success": 1,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        }
+      },
+      "counts": {
+        "a2a": {
+          "success": 5,
+          "failure": 0,
+          "excluded": 6,
+          "unknown": 0
+        },
+        "a2a_sse": {
+          "success": 2,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "http": {
+          "success": 3,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        },
+        "sse": {
+          "success": 1,
+          "failure": 0,
+          "excluded": 0,
+          "unknown": 0
+        }
+      },
+      "active": 0,
+      "lost": false,
+      "failures": 0,
+      "total": 17,
+      "revision": 6
+    }
+  },
+  "observation_resumes": 1,
+  "error_type": "URLError",
+  "failed_check": "systemd_reboot",
+  "timing": {
+    "wall_seconds": 128.119,
+    "monotonic_seconds": 128.118,
+    "clock_difference_seconds": 0.0
+  },
+  "finished_at": "2026-10-27T01:47:51.442861+00:00"
+}

@@ -12,6 +12,7 @@ User=aiagent-gateway
 Group=aiagent-gateway
 LoadCredential=config.yaml:/etc/aiagent-gateway/config.yaml
 LoadCredential=deployment.json:/etc/aiagent-gateway/deployment.json
+ExecStartPre=+@MAINTENANCE@ cleanup-startup
 ExecStart=@BINARY@ launch --config=%d/config.yaml --deployment=%d/deployment.json
 Restart=on-failure
 RestartSec=2

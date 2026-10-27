@@ -1,0 +1,26 @@
+{
+  "passed": false,
+  "started_at": "2026-10-27T01:57:46.365352+00:00",
+  "kernel": "6.10.14-linuxkit",
+  "arch": "aarch64",
+  "uid": 65534,
+  "physical_power_loss": false,
+  "filesystems": [
+    {
+      "requested": "ext4",
+      "mount": "ext4   rw,relatime",
+      "packages": [
+        {
+          "package": "state",
+          "exit_code": 126,
+          "seconds": 0.007,
+          "output": "env: \u2018/tests/state.test\u2019: Permission denied\n"
+        }
+      ]
+    }
+  ],
+  "error": "RuntimeError: ext4 state tests failed",
+  "seconds": 0.024,
+  "source_commit": "63f243cba3673901347eac81a099654f3b42e6b0",
+  "source_modified": true
+}

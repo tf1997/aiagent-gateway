@@ -295,10 +295,9 @@ def inside(after_reboot=False, cycles=0):
     agent.server_close()
 
 
-def host(reuse_image=False, cycles=0, report="/tmp/gateway-systemd-process.json"):
+def host(reuse_image=False, cycles=0, report="/tmp/gateway-systemd-process.json", image="aiagent-gateway-systemd-test:bookworm"):
     arch = output(["docker", "info", "--format", "{{.Architecture}}"])
     goarch = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}[arch]
-    image = "aiagent-gateway-systemd-test:bookworm"
     if not reuse_image:
         run(["docker", "build", "-t", image, str(ROOT / "deploy/rollout-systemd")])
     name = "gateway-systemd-process-" + uuid.uuid4().hex[:10]
@@ -322,6 +321,7 @@ def host(reuse_image=False, cycles=0, report="/tmp/gateway-systemd-process.json"
                   "max_effective_failures": 0, "required_profiles": ["http"], "observe_seconds": 2,
                   "observe_min_success_per_profile": 1, "drain_timeout_seconds": 15}
         (stage / "policy.json").write_text(json.dumps(policy))
+        metrics = {"passed": False}
         try:
             run(["docker", "run", "--detach", "--name", name, "--label", "aiagent-gateway.test=complete-process",
                  "--privileged", "--cgroupns=private", "--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp", image], stdout=subprocess.DEVNULL)
@@ -330,16 +330,32 @@ def host(reuse_image=False, cycles=0, report="/tmp/gateway-systemd-process.json"
             for source, dest in [(stage / "releases", "/opt/aiagent-gateway/releases"), (stage / "gateway-A", "/opt/aiagent-gateway/launcher"),
                                  (stage / "config.yaml", "/etc/aiagent-gateway/config.yaml"), (stage / "policy.json", "/test/policy.json"),
                                  (stage / "releases.json", "/test/releases.json"),
+                                 (ROOT / "deploy/rollout-process/systemd_agent.py", "/test/systemd_agent.py"),
                                  (Path(__file__), "/test/process.py")]:
                 run(["docker", "cp", str(source), name + ":" + dest])
             run(["docker", "exec", name, "chown", "-R", "0:0", "/opt/aiagent-gateway"])
             run(["docker", "exec", name, "chmod", "-R", "go-w", "/opt/aiagent-gateway"])
             run(["docker", "exec", name, "python3", "/test/process.py", "--inside", "--cycles", str(cycles)])
             run(["docker", "cp", name + ":/test/metrics.json", report])
+            metrics = json.loads(Path(report).read_text())
+            def cleanup_check(action, **kwargs):
+                result = run(["docker", "exec", "-i", name, "python3", "/test/systemd_agent.py", "--guest"],
+                             input=json.dumps(dict(action=action, **kwargs)), capture_output=True)
+                return json.loads(result.stdout)
+            fixture = cleanup_check("cleanup_fixture", binary=artifacts[2])
             run(["docker", "restart", name], stdout=subprocess.DEVNULL)
             wait(lambda: output(["docker", "exec", name, "systemctl", "show", "--property=Version", "--value"]))
             run(["docker", "exec", name, "python3", "/test/process.py", "--after-reboot"])
-        except BaseException:
+            metrics = json.loads(Path(report).read_text())
+            metrics["cleanup"] = cleanup_check("cleanup_verify", fixture=fixture)
+            metrics["passed"] = True
+            metrics["source_commit"] = output(["git", "-C", str(ROOT), "rev-parse", "HEAD"])
+            metrics["source_modified"] = bool(output(["git", "-C", str(ROOT), "status", "--porcelain"]))
+            Path(report).write_text(json.dumps(metrics, indent=2) + "\n")
+        except BaseException as exc:
+            metrics["passed"] = False
+            metrics["error_type"] = type(exc).__name__
+            Path(report).write_text(json.dumps(metrics, indent=2) + "\n")
             subprocess.run(["docker", "exec", name, "journalctl", "-u", UNIT, "--no-pager", "-n", "100"], check=False)
             raise
         finally:
@@ -351,9 +367,10 @@ if __name__ == "__main__":
     parser.add_argument("--inside", action="store_true")
     parser.add_argument("--after-reboot", action="store_true")
     parser.add_argument("--reuse-image", action="store_true", help="use the existing local systemd test image without rebuilding")
+    parser.add_argument("--image", default="aiagent-gateway-systemd-test:bookworm", help="prebuilt systemd image; use with --reuse-image")
     parser.add_argument("--cycles", type=int, default=0)
     parser.add_argument("--report", default="/tmp/gateway-systemd-process.json")
     args = parser.parse_args()
     if not 0 <= args.cycles <= 100:
         parser.error("cycles must be between 0 and 100")
-    inside(args.after_reboot, args.cycles) if args.inside or args.after_reboot else host(args.reuse_image, args.cycles, args.report)
+    inside(args.after_reboot, args.cycles) if args.inside or args.after_reboot else host(args.reuse_image, args.cycles, args.report, args.image)

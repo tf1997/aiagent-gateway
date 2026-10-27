@@ -21,6 +21,7 @@ import uuid
 
 from complete import UnixHTTP
 from check import port
+from systemd_agent import LinuxGateway
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "deploy/hermes-local"))
@@ -44,9 +45,9 @@ def wait(check, seconds=90):
     raise RuntimeError("acceptance condition timed out")
 
 
-def main(binary, report_path):
+def main(binary, report_path, systemd_image=None):
     containers, children = [], []
-    endpoints = []
+    endpoints, host_endpoints = [], []
     wall_started, mono_started = time.time(), time.monotonic()
     report = {"passed": False, "agent": IMAGE, "checks": {},
               "started_at": datetime.now(timezone.utc).isoformat(),
@@ -68,12 +69,16 @@ def main(binary, report_path):
 
     with tempfile.TemporaryDirectory(prefix="gw-agent-", dir="/tmp") as tmp:
         root = Path(tmp)
+        linux = LinuxGateway(root, systemd_image) if systemd_image else None
         log = (root / "gateway.log").open("w+")
         env = read_env()
         artifacts = []
         try:
             report["active_check"] = "setup"
-            for index in range(2):
+            if linux:
+                linux.start()
+                artifacts = linux.build()
+            for index in range(0 if linux else 2):
                 source = Path(binary)
                 if index:
                     source = root / "gateway-b"
@@ -94,7 +99,8 @@ def main(binary, report_path):
                                 A2A_PUBLIC_URL="http://127.0.0.1:9900/", TERMINAL_ENV="local", TERMINAL_CWD="/opt/data/workspace")
                 private = root / ("agent-" + str(index) + ".env")
                 write_private(private, "".join(k + "=" + v + "\n" for k, v in settings.items()))
-                subprocess.run(["docker", "create", "--name", name, "--label", "aiagent-gateway.test=real-agent",
+                subprocess.run(["docker", "create", "--name", name, *(["--network", linux.network] if linux else []),
+                                "--label", "aiagent-gateway.test=real-agent",
                                 "--publish", "127.0.0.1::8642", "--publish", "127.0.0.1::9900", "--env-file", str(private),
                                 IMAGE, "gateway", "run"], check=True, stdout=subprocess.DEVNULL)
                 containers.append(name)
@@ -105,27 +111,44 @@ def main(binary, report_path):
                 a2a_url = "http://127.0.0.1:" + ports["9900/tcp"][0]["HostPort"]
                 wait(lambda: require(http_url + "/health", timeout=3), 180)
                 wait(lambda: require(a2a_url + "/.well-known/agent-card.json", a2a_key, timeout=3), 180)
-                endpoints.append({"name": "isolated-" + str(index), "interfaces": {
+                host_endpoints.append({"name": "isolated-" + str(index), "interfaces": {
                     "proxy": {"url": http_url, "token": http_key, "health_url": http_url + "/health"},
                     "a2a": {"url": a2a_url, "token": a2a_key, "protocol_version": "1.0", "health_url": a2a_url + "/health"}}})
+                endpoint = json.loads(json.dumps(host_endpoints[-1]))
+                if linux:
+                    for profile, number in [("proxy", 8642), ("a2a", 9900)]:
+                        endpoint["interfaces"][profile]["url"] = f"http://{name}:{number}"
+                        endpoint["interfaces"][profile]["health_url"] = f"http://{name}:{number}/health"
+                endpoints.append(endpoint)
             print("PASS two isolated real Hermes instances are ready", flush=True)
-            data, admin = port(), port()
+            data, admin = (linux.data_port, linux.admin_port) if linux else (port(), port())
             interop.DATA_URL, interop.ADMIN_URL = f"http://127.0.0.1:{data}", f"http://127.0.0.1:{admin}"
             creds = {"admin_token": secrets.token_hex(24), "callers": [{"id": "alice", "token": secrets.token_hex(24)}, {"id": "bob", "token": secrets.token_hex(24)}]}
             cfg = root / "config.yaml"
-            write_private(cfg, json.dumps({"admin_token": creds["admin_token"], "data_dir": str(root / "data"), "port": data,
-                "admin_port": admin, "public_url": interop.DATA_URL, "state_socket": str(root / "state.sock"), "control_socket": str(root / "control.sock")}))
+            settings = {"admin_token": creds["admin_token"], "data_dir": str(root / "data"), "port": data,
+                        "admin_port": admin, "public_url": interop.DATA_URL,
+                        "state_socket": str(root / "state.sock"), "control_socket": str(root / "control.sock")}
+            if linux:
+                settings.update(data_dir="/var/lib/aiagent-gateway", port=8080, admin_port=9090,
+                                state_socket="/run/aiagent-gateway/state.sock",
+                                control_socket="/run/aiagent-gateway-control/controller.sock")
+            write_private(cfg, json.dumps(settings))
             policy = {"auto_profiles": False, "canary_percent": 50, "readiness_timeout_seconds": 15, "verify_min_seconds": 0,
                       "verify_timeout_seconds": 300, "min_success_per_profile": 1, "max_effective_failures": 0,
                       "required_profiles": ["http", "sse", "a2a", "a2a_sse"], "observe_seconds": 2,
                       "observe_min_success_per_profile": 1, "drain_timeout_seconds": 60}
-            manifest = root / "deployment.json"
-            write_private(manifest, json.dumps({"initial_release": artifacts[0], "policy": policy}))
-            child = subprocess.Popen([artifacts[0], "launch", "--config", str(cfg), "--deployment", str(manifest),
-                                      "--releases-dir", str(root / "releases"), "--unit="], stdout=log, stderr=log)
-            children.append(child)
+            if linux:
+                linux.install(cfg, artifacts, policy)
+            else:
+                manifest = root / "deployment.json"
+                write_private(manifest, json.dumps({"initial_release": artifacts[0], "policy": policy}))
+                child = subprocess.Popen([artifacts[0], "launch", "--config", str(cfg), "--deployment", str(manifest),
+                                          "--releases-dir", str(root / "releases"), "--unit="], stdout=log, stderr=log)
+                children.append(child)
 
             def control(method="GET", body=None, path="/control/v1/rollout"):
+                if linux:
+                    return linux.control(method, body, path)
                 conn = UnixHTTP(root / "control.sock")
                 try:
                     conn.request(method, path, None if body is None else json.dumps(body), {"Authorization": "Bearer " + creds["admin_token"]})
@@ -137,7 +160,9 @@ def main(binary, report_path):
                     conn.close()
 
             wait(lambda: control()["phase"] == "COMPLETED")
-            a2a = endpoints[0]["interfaces"]["a2a"]
+            if linux:
+                report["checks"]["systemd_before"] = before_systemd = linux.stable(artifacts[0])
+            a2a = host_endpoints[0]["interfaces"]["a2a"]
             card = require(a2a["url"] + "/.well-known/agent-card.json", a2a["token"])
             requested = {"key": "hermes-local", "agent_type": "hermes", "expose": ["proxy", "a2a"],
                          "consumers": creds["callers"], "endpoints": endpoints,
@@ -164,7 +189,11 @@ def main(binary, report_path):
             control("POST", {"artifact": artifacts[1], "policy": dict(policy, verify_timeout_seconds=2)})
             rejected = wait(lambda: r if (r := control())["phase"] == "ROLLED_BACK" else None, 30)
             assert rejected["stable"]["artifact"] == artifacts[0] and not rejected["committed"]
-            assert child.poll() is None
+            if linux:
+                after_rollback = linux.stable(artifacts[0], restarts=before_systemd["restarts"])
+                assert after_rollback["main_pid"] == before_systemd["main_pid"]
+            else:
+                assert child.poll() is None
             report["checks"]["missing_samples_rollback"] = {"phase": rejected["phase"], "reason": rejected["reason"],
                                                            "source_preserved": True, "committed": False}
             save()
@@ -203,7 +232,11 @@ def main(binary, report_path):
                     time.sleep(1)
             report["active_check"] = "rollout_completion"
             current = wait(lambda: r if (r := control())["phase"] == "COMPLETED" else None)
-            assert child.wait(timeout=10) == 0
+            if linux:
+                report["checks"]["systemd_after"] = linux.stable(artifacts[1], previous=before_systemd["main_pid"],
+                                                                 restarts=before_systemd["restarts"])
+            else:
+                assert child.wait(timeout=10) == 0
             assert current["stable"]["artifact"] == artifacts[1] and current["committed"]
             report["last_rollout"] = {key: current.get(key) for key in ("phase", "committed", "statistics")}
             report["checks"]["rollout"] = {"statistics": current["statistics"], "snapshot_bytes": current["snapshot_bytes"], "handoff_milliseconds": current["handoff_milliseconds"]}
@@ -221,6 +254,20 @@ def main(binary, report_path):
                 detail = require(interop.ADMIN_URL + "/admin/v1/routes/" + route["id"] + "/endpoints/" + ep["id"], creds["admin_token"])
                 assert detail["runtime"]["http_inflight"] == 0
             report["checks"]["after"] = {"http_history_preserved": True, "a2a_identity_preserved": True, "caller_isolation": True, "inflight_zero": True}
+            if linux:
+                report["active_check"] = "systemd_reboot"
+                fixture = linux.guest("cleanup_fixture", binary=artifacts[1])
+                linux.reboot()
+                report["checks"]["systemd_reboot"] = linux.stable(artifacts[1])
+                report["checks"]["cleanup"] = linux.guest("cleanup_verify", fixture=fixture)
+                history = require(interop.DATA_URL + "/agents/hermes-local/api/sessions/" + session + "/messages?limit=100&order=latest", token,
+                                  headers={"X-Hermes-Session-Id": session})
+                assert len(history["data"]) == before_http["history_messages"]
+                for task in before_a2a["task_ids"]:
+                    existing = interop.rpc(token, "GetTask", {"id": task})
+                    assert existing["id"] == task and existing["contextId"] == before_a2a["context_id"]
+                assert interop.rpc(other, "ListTasks", {"contextId": before_a2a["context_id"]})["tasks"] == []
+                report["checks"]["after_reboot"] = {"http_history_preserved": True, "a2a_identity_preserved": True, "caller_isolation": True}
             report["passed"] = True
             print("PASS real-agent rollout: all four profiles and direct ingress samples; existing resources survive owner handoff", flush=True)
         except BaseException as exc:
@@ -231,7 +278,7 @@ def main(binary, report_path):
                 report["diagnostics"] = exc.diagnostics
                 if "a2a" in report["failed_check"]:
                     report["upstream_task_diagnostics"] = []
-                    for ep in endpoints:
+                    for ep in host_endpoints:
                         iface = ep["interfaces"]["a2a"]
                         diagnostic = {"endpoint": ep["name"]}
                         try:
@@ -280,12 +327,18 @@ def main(binary, report_path):
                     child.wait(timeout=10)
             for name in containers:
                 subprocess.run(["docker", "rm", "--force", name], check=False, stdout=subprocess.DEVNULL)
+            if linux:
+                linux.close()
             log.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary")
+    parser.add_argument("binary", nargs="?", help="local gateway binary; omitted with --systemd")
+    parser.add_argument("--systemd", action="store_true", help="build and install the gateway in an isolated Linux/systemd container")
+    parser.add_argument("--systemd-image", default="aiagent-gateway-systemd-test:bookworm")
     parser.add_argument("--report", default="/tmp/gateway-real-agent-rollout.json")
     args = parser.parse_args()
-    main(str(Path(args.binary).resolve()), args.report)
+    if not args.systemd and not args.binary:
+        parser.error("binary is required unless --systemd is selected")
+    main(str(Path(args.binary).resolve()) if args.binary else None, args.report, args.systemd_image if args.systemd else None)

@@ -1,4 +1,5 @@
-FROM debian:bookworm-slim
+ARG BASE_IMAGE=debian:bookworm-slim
+FROM ${BASE_IMAGE}
 ENV container=docker
 RUN apt-get update \
     && apt-get install -y --no-install-recommends systemd dbus python3 ca-certificates \

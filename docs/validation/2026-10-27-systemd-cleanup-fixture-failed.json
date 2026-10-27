@@ -1,0 +1,40 @@
+{
+  "passed": false,
+  "failed_check": "cleanup_fixture_retention_expectation",
+  "lifecycle": {
+    "systemd": "systemd 252 (252.39-1~deb12u2)",
+    "release_windows_ms": {
+      "samples": 4,
+      "p50": 319,
+      "p95": 368,
+      "p99": 368
+    },
+    "snapshot_bytes": [
+      373458,
+      985340,
+      590092,
+      1193733
+    ],
+    "request_ms": {
+      "samples": 660,
+      "p50": 8.05,
+      "p95": 16.151,
+      "p99": 42.488
+    },
+    "handoff_request_ms": {
+      "samples": 29,
+      "p50": 10.116,
+      "p95": 64.01,
+      "p99": 100.211
+    },
+    "queue_timeouts": 0,
+    "queue_rejected": 0,
+    "peak_rss_kib": 67752,
+    "peak_fds": 45,
+    "peak_service_pids": 2,
+    "request_failures": 0,
+    "passed": true,
+    "extra_release_cycles": 0,
+    "scope": "small-state serial HTTP workload; not a production capacity ceiling"
+  }
+}

@@ -345,19 +345,22 @@ func openPreparedHandoffGateway(ctx context.Context, cfg appconfig.Config, targe
 	if actual != expected || expected.Phase != handoff.Sealed {
 		return nil, handoff.ErrConflict
 	}
-	raw, err := n.owner.LoadSnapshot(expected.ID, maxBytes)
-	if err != nil {
-		return nil, err
-	}
 	opts := ownerOptions(cfg, policy)
 	var image gatewayImage
 	var view *gateway.StateView
 	if prepared != nil {
-		if prepared.decision != expected || prepared.view == nil || !bytes.Equal(prepared.raw, raw) {
+		if prepared.decision != expected || prepared.view == nil {
 			return nil, handoff.ErrConflict
+		}
+		if err = n.owner.MatchSnapshot(expected.ID, maxBytes, prepared.raw); err != nil {
+			return nil, err
 		}
 		image, view = prepared.image, prepared.view
 	} else {
+		raw, loadErr := n.owner.LoadSnapshot(expected.ID, maxBytes)
+		if loadErr != nil {
+			return nil, loadErr
+		}
 		image, view, err = decodeGatewayImage(raw, expected, maxBytes, opts)
 		if err != nil {
 			return nil, err

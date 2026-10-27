@@ -1,0 +1,87 @@
+{
+  "passed": false,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "systemd_before": {
+      "main_pid": 173,
+      "pids": [
+        173
+      ],
+      "uids": [
+        986
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "preflight": {
+      "card_url": "http://127.0.0.1:63385/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true
+    },
+    "before_http": {
+      "session_id": "session_50877bbf5f549870c61b717304427ed3",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.007,
+        "total_seconds": 9.665,
+        "event_count": 17
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    }
+  },
+  "started_at": "2026-10-27T01:49:47.728086+00:00",
+  "source_commit": "63f243cba3673901347eac81a099654f3b42e6b0",
+  "source_modified": true,
+  "artifact_sha256": [
+    "18bc6f254f9c98e0e8d703b05cb57432553cd1ca7ab65bfb41f3f3816d3dcacc",
+    "6f3bf2a7aeb633ace88070b40b48f54558fff95659d785066c9e6262c6d7a87f"
+  ],
+  "error_type": "CheckFailure",
+  "failed_check": "before_a2a",
+  "check_error": "A2A stream did not reach completed state",
+  "diagnostics": {},
+  "upstream_task_diagnostics": [
+    {
+      "endpoint": "isolated-0",
+      "tasks": [
+        {
+          "state": "TASK_STATE_INPUT_REQUIRED",
+          "text_bytes": 60,
+          "artifact_count": 0,
+          "history_count": 0
+        },
+        {
+          "state": "TASK_STATE_COMPLETED",
+          "text_bytes": 499,
+          "artifact_count": 1,
+          "history_count": 0
+        }
+      ]
+    },
+    {
+      "endpoint": "isolated-1",
+      "tasks": []
+    }
+  ],
+  "timing": {
+    "wall_seconds": 52.007,
+    "monotonic_seconds": 52.007,
+    "clock_difference_seconds": 0.0
+  },
+  "finished_at": "2026-10-27T01:50:39.735037+00:00"
+}

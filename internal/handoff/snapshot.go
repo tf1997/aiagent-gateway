@@ -1,6 +1,7 @@
 package handoff
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -153,6 +154,103 @@ func readSnapshotFile(path string, expected Snapshot, maxBytes int) ([]byte, err
 		return nil, fmt.Errorf("SNAPSHOT_DIGEST_MISMATCH")
 	}
 	return raw, nil
+}
+
+// MatchSnapshot rechecks the durable image byte for byte against an already
+// validated in-memory image, without allocating a second full snapshot.
+func (o *Owner) MatchSnapshot(id string, maxBytes int, raw []byte) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err := o.ready(); err != nil {
+		return err
+	}
+	d := o.decision
+	if d.ID != id || (d.Phase != Sealed && d.Phase != Committed && d.Phase != Completed) || (o.identity != d.Source && o.identity != d.Target) {
+		return ErrConflict
+	}
+	if maxBytes <= 0 || len(raw) == 0 || len(raw) > maxBytes || int64(len(raw)) != d.Snapshot.Bytes {
+		return ErrConflict
+	}
+	dir := filepath.Join(o.dir, "handoff", "snapshots")
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("INVALID_SNAPSHOT_DIRECTORY")
+	}
+	fd, err := syscall.Open(filepath.Join(dir, d.Snapshot.Digest+".snapshot"), syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), "match-snapshot")
+	defer f.Close()
+	info, err = f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != d.Snapshot.Bytes {
+		return fmt.Errorf("INVALID_SNAPSHOT_FILE")
+	}
+	hash := sha256.New()
+	buffer := make([]byte, 32<<10)
+	for offset := 0; offset < len(raw); {
+		size := min(len(buffer), len(raw)-offset)
+		if _, err = io.ReadFull(f, buffer[:size]); err != nil {
+			return err
+		}
+		if !bytes.Equal(buffer[:size], raw[offset:offset+size]) {
+			return ErrConflict
+		}
+		hash.Write(buffer[:size])
+		offset += size
+	}
+	var tail [1]byte
+	if n, err := f.Read(tail[:]); n != 0 || err != io.EOF {
+		return fmt.Errorf("SNAPSHOT_SIZE_CHANGED")
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != d.Snapshot.Digest {
+		return fmt.Errorf("SNAPSHOT_DIGEST_MISMATCH")
+	}
+	return nil
+}
+
+// VerifySnapshot checks a retained recovery image without allocating its full
+// contents. Callers performing maintenance must hold the directory's owner lock.
+func VerifySnapshot(dir string, expected Snapshot) error {
+	if !validDigest(expected.Digest) || expected.Bytes <= 0 || expected.Bytes == int64(^uint64(0)>>1) {
+		return fmt.Errorf("INVALID_SNAPSHOT_OR_CAPACITY")
+	}
+	path := filepath.Join(dir, "handoff", "snapshots")
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("INVALID_SNAPSHOT_DIRECTORY")
+	}
+	fd, err := syscall.Open(filepath.Join(path, expected.Digest+".snapshot"), syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	f := os.NewFile(uintptr(fd), "verify-snapshot")
+	defer f.Close()
+	info, err = f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() != expected.Bytes {
+		return fmt.Errorf("INVALID_SNAPSHOT_FILE")
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, io.LimitReader(f, expected.Bytes+1))
+	if err != nil {
+		return err
+	}
+	if n != expected.Bytes || hex.EncodeToString(hash.Sum(nil)) != expected.Digest {
+		return fmt.Errorf("SNAPSHOT_DIGEST_MISMATCH")
+	}
+	return nil
 }
 
 func syncDirectory(path string) error {

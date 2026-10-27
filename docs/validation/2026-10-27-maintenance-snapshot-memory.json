@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "command": [
+    "go",
+    "test",
+    "-run=^$",
+    "-bench=BenchmarkPreparedSnapshotVerification",
+    "-benchtime=10x",
+    "-benchmem",
+    "./internal/handoff"
+  ],
+  "exit_code": 0,
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "seconds": 0.973,
+  "source_commit": "63f243cba3673901347eac81a099654f3b42e6b0",
+  "source_modified": true,
+  "output": "goos: darwin\ngoarch: arm64\npkg: aiagent-gateway/internal/handoff\ncpu: Apple M3\nBenchmarkPreparedSnapshotVerification/load_and_compare-8         \t      10\t   7221712 ns/op\t1161.58 MB/s\t41705161 B/op\t      49 allocs/op\nBenchmarkPreparedSnapshotVerification/stream_and_compare-8       \t      10\t   3765562 ns/op\t2227.72 MB/s\t   34184 B/op\t      13 allocs/op\nPASS\nok  \taiagent-gateway/internal/handoff\t0.641s\n"
+}

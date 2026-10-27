@@ -87,10 +87,21 @@ func Manage(action string, output io.Writer) error {
 	}
 	defer lock.Close()
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if action == "cleanup-startup" {
+			fmt.Fprintln(output, "cleanup skipped: service management is active")
+			return nil
+		}
 		return fmt.Errorf("another service management command is running: %w", err)
 	}
 	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 	switch action {
+	case "cleanup", "cleanup-startup":
+		err := m.cleanup()
+		if err != nil && action == "cleanup-startup" {
+			fmt.Fprintf(output, "cleanup skipped: %v\n", err)
+			return nil
+		}
+		return err
 	case "install":
 		return m.installRollout(ctx)
 	case "uninstall":

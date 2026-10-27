@@ -9,6 +9,7 @@ func (m *manager) writeProcessUnits(initial string) error {
 			return err
 		}
 		raw = []byte(strings.ReplaceAll(string(raw), "@BINARY@", initial))
+		raw = []byte(strings.ReplaceAll(string(raw), "@MAINTENANCE@", initial))
 		if err := atomicWrite(m.path("/etc/systemd/system/"+name), raw, 0644); err != nil {
 			return err
 		}

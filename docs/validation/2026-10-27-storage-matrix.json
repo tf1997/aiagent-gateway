@@ -1,0 +1,104 @@
+{
+  "passed": true,
+  "started_at": "2026-10-27T02:03:13.074445+00:00",
+  "kernel": "6.10.14-linuxkit",
+  "arch": "aarch64",
+  "uid": 65534,
+  "physical_power_loss": false,
+  "filesystems": [
+    {
+      "requested": "ext4",
+      "mount": "ext4   rw,relatime",
+      "packages": [
+        {
+          "package": "state",
+          "exit_code": 0,
+          "seconds": 0.737,
+          "output": "PASS\n"
+        },
+        {
+          "package": "handoff",
+          "exit_code": 0,
+          "seconds": 0.728,
+          "output": "PASS\n"
+        },
+        {
+          "package": "entry",
+          "exit_code": 0,
+          "seconds": 14.423,
+          "output": "PASS\n"
+        },
+        {
+          "package": "process",
+          "exit_code": 0,
+          "seconds": 5.371,
+          "output": "PASS\nPASS\nPASS\nPASS\n"
+        },
+        {
+          "package": "service",
+          "exit_code": 0,
+          "seconds": 2.192,
+          "output": "PASS\n"
+        }
+      ],
+      "filesystem_check": {
+        "command": [
+          "e2fsck",
+          "-f",
+          "-n",
+          "/storage/ext4.img"
+        ],
+        "exit_code": 0,
+        "output": "e2fsck 1.47.0 (5-Feb-2023)\nPass 1: Checking inodes, blocks, and sizes\nPass 2: Checking directory structure\nPass 3: Checking directory connectivity\nPass 4: Checking reference counts\nPass 5: Checking group summary information\n/storage/ext4.img: 12/32768 files (0.0% non-contiguous), 6354/131072 blocks\n"
+      }
+    },
+    {
+      "requested": "xfs",
+      "mount": "xfs    rw,relatime,attr2,inode64,logbufs=8,logbsize=32k,noquota",
+      "packages": [
+        {
+          "package": "state",
+          "exit_code": 0,
+          "seconds": 0.171,
+          "output": "PASS\n"
+        },
+        {
+          "package": "handoff",
+          "exit_code": 0,
+          "seconds": 0.267,
+          "output": "PASS\n"
+        },
+        {
+          "package": "entry",
+          "exit_code": 0,
+          "seconds": 10.384,
+          "output": "PASS\n"
+        },
+        {
+          "package": "process",
+          "exit_code": 0,
+          "seconds": 4.915,
+          "output": "PASS\nPASS\nPASS\nPASS\n"
+        },
+        {
+          "package": "service",
+          "exit_code": 0,
+          "seconds": 1.846,
+          "output": "PASS\n"
+        }
+      ],
+      "filesystem_check": {
+        "command": [
+          "xfs_repair",
+          "-n",
+          "/storage/xfs.img"
+        ],
+        "exit_code": 0,
+        "output": "Cannot get host filesystem geometry.\nRepair may fail if there is a sector size mismatch between\nthe image and the host filesystem.\nPhase 1 - find and verify superblock...\nCannot get host filesystem geometry.\nRepair may fail if there is a sector size mismatch between\nthe image and the host filesystem.\nPhase 2 - using internal log\n        - zero log...\n        - scan filesystem freespace and inode maps...\n        - found root inode chunk\nPhase 3 - for each AG...\n        - scan (but don't clear) agi unlinked lists...\n        - process known inodes and perform inode discovery...\n        - agno = 0\n        - agno = 1\n        - agno = 2\n        - agno = 3\n        - process newly discovered inodes...\nPhase 4 - check for duplicate blocks...\n        - setting up duplicate extent list...\n        - check for inodes claiming duplicate blocks...\n        - agno = 0\n        - agno = 1\n        - agno = 2\n        - agno = 3\nNo modify flag set, skipping phase 5\nPhase 6 - check inode connectivity...\n        - traversing filesystem ...\n        - traversal finished ...\n        - moving disconnected inodes to lost+found ...\nPhase 7 - verify link counts...\nNo modify flag set, skipping filesystem flush and exiting.\n"
+      }
+    }
+  ],
+  "seconds": 41.086,
+  "source_commit": "63f243cba3673901347eac81a099654f3b42e6b0",
+  "source_modified": true
+}

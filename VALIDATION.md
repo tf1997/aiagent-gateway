@@ -1,5 +1,23 @@
 # 验证记录
 
+## 冷启动清理、文件系统恢复与快照复核（2026-10-27）
+
+先按用户要求提交已有改动为 63f243c，再继续本轮工作。长期稳定性与容量边界验收按本轮用户指示跳过；以下系统生命周期、存储故障测试和定向内存基准不作为长期容量证明。
+
+- 增加冷启动前自动清理与显式 cleanup 命令。安装锁及 owner 锁共同排除正在安装、运行或交接的网关；只有持久报告已结束且没有待恢复交接才回收。保留初始启动产物、当前决定和发布报告的全部引用、unit 维护产物、当前快照及两个最近的额外产物。未知/损坏目录、额外文件和符号链接保留，业务日志和发布决定不改写。原样生成的旧 unit 可补齐维护入口，定制 unit 不覆盖。
+- 新增回归覆盖运行中拒绝清理、未决 handoff/rollout、损坏决定、缺失启动产物、损坏快照、重复清理、冷启动仍选当前版本、保留维护产物，以及符号链接/未知文件隔离。
+- [Debian/systemd 完整验证](docs/validation/2026-10-27-systemd-cleanup.json)通过正式安装、A→B→C、失败回退、CLI 断开、SIGKILL 恢复、双进程 stop/start、卸载保留数据后重装和容器重启。运行中 cleanup 被拒绝；重启前建立的过期产物和临时快照被自动回收，近期额外产物保留，已提交版本及业务配置恢复。675 次串行模拟请求无意外失败或队列超时/拒绝，服务进程峰值 2；没有执行额外长时发布轮次。早期[清理测试失败](docs/validation/2026-10-27-systemd-cleanup-fixture-failed.json)源于测试把四个样本设为很旧的时间，却未计入已有近期产物；修正测试的时间排序后通过，未放宽保留策略。
+- [ext4/XFS 矩阵](docs/validation/2026-10-27-storage-matrix.json)在 Linux 6.10.14-linuxkit / arm64 中分别创建并挂载私有 512 MiB 镜像，以 UID 65534 完整运行 state、handoff、entry、process、service 五包测试，含现有完整网关强杀和存储错误注入回归；两种文件系统均全部通过。卸载后的 e2fsck -f -n / xfs_repair -n 均返回 0。运行阶段无网络、无宿主目录挂载，没有操作宿主磁盘。首轮[测试目录权限失败](docs/validation/2026-10-27-storage-harness-permissions-failed.json)在执行测试前退出，修复目录可遍历权限后复测。整个矩阵约 41 秒，不是物理断电实验。
+- 提交时已有校验过的镜像，现以 32 KiB 缓冲从磁盘逐块比较，并独立核对完整 SHA-256；省去再次读取为完整内存副本。仍校验 owner/决定/预算/文件类型/长度，拒绝被修改的内存副本、磁盘内容、两者同时损坏及符号链接。没有取消独立最终快照。
+- [8 MiB 快照定向基准](docs/validation/2026-10-27-maintenance-snapshot-memory.json)，每路径 10 次：原 LoadSnapshot 后比较为 41,705,161 B/op、49 次分配；逐块比较为 34,184 B/op、13 次分配。测得约 7.22 / 3.77 ms，仅描述该文件复核操作，分配总量不是进程峰值 RSS，也不是生产交接时延或吞吐结论。
+- 最终版本的[全量竞态](docs/validation/2026-10-27-maintenance-final-go-race.json)、[vet](docs/validation/2026-10-27-maintenance-final-vet.json)及 [Linux amd64 构建](docs/validation/2026-10-27-maintenance-linux-amd64-build.json)通过。竞态使用 count=1；Python 脚本语法另行检查。
+
+Linux/systemd 与真实 Hermes 的联合脚本已接入正式安装、非 root/凭据、MainPID 接管、零 systemd 重启、旧会话/任务恢复和启动清理。一次[运行](docs/validation/2026-10-27-systemd-real-agent-reboot-port-failed.json)通过四 profile、缺样本回退后成功发布、交接后资源检查及重启选版，但在重启后的宿主请求因 Docker 随机端口变化失败；脚本已固定 loopback 端口。其后模型请求分别出现[需要输入](docs/validation/2026-10-27-systemd-real-agent-stream-failed.json)、[空任务](docs/validation/2026-10-27-systemd-real-agent-cleanup-empty-task.json)和[标签回忆失败](docs/validation/2026-10-27-systemd-real-agent-recall-failed.json)，最新失败发生在发布前，公开 task/context ID 保持且流到达 COMPLETED，但回复未包含首轮标签。没有修改模型配置或放宽记忆/流结束断言；联合验收仍未取得整轮 passed=true。此前 macOS 网关配合真实 Hermes 的通过报告仍按原环境保留。
+
+[Ubuntu 24.04 / systemd 255.4 验证](docs/validation/2026-10-27-systemd-noble.json)使用独立 Noble 镜像，通过相同的正式安装、A→B→C、失败回退、CLI 断开、SIGKILL、双进程停启、卸载重装和容器重启流程；启动清理的运行中拒绝、过期产物回收、近期版本保留和临时文件删除均通过。671 次串行模拟请求无意外失败或队列超时/拒绝，服务进程峰值 2。Debian 与 Ubuntu 是不同用户空间/systemd 版本，仍共享 Docker Linux VM 内核；这里未声明所有 Linux 发行版或物理设备通过。
+
+物理掉电、具体生产存储设备以及完整真实模型联合验收仍不能据本轮结果标为完成。旧实验部署自动迁移在既定方案中明确不做，不作为本轮遗漏功能。
+
 ## 真实 Agent 完整换版与最终复核（2026-10-26，10 月 27 日归档）
 
 续接会话后核对已结束的后台任务，归档此前尚在 `/tmp` 的[真实 Hermes 成功报告](docs/validation/2026-10-26-receipts-real-agent-passed.json)，原始内容未改写。该轮在 10 月 26 日 17:06–17:11（Asia/Shanghai）执行，使用 macOS arm64 网关及两个独立数据目录、凭据的 Linux Hermes 容器；Agent 镜像摘要、两份网关产物 SHA-256 和工作区修改标记均在报告中。它不等于 Linux/systemd 与真实模型组合的验收；Linux 运行与系统接管证据分别见下文。

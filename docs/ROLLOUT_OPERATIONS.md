@@ -111,6 +111,8 @@ python3 -B deploy/rollout-process/complete.py /tmp/gateway
 python3 -B deploy/rollout-systemd/process.py --reuse-image --cycles 20
 python3 -B deploy/rollout-process/load.py --concurrency 100
 python3 -B deploy/rollout-process/agent.py /tmp/gateway
+python3 -B deploy/rollout-process/agent.py --systemd
+python3 -B deploy/rollout-storage/check.py
 ```
 
 systemd 脚本使用隔离容器，无宿主目录挂载与公开端口，完成后清理。`--reuse-image` 使用已有 `aiagent-gateway-systemd-test:bookworm`；不传该项时构建镜像。测量报告默认 `/tmp/gateway-systemd-process.json`，是小状态、串行 HTTP 回归负载，不是生产容量上限。
@@ -130,3 +132,9 @@ python3 deploy/rollout-process/load.py --concurrency 100 --profiles mixed --cycl
 `mixed` 将客户端交替分配给 HTTP/SSE；上述参数为两类各 50 并发，每客户端跨发布复用 4 个会话，VERIFYING 另建每轮会话池以获取候选样本。`--cycles` 重复整个 `--profiles` 序列，省略 `--sessions-per-client` 时每次请求创建新会话。观察期应允许完整流结束，原有状态等待和交接屏障预算不变。双方支持 `compact_results` 时单次发布最多保存 65536 条紧凑回执，旧版兼容路径仍为 8192 条完整结果；容量耗尽会阻止凭不完整证据通过发布。
 
 真实 Agent 验收先验证缺样本自动回退，再重新发布。观察期缺直接入口样本而暂停时，脚本补齐四类请求并显式调用 resume；暂停报告中的统计不会自动刷新，不能只轮询旧计数判断样本是否已足够。已完成的验收结果和适用环境见 [验证记录](../VALIDATION.md)。
+
+`agent.py --systemd` 自动构建 Linux 产物并通过正式安装器启动网关，使用私有 Docker 网络连接两个 Hermes 实例，宿主端口仅绑定 loopback。核对非 root、MainPID 接管、无 systemd 重启、容器重启后的旧会话/任务及自动清理；使用现有模型配置，失败保留原断言并输出报告。
+
+`rollout-storage/check.py` 构建含文件系统工具的测试镜像，在容器内新建两个 512 MiB 文件并分别格式化为 ext4/XFS，以 UID 65534 运行 state、handoff、entry、process、service 测试；卸载后执行文件系统一致性检查。不会格式化宿主磁盘，无宿主目录挂载，运行阶段断网；该测试覆盖进程崩溃与错误注入，不代表物理掉电。
+
+其他 systemd 用户空间可通过 `docker build --build-arg BASE_IMAGE=ubuntu:24.04 -t aiagent-gateway-systemd-test:noble deploy/rollout-systemd` 构建，再使用 `process.py --reuse-image --image aiagent-gateway-systemd-test:noble` 验证。实际系统版本以报告为准；清理触发与保留规则见 [维护说明](DEPLOYMENT_LIFECYCLE.md#维护停止与重装)。长期容量测试已按 2026-10-27 的用户要求从本轮验收中排除，保留以上命令供后续使用。

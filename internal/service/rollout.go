@@ -339,19 +339,38 @@ func RolloutCommand(action string, out io.Writer) error {
 
 func (m *manager) restoreRolloutUnits(d Deployment) error {
 	changed := false
+	maintenance, err := m.stageRelease()
+	if err != nil {
+		return err
+	}
 	names := []string{"aiagent-gateway.service", "aiagent-gateway-init.service"}
 	for _, name := range names {
 		path := m.path("/etc/systemd/system/" + name)
-		if _, err := os.Stat(path); err == nil {
-			continue
-		} else if !os.IsNotExist(err) {
-			return err
-		}
 		raw, err := units.ReadFile("units/" + name)
 		if err != nil {
 			return err
 		}
 		raw = []byte(strings.ReplaceAll(string(raw), "@BINARY@", d.InitialRelease))
+		raw = []byte(strings.ReplaceAll(string(raw), "@MAINTENANCE@", maintenance))
+		if old, err := os.ReadFile(path); err == nil {
+			// Update our generated maintenance hook while preserving custom units.
+			withoutHook := func(value string) string {
+				lines := strings.Split(value, "\n")
+				var kept []string
+				for _, line := range lines {
+					if strings.HasPrefix(line, "ExecStartPre=+"+ReleasesDir+"/") && strings.HasSuffix(line, "/gateway cleanup-startup") {
+						continue
+					}
+					kept = append(kept, line)
+				}
+				return strings.Join(kept, "\n")
+			}
+			if string(old) == string(raw) || withoutHook(string(old)) != withoutHook(string(raw)) {
+				continue
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 		if err = atomicWrite(path, raw, 0644); err != nil {
 			return err
 		}
