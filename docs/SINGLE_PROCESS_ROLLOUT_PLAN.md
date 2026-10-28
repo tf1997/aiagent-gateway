@@ -45,7 +45,7 @@
 
 ~~~text
 GatewayProcess
-  PublicServer        Agent、管理接口及指标共用 :8080、连接排空
+  PublicServer        Agent、管理接口及指标共用 :14030、连接排空
   TrafficRouter       统一版本分配、会话亲和、流量 revision
   BusinessRuntime     当前 worker 的业务 handler 和结果采集
   StateAccess         状态调用统一入口，可本地执行或 UDS 调用

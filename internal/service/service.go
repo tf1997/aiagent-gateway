@@ -189,7 +189,7 @@ func credentials() ([]byte, error) {
 	}
 	c := appconfig.Defaults()
 	c.DataDir = "/var/lib/aiagent-gateway"
-	c.PublicURL = "http://localhost:8080"
+	c.PublicURL = "http://localhost:" + c.Port
 	c.AdminToken = hex.EncodeToString(b[:])
 	return yaml.Marshal(c)
 }

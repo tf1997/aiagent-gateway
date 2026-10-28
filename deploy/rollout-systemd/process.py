@@ -116,7 +116,7 @@ def inside(after_reboot=False, cycles=0):
 
     if after_reboot:
         stable(artifacts[2])
-        assert request(8080, "/admin/v1/routes", cfg["admin_token"])[0] == 200
+        assert request(14030, "/admin/v1/routes", cfg["admin_token"])[0] == 200
         print("PASS complete gateway container reboot selects committed C and restores configuration", flush=True)
         return
 
@@ -172,7 +172,7 @@ def inside(after_reboot=False, cycles=0):
     assert output(["stat", "-c", "%u", f"/proc/{a['pid']}"]) != "0"
     assert prop("NotifyAccess") == "main" and prop("KillMode") == "mixed"
     print("PASS complete gateway non-root startup, credentials, one serving PID and READY barrier", flush=True)
-    status, body = request(8080, "/admin/v1/routes", cfg["admin_token"], "POST", {
+    status, body = request(14030, "/admin/v1/routes", cfg["admin_token"], "POST", {
         "key": "probe", "protocol": "proxy", "consumers": [{"id": "alice", "token": caller}],
         "endpoints": [{"url": "http://127.0.0.1:18090"}]})
     assert status == 201, (status, body)
@@ -195,7 +195,7 @@ def inside(after_reboot=False, cycles=0):
                 return report
             assert report["phase"] not in ("RECOVERY_REQUIRED", "ROLLED_BACK", "FAILED"), report
             started = time.monotonic()
-            status, body = request(8080, "/agents/probe/" + ("fail" if failing else "ok"), caller, session=secrets.token_hex(8))
+            status, body = request(14030, "/agents/probe/" + ("fail" if failing else "ok"), caller, session=secrets.token_hex(8))
             elapsed = (time.monotonic() - started) * 1000
             metrics["request_ms"].append(elapsed)
             if report["phase"] == "HANDOFF":
@@ -206,7 +206,7 @@ def inside(after_reboot=False, cycles=0):
         raise AssertionError(report)
 
     restarts = prop("NRestarts")
-    stream = http.client.HTTPConnection("127.0.0.1", 8080, timeout=60)
+    stream = http.client.HTTPConnection("127.0.0.1", 14030, timeout=60)
     stream.request("GET", "/agents/probe/hold", headers={"Authorization": "Bearer " + caller, "X-Session-ID": "old-stream"})
     response = stream.getresponse()
     assert response.status == 200, (response.status, response.read())
@@ -241,7 +241,7 @@ def inside(after_reboot=False, cycles=0):
     print("PASS complete failed candidate rolls back under systemd", flush=True)
     os.kill(c["pid"], signal.SIGKILL)
     c = stable(artifacts[2], c["pid"])
-    assert request(8080, "/agents/probe/ok", caller, session="after-crash")[0] == 200
+    assert request(14030, "/agents/probe/ok", caller, session="after-crash")[0] == 200
     print("PASS active gateway SIGKILL restarts durable C and restores business state", flush=True)
     begin(0)
     wait(lambda: control()["phase"] == "VERIFYING" and len(pids()) == 2)

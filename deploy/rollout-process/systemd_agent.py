@@ -43,7 +43,7 @@ class LinuxGateway:
         subprocess.run(["docker", "create", "--name", self.name, "--network", self.network,
                         "--label", "aiagent-gateway.test=systemd-real-agent", "--privileged", "--cgroupns=private",
                         "--tmpfs", "/run", "--tmpfs", "/run/lock", "--tmpfs", "/tmp",
-                        "--publish", f"127.0.0.1:{data_port}:8080", self.image],
+                        "--publish", f"127.0.0.1:{data_port}:14030", self.image],
                        check=True, stdout=subprocess.DEVNULL)
         self.created_container = True
         subprocess.run(["docker", "start", self.name], check=True, stdout=subprocess.DEVNULL)
@@ -51,7 +51,7 @@ class LinuxGateway:
         self.output("mkdir", "-p", "/test", "/opt/aiagent-gateway", "/etc/aiagent-gateway")
         self.copy(Path(__file__), "/test/systemd_agent.py")
         ports = json.loads(subprocess.check_output(["docker", "inspect", "--format", "{{json .NetworkSettings.Ports}}", self.name], text=True))
-        self.data_port = int(ports["8080/tcp"][0]["HostPort"])
+        self.data_port = int(ports["14030/tcp"][0]["HostPort"])
 
     def output(self, *args):
         return subprocess.check_output(["docker", "exec", self.name, *args], text=True).strip()
@@ -111,7 +111,7 @@ class LinuxGateway:
             if state["main_pid"] != pid or state["pids"] != [pid] or pid == previous:
                 return False
             assert state["uids"] == [state["service_uid"]] and state["service_uid"] != 0
-            assert state["tcp_listen_ports"] == [8080], state["tcp_listen_ports"]
+            assert state["tcp_listen_ports"] == [14030], state["tcp_listen_ports"]
             assert state["notify_access"] == "main" and state["kill_mode"] == "mixed"
             if restarts is not None:
                 assert state["restarts"] == restarts

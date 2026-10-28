@@ -156,7 +156,7 @@ def main(binary, report_path, systemd_image=None):
                         "public_url": interop.DATA_URL,
                         "state_socket": str(root / "state.sock"), "control_socket": str(root / "control.sock")}
             if linux:
-                settings.update(data_dir="/var/lib/aiagent-gateway", port=8080,
+                settings.update(data_dir="/var/lib/aiagent-gateway", port=14030,
                                 state_socket="/run/aiagent-gateway/state.sock",
                                 control_socket="/run/aiagent-gateway-control/controller.sock")
             write_private(cfg, json.dumps(settings))

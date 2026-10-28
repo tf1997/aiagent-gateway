@@ -279,7 +279,7 @@ A2A 首次请求可能尚无 context ID，允许先选实例，在上游返回 c
 以下为首版路径。下一阶段统一为 `/agents/{appId}`，A2A 使用该基础地址下的 `/a2a` 和 `/.well-known/agent-card.json`；完整契约及旧路径兼容见 [开发方案](docs/HERMES_A2A_V1_DEVELOPMENT_PLAN.md#34-对外地址契约)，尚未实现。
 
 ```text
-:8080
+:14030
 POST /a2a/{routeKey}                        A2A 协议入口
 ANY  /proxy/{routeKey}/{path...}             HTTP / SSE 代理
 GET  /agents/{routeKey}/.well-known/agent-card.json
@@ -295,7 +295,7 @@ GET  /readyz
 与数据面共用 HTTP 端口，管理接口与指标保持管理员鉴权。
 
 ```text
-:8080
+:14030
 POST   /admin/v1/routes
 GET    /admin/v1/routes
 GET    /admin/v1/routes/{key}

@@ -40,7 +40,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
-		DataDir: "./data", Port: "8080",
+		DataDir: "./data", Port: "14030",
 		MaxInflight: 4096, MaxPerCaller: 1024, MaxPerEndpoint: 256,
 		MaxSessions: 100000, MaxTasks: 100000, MaxResources: 200000,
 		MaxResourceAliases: 200000, MaxDataIdempotency: 100000,

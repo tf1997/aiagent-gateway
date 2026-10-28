@@ -1,9 +1,9 @@
 # Copy to config.yaml and replace the example tokens.
 # Relative paths are resolved from this file's directory.
 # One HTTP port for agents, administration and metrics; listens on all interfaces.
-port: 8080
+port: 14030
 data_dir: "./data"
-public_url: "http://127.0.0.1:8080"
+public_url: "http://127.0.0.1:14030"
 admin_token: "replace-with-admin-secret"
 # Consumer and upstream tokens are configured in POST /admin/v1/routes.
 # Upstream Bearer tokens belong in endpoints[].interfaces.<proxy|a2a>.token.

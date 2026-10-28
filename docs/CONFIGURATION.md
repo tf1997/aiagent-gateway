@@ -33,13 +33,13 @@ go build -o bin/aiagent-gateway ./cmd/gateway
 最小实用配置：
 
 ```yaml
-port: 8080
+port: 14030
 data_dir: "./data"
-public_url: "http://127.0.0.1:8080"
+public_url: "http://127.0.0.1:14030"
 admin_token: "replace-with-admin-secret"
 ```
 
-`port` 填写 1–65535 的端口号，支持数字或带引号的数字，不填写 IP 或冒号。Agent、管理接口和 `/metrics` 共用监听器，默认地址为 `:8080`，监听所有网卡。远程管理访问 `http://<网关IP或域名>:8080/admin/v1/...`，请求携带 `Authorization: Bearer <admin_token>`。
+`port` 填写 1–65535 的端口号，支持数字或带引号的数字，不填写 IP 或冒号。Agent、管理接口和 `/metrics` 共用监听器，默认地址为 `:14030`，监听所有网卡。远程管理访问 `http://<网关IP或域名>:14030/admin/v1/...`，请求携带 `Authorization: Bearer <admin_token>`。
 
 `admin_port` 已移除，旧配置需删除该字段；未知字段仍会被拒绝。
 
@@ -78,7 +78,7 @@ YAML 保存管理 Token 和进程设置，**不接受 `callers` 或 `credentials
 | YAML 字段 | 默认值 | 用途 |
 | --- | --- | --- |
 | `admin_token` | 必填 | 管理及本机控制认证 |
-| `port` | `8080` | Agent、管理接口和指标共用的 HTTP 端口，监听所有网卡 |
+| `port` | `14030` | Agent、管理接口和指标共用的 HTTP 端口，监听所有网卡 |
 | `data_dir` | `./data` | 路由与共享状态目录 |
 | `public_url` | 空 | A2A Card 对外基础地址；使用 Card 时必须设置 |
 | `max_inflight` | 4096 | 全局并发上限 |

@@ -43,7 +43,7 @@ GATEWAY_CALLER_TOKEN='replace-with-caller-secret'
 创建一个普通代理路由：
 
 ```sh
-curl http://localhost:8080/admin/v1/routes \
+curl http://localhost:14030/admin/v1/routes \
   -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: research-v1' \
@@ -62,7 +62,7 @@ curl http://localhost:8080/admin/v1/routes \
 路由默认启用会话粘性，同一调用方使用相同会话 ID 会命中原实例：
 
 ```sh
-curl -N http://localhost:8080/agents/research/chat \
+curl -N http://localhost:14030/agents/research/chat \
   -H 'Authorization: Bearer replace-with-caller-secret' \
   -H 'X-Session-ID: session-001' \
   -H 'Content-Type: application/json' \
@@ -135,7 +135,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/aiagent-gateway-linux-amd6
 - 不同版本先验证真实 HTTP/SSE/A2A 样本，再全量观察、排空与交接状态 owner；失败在提交前回退，CLI 退出不取消后台任务。同一健康产物直接成功，活动任务重复提交复用原任务。
 - 冷启动遵守 COMMITTED 决定；卸载保留配置、业务状态、决定和版本归档，重装恢复已提交版本。详细步骤见 [灰度操作说明](docs/ROLLOUT_OPERATIONS.md)。
 
-默认 HTTP 端口为 `:8080`，监听所有网卡。Agent 请求、`/admin/v1/...` 和 `/metrics` 共用该端口；管理接口与指标使用管理 Token。通过 `port` 统一修改监听端口。
+默认 HTTP 端口为 `:14030`，监听所有网卡。Agent 请求、`/admin/v1/...` 和 `/metrics` 共用该端口；管理接口与指标使用管理 Token。通过 `port` 统一修改监听端口。
 
 消费者只在路由 consumers 中动态登记，不生成默认全路由消费者。通过 root 编辑 YAML 调整管理 Token 和 `public_url`；后者应改为客户端实际可访问的地址。上游 Token 在路由各接口的 `token` 中动态配置。unit 通过 LoadCredential 将配置交给服务进程读取，原文件维持 root 专属权限，不作为 shell 脚本执行。启动字段见 [配置说明](docs/CONFIGURATION.md)。
 
@@ -178,15 +178,15 @@ POST 更新保留未提供的路由字段；提供 `endpoints` 时按完整列�
 例如直接按 key 修改超时、查询和删除无需引用的路由：
 
 ```sh
-curl -fsS http://127.0.0.1:8080/admin/v1/routes \
+curl -fsS http://127.0.0.1:14030/admin/v1/routes \
   -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"key":"research","timeout":{"response_header_ms":180000}}'
 
-curl -fsS http://127.0.0.1:8080/admin/v1/routes/research \
+curl -fsS http://127.0.0.1:14030/admin/v1/routes/research \
   -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN"
 
-curl -fsS -X DELETE http://127.0.0.1:8080/admin/v1/routes/research \
+curl -fsS -X DELETE http://127.0.0.1:14030/admin/v1/routes/research \
   -H "Authorization: Bearer $GATEWAY_ADMIN_TOKEN"
 ```
 
@@ -231,7 +231,7 @@ Card 位于 `/agents/{appId}/.well-known/agent-card.json`，JSON-RPC/SSE 位于 
 请求示例（先创建路由并配置 A2A 1.0 上游）：
 
 ```sh
-curl -X POST http://localhost:8080/agents/research/a2a \
+curl -X POST http://localhost:14030/agents/research/a2a \
   -H "Authorization: Bearer $GATEWAY_CALLER_TOKEN" \
   -H 'Content-Type: application/json' -H 'A2A-Version: 1.0' \
   -d '{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{"message":{"messageId":"m-1","role":"ROLE_USER","parts":[{"text":"你好"}]},"configuration":{"returnImmediately":true}}}'

@@ -22,7 +22,7 @@ func TestLoadYAMLDefaultsPathsAndEnvironmentIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.AdminToken != "admin-secret" || c.Port != "8080" || c.MaxInflight != 4096 {
+	if c.AdminToken != "admin-secret" || c.Port != "14030" || c.MaxInflight != 4096 {
 		t.Fatal("YAML defaults were overridden")
 	}
 	if c.DataDir != filepath.Join(dir, "data") || c.StateSocket != filepath.Join(dir, "run/state.sock") {
@@ -35,7 +35,7 @@ func TestLoadYAMLDefaultsPathsAndEnvironmentIgnored(t *testing.T) {
 
 func TestListenerPorts(t *testing.T) {
 	for _, tt := range []struct{ name, config, address string }{
-		{"defaults", "", ":8080"},
+		{"defaults", "", ":14030"},
 		{"numeric_port", "port: 18080\n", ":18080"},
 		{"quoted_port", "port: \"18080\"\n", ":18080"},
 		{"minimum_port", "port: 1\n", ":1"},

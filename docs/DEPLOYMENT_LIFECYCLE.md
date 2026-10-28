@@ -4,7 +4,7 @@
 
 ## 运行方式
 
-Agent 请求、管理 API 和指标共用一个 HTTP listener，由 YAML 的 port 配置，默认 8080。管理 API 和 /metrics 继续要求管理 Token；发布控制使用本机控制 UDS。admin_port 已删除，含该字段的配置会被拒绝。
+Agent 请求、管理 API 和指标共用一个 HTTP listener，由 YAML 的 port 配置，默认 14030。管理 API 和 /metrics 继续要求管理 Token；发布控制使用本机控制 UDS。admin_port 已删除，含该字段的配置会被拒绝。
 
 候选继承布局为一个 HTTP socket、一个控制 UDS、只读配置和私有握手通道，候选协议版本为 3。旧双端口版本与此布局不兼容，不能混合热换版；本轮不自动迁移旧部署。单端口版本之间的连续换版、失败回退和冷启动恢复已验证。
 
@@ -25,7 +25,7 @@ systemd 管理 `aiagent-gateway.service`，运行用户为非 root 的 `aiagent-
 sudo ./gateway-linux-arm64 install
 sudo aiagent-gateway rollout status --json
 sudo systemctl status aiagent-gateway.service
-curl -fsS http://127.0.0.1:8080/readyz
+curl -fsS http://127.0.0.1:14030/readyz
 ```
 
 安装器需要 `systemctl`、`getent`、`groupadd` 和 `useradd`。root 暂存 SHA-256 命名的只读产物，创建专用账户、管理 CLI、YAML 凭据、部署清单和两个 unit。一次性 init 只在配置存储缺失时运行。已有凭据和业务文件保留，损坏或不完整的既有部署拒绝自动重置。
