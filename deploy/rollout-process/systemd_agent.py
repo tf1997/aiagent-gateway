@@ -103,10 +103,12 @@ class LinuxGateway:
 
     def stable(self, artifact, previous=None, restarts=None):
         def check():
-            state = self.inspect()
             identity = self.control(path="/control/v1/identity")
             if not identity["ready"] or identity["release"] != Path(artifact).parent.name:
                 return False
+            # Sample sockets after readiness: startup can open the listener
+            # between an earlier /proc snapshot and the control response.
+            state = self.inspect()
             pid = identity["pid"]
             if state["main_pid"] != pid or state["pids"] != [pid] or pid == previous:
                 return False

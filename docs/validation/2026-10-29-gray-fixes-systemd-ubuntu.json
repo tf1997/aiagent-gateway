@@ -1,0 +1,44 @@
+{
+  "systemd": "systemd 255 (255.4-1ubuntu8.18)",
+  "release_windows_ms": {
+    "samples": 4,
+    "p50": 310,
+    "p95": 362,
+    "p99": 362
+  },
+  "snapshot_bytes": [
+    487629,
+    1067850,
+    597434,
+    1224450
+  ],
+  "request_ms": {
+    "samples": 692,
+    "p50": 3.211,
+    "p95": 5.26,
+    "p99": 22.184
+  },
+  "handoff_request_ms": {
+    "samples": 32,
+    "p50": 3.642,
+    "p95": 46.392,
+    "p99": 56.52
+  },
+  "queue_timeouts": 0,
+  "queue_rejected": 0,
+  "peak_rss_kib": 74392,
+  "peak_fds": 40,
+  "peak_service_pids": 2,
+  "request_failures": 0,
+  "passed": true,
+  "extra_release_cycles": 0,
+  "scope": "small-state serial HTTP workload; not a production capacity ceiling",
+  "cleanup": {
+    "active_cleanup_refused": true,
+    "obsolete_releases_removed": 2,
+    "recent_releases_retained": 2,
+    "orphan_removed": true
+  },
+  "source_commit": "77335d81482f0ba67f2c3065c08840c07bb2bc3a",
+  "source_modified": true
+}

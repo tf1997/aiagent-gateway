@@ -314,6 +314,14 @@ func (c *ProcessController) gate(ctx context.Context, min int, direct bool) (boo
 	if err != nil || !id.Ready || id.Incarnation != r.Candidate.Incarnation || id.ConfigRevision != n.Identity().ConfigRevision {
 		return false, "candidate_unhealthy"
 	}
+	return c.resultGate(min, direct)
+}
+
+// resultGate only reads owner evidence, so it can also run with state calls
+// sealed immediately before the source yields its writer lock.
+func (c *ProcessController) resultGate(min int, direct bool) (bool, string) {
+	n := c.service.node.Load()
+	r := &c.report
 	stats := n.entry.Stats(r.SampleSince, r.Candidate.Incarnation)
 	r.Stats = stats
 	if stats.Lost {
@@ -433,19 +441,39 @@ func (c *ProcessController) Tick(ctx context.Context) error {
 			}
 		}
 	case "DRAINING":
-		_, why := c.gate(ctx, 0, false)
+		ok, why := c.gate(ctx, 0, false)
 		if why != "" {
 			c.rollback(why)
 			break
 		}
-		if n.entry.LocalActive() == 0 && n.Identity().Inflight == 0 {
+		if ok && n.entry.LocalActive() == 0 && n.Identity().Inflight == 0 {
 			r.SourceIdentity = n.Identity()
 			c.phase("HANDOFF")
 		} else if time.Since(r.Since) >= time.Duration(r.Policy.DrainSeconds)*time.Second {
+			if !ok {
+				return c.recovery("result_observation_incomplete", "DRAINING")
+			}
 			return c.recovery("source_drain_timeout", "DRAINING")
 		}
 	case "HANDOFF":
-		transition, err := n.TransferHandoff(ctx, n.candidate, r.HandoffID, r.ID, n.policy.SnapshotBytes)
+		ok, why := c.gate(ctx, 0, false)
+		if why != "" {
+			c.rollback(why)
+			break
+		}
+		if !ok {
+			return c.recovery("result_observation_incomplete", "DRAINING")
+		}
+		transition, err := n.transferHandoff(ctx, n.candidate, r.HandoffID, r.ID, n.policy.SnapshotBytes, func() error {
+			ok, why := c.resultGate(0, false)
+			if why != "" {
+				return fmt.Errorf("%s", why)
+			}
+			if !ok {
+				return fmt.Errorf("result_observation_incomplete")
+			}
+			return nil
+		})
 		if transition.Source != nil {
 			s.setOwner(transition.Source)
 			if err != nil {

@@ -1,5 +1,28 @@
 # 验证记录
 
+## 灰度边界修复后的 Linux/systemd 与真实 Agent 复验（2026-10-29）
+
+续接会话后按“实机验收”要求重新构建当前工作区，在既有 Docker Linux arm64 环境执行验收。使用 `77335d8` 加上下面七项修复的未提交源码；[初始源码指纹](docs/validation/2026-10-29-gray-fixes-source.json)和[最终源码指纹](docs/validation/2026-10-29-gray-fixes-final-source.json)记录输入，二者只相差本轮验收脚本的就绪检查顺序。三轮真实 Agent 验收的两份网关产物 SHA-256 均一致。
+
+- [Debian 12 / systemd 252.39](docs/validation/2026-10-29-gray-fixes-systemd-debian.json)与 [Ubuntu 24.04 / systemd 255.4](docs/validation/2026-10-29-gray-fixes-systemd-ubuntu.json)完整生命周期均通过：正式安装、非 root/凭据、A→B→C、活动 SSE 排空、CLI 断开继续、失败候选回退、SIGKILL 恢复、双进程 stop/start、保留状态卸载重装、容器重启及启动清理。分别完成 676 / 692 次串行模拟请求，意外失败、队列超时和拒绝均为 0，服务进程峰值均为 2。使用 `deploy/rollout-systemd/process.py --reuse-image`，Ubuntu 另指定 `--image aiagent-gateway-systemd-test:noble`，未增加长时发布轮次。
+- [Linux 非 root 回归](docs/validation/2026-10-29-gray-fixes-linux-regressions.json)以 UID 65534、禁用外部网络运行 entry、shared、process 三个完整包，共 74 个顶层测试通过。二进制由 Go 1.24.4 以 `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c` 构建，执行 `-test.count=1 -test.v -test.timeout=180s`。覆盖公共 HTTP 入口在交接前及快照传输期间的 200/500/302、异常不得 COMMITTED 且源 owner 可用、完整回退、unknown 到期及 resume 保留证据、恢复后租约归零、业务失败不被下游写失败覆盖、只读取消/epoch 保护、回执乱序和锁/释放等待超时。这是 Linux 功能回归，竞态检测沿用修复阶段的 macOS 全量结果。
+- [真实 Hermes 最终整轮](docs/validation/2026-10-29-gray-fixes-real-agent-passed.json)取得 `passed=true`，使用 `deploy/rollout-process/agent.py --systemd` 和固定镜像的两个隔离实例，保持原模型配置、安全策略及全部断言。发布前 HTTP/SSE/A2A/A2A SSE、会话记忆、分页与调用方隔离通过；缺候选样本时自动回退且保留源进程，重新发布后补齐直接入口样本并 resume 一次，最终 `COMPLETED` 且 `committed=true`。最终 HTTP/SSE/A2A/A2A SSE 直接入口成功数为 6/2/3/1，另有 3 个 excluded，失败、unknown 和活动请求均为 0，证据无丢失。
+- 最终整轮 MainPID 179→327，正常发布的 systemd 重启数为 0，接管后剩一个非 root 服务进程；容器重启后 MainPID 为 74，继续选中已提交产物。启动、接管及重启后的实际 TCP LISTEN 端口均为 `[14030]`。交接后及重启后，原 HTTP 历史、A2A task/context ID 和调用方隔离均通过；活动租约归零，启动清理删除两个过期额外产物和临时快照并保留两个近期产物。快照 487591 字节，交接窗口 286 ms，整轮 213.595 秒。
+
+失败轮单独保留：[首轮](docs/validation/2026-10-29-gray-fixes-real-agent-recall-failed.json)在发布前 A2A 第二轮回复未包含随机展览名称，任务/context 身份及流终态检查已通过，未据此归因于灰度切换；未改变提示词、模型或回忆断言，后续独立运行通过。[第二轮](docs/validation/2026-10-29-gray-fixes-real-agent-reboot-listener-failed.json)已完成换版和交接后资源验证，在重启检查中断言监听列表为 `[]`。脚本原先先采集 `/proc` 再确认 ready，两次采集跨越启动时可能使用过早的端口快照；现先确认 ready，再采集进程和端口，保留端口必须恰为 `[14030]` 的断言。调整后第三轮通过，包括重启及资源恢复；原失败报告未改写为成功。
+
+本轮只新增报告、文档并调整上述验收脚本，七项 Go 修复未再改动。所有临时测试容器和网络均已清理。Debian 与 Ubuntu 共享 Linux 6.10.14-linuxkit 内核，本次属于真实 Linux/systemd 容器环境验收；物理断电、生产物理机与长期容量仍不在本轮范围。
+
+## 灰度判定与共享状态边界修复（2026-10-29）
+
+修复审查确认的七项问题：交接阶段漏检失败、排空忽略未知结果、下游写失败覆盖业务失败、恢复调用遗漏租约释放补偿、只读请求取消导致客户端持续失效、回执淘汰误拒绝仍在 discovery 的已接纳请求，以及本地分发等待锁不响应 deadline。
+
+- 控制器在进入 HANDOFF 时检查候选与结果，并在最终状态封闭、候选验证完成后再次检查结果；快照传输期间新增的 500 或 unknown 会中止交接并回退。DRAINING 遇到 unknown 保留等待，到期报告 `result_observation_incomplete`，resume 保留原有证据。
+- `resume_calls` 重试原操作 ID 的待释放租约，并返回补偿错误；重复恢复不会重复释放。补偿等待另一次释放时也遵守调用期限。只读调用失败后可继续调用，写操作结果不确定和意外 epoch 变化仍保留客户端失效保护。
+- 分发器在 discovery 前登记操作身份；并发重试共享结果，冲突指纹被拒绝。已接纳操作不会被后续回执淘汰误拒绝，已淘汰的完成操作仍拒绝重放；登记状态由已有屏障排空，无须修改交接快照格式。分发锁等待在 discovery 前后均可取消。
+- 新增真实候选子进程与公共 HTTP 入口回归，覆盖交接前及快照传输期间的正常响应、500 和 302；异常后确认没有 COMMITTED、源 owner 可用且回退完成，正常结果仍可提交。另覆盖 unknown 超时/resume、恢复后租约归零、失败与取消结果合并、远程取消及 epoch 保护、回执乱序/并发重试、分发与补偿等待超时。
+- `go test ./...`、`go test -race -count=1 ./...`、`go vet ./...` 通过。全量竞态包括已有连续交接、活动 SSE、状态恢复和集成测试；本轮在 macOS arm64 / Go 1.24.4 执行，没有重新进行 Linux/systemd 或真实 Hermes 联合验收。
+
 ## 管理与业务共用 HTTP 端口（2026-10-27）
 
 移除 admin_port 配置与独立管理 listener；默认通过同一 8080 端口访问 Agent、/admin/v1/... 和 /metrics。管理接口与指标保留管理 Token 鉴权，调用方 Token 无管理权限。前台、完整 process、正式 systemd 服务及候选进程统一使用同一套分发；管理请求单独设置 I/O 期限并在返回时清除，SSE 没有继承管理响应期限。发布控制仍通过 UDS 验证本机 UID 与凭据。

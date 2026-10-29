@@ -2,8 +2,11 @@ package shared
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestReceiptEvictionDoesNotRepeatOperationAcrossHandoff(t *testing.T) {
@@ -58,6 +61,63 @@ func TestReceiptEvictionDoesNotRepeatOperationAcrossHandoff(t *testing.T) {
 	}
 	if restored.Load() != 0 || executions.Load() != 1 {
 		t.Fatal("lease accounting changed")
+	}
+}
+
+func TestReceiptEvictionPreservesAdmittedDiscoveryAndDeduplicatesRetries(t *testing.T) {
+	var count, executions atomic.Int64
+	backend := transferBackend(&count, &executions)
+	discovering, discovered := make(chan struct{}), make(chan struct{})
+	backend.Discover = func(context.Context, Request) { close(discovering); <-discovered }
+	s := NewServer("token", backend)
+	c := NewLocalClient(s, "candidate")
+	defer c.Close()
+	unblock := sync.OnceFunc(func() { close(discovered) })
+	defer unblock()
+	q := Request{ID: c.operationID()}
+	completed := make(chan Response, 1)
+	go func() {
+		var out Response
+		if err := c.Call("acquire", q, &out); err != nil {
+			out.Error = err.Error()
+		}
+		completed <- out
+	}()
+	<-discovering
+	for i := 0; i < 8193; i++ {
+		if err := c.Call("release", Request{Lease: "missing"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A duplicate waits on the original admitted operation, even after its
+	// sequence falls below the retirement floor. Cancelling that waiter must
+	// neither cancel the original nor execute its mutation a second time.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := c.CallContext(ctx, "acquire", q, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("in-flight retry did not retain cancellable identity", err)
+	}
+	conflict := q
+	conflict.Owner = "changed"
+	if err := c.Call("acquire", conflict, nil); err == nil || err.Error() != "OPERATION_CONFLICT" {
+		t.Fatal("in-flight fingerprint conflict accepted", err)
+	}
+	unblock()
+	out := <-completed
+	if out.Error != "" || out.Lease == "" || executions.Load() != 1 {
+		t.Fatal("admitted operation was rejected or repeated", out, executions.Load())
+	}
+	var replay Response
+	if err := c.Call("acquire", q, &replay); err != nil || replay.Lease != out.Lease || executions.Load() != 1 {
+		t.Fatal("completed retry did not use its receipt", err, replay)
+	}
+	for i := 0; i < 8192; i++ {
+		if err := c.Call("release", Request{Lease: "missing"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Call("acquire", q, nil); err == nil || err.Error() != "OPERATION_RESULT_UNKNOWN" || executions.Load() != 1 {
+		t.Fatal("retired operation reused in-flight eligibility", err, executions.Load())
 	}
 }
 

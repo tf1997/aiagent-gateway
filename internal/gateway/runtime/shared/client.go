@@ -38,7 +38,7 @@ type Client struct {
 }
 
 type pendingRelease struct {
-	mu      sync.Mutex
+	mu      contextMutex
 	request Request
 	done    bool
 }
@@ -86,6 +86,9 @@ func (c *Client) CallContext(ctx context.Context, action string, q Request, out 
 	if err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.local != nil {
 		var copy Request
 		if err = json.Unmarshal(raw, &copy); err != nil {
@@ -102,6 +105,9 @@ func (c *Client) CallContext(ctx context.Context, action string, q Request, out 
 		res, err := c.client.Do(req)
 		if err != nil {
 			last = err
+			if ctx.Err() != nil {
+				break
+			}
 			continue
 		}
 		var v Response
@@ -117,7 +123,11 @@ func (c *Client) CallContext(ctx context.Context, action string, q Request, out 
 		}
 		return c.accept(v, out)
 	}
-	c.failed.Store(true)
+	// A lost mutation reply is still uncertain; a read can be retried on the
+	// next call without dropping epoch validation or fencing the whole worker.
+	if !readOnlyAction(action) {
+		c.failed.Store(true)
+	}
 	return fmt.Errorf("SHARED_STATE_UNAVAILABLE: %w", last)
 }
 
@@ -149,7 +159,7 @@ func (c *Client) accept(v Response, out *Response) error {
 }
 
 func resourceError(s string) error {
-	for _, e := range []error{protocol.ErrResourceNotFound, protocol.ErrResourceConflict, protocol.ErrResourceCapacity, protocol.ErrResourceInUse, protocol.ErrResourceInvalid} {
+	for _, e := range []error{context.Canceled, context.DeadlineExceeded, protocol.ErrResourceNotFound, protocol.ErrResourceConflict, protocol.ErrResourceCapacity, protocol.ErrResourceInUse, protocol.ErrResourceInvalid} {
 		if e.Error() == s {
 			return e
 		}
@@ -204,7 +214,9 @@ func operationSequence(id string) (string, uint64) {
 }
 
 func (c *Client) retryRelease(ctx context.Context, op *pendingRelease) error {
-	op.mu.Lock()
+	if err := op.mu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer op.mu.Unlock()
 	if op.done {
 		return nil
@@ -222,7 +234,7 @@ func (c *Client) retryRelease(ctx context.Context, op *pendingRelease) error {
 
 // RetryReleases retries only state receipts, with the original operation ID.
 // A timeout during sealing must not turn a live lease into a forgotten release.
-// The coordinator calls this after adopting and resuming the new dispatcher.
+// The coordinator calls this after resuming the original or adopted dispatcher.
 func (c *Client) RetryReleases(ctx context.Context) error {
 	c.pendingMu.Lock()
 	var pending []*pendingRelease

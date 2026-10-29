@@ -23,6 +23,17 @@ type Request struct {
 	Cache                                                             protocol.ListSnapshot
 }
 
+// These operations have no mutation receipt whose uncertain outcome would
+// require fencing the client. Epoch validation still applies to every call.
+func readOnlyAction(action string) bool {
+	switch action {
+	case "config", "status", "resolve", "list", "lookup", "cache_get":
+		return true
+	default:
+		return false
+	}
+}
+
 type ResourcePair struct {
 	Key   protocol.ResourceReverseKey
 	Value protocol.Resource

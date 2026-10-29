@@ -538,7 +538,7 @@ func (e *Entry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else if failed != "" || panicked {
 			result.Verdict = "failure"
 			result.Reason = failed
-		} else if rw.err != nil {
+		} else if rw.err != nil && result.Verdict != "failure" {
 			result.Verdict = "excluded"
 			result.Reason = "client_cancelled"
 		}

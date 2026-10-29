@@ -24,6 +24,10 @@ type Transition struct {
 // yielding, and resolves any uncertain commit through the ownership protocol.
 // A returned error never authorizes callers to reopen the original runtime.
 func (n *Gateway) TransferHandoff(ctx context.Context, candidate *CandidateProcess, id, rollout string, maxBytes int) (Transition, error) {
+	return n.transferHandoff(ctx, candidate, id, rollout, maxBytes, nil)
+}
+
+func (n *Gateway) transferHandoff(ctx context.Context, candidate *CandidateProcess, id, rollout string, maxBytes int, checkResults func() error) (Transition, error) {
 	result := Transition{Source: n}
 	if !n.StorageHealthy() {
 		return Transition{}, fmt.Errorf("SOURCE_NOT_READY")
@@ -78,6 +82,18 @@ func (n *Gateway) TransferHandoff(ctx context.Context, candidate *CandidateProce
 			n.StopIngress()
 		}
 		return result, errors.Join(err, abortErr)
+	}
+	// Preview transmission leaves business calls open. Recheck their final
+	// evidence under the sealed owner barrier before yielding irreversibly.
+	if checkResults != nil {
+		if err = checkResults(); err != nil {
+			abortErr := n.AbortHandoff(d.ID)
+			result.Decision = n.owner.Decision()
+			if abortErr != nil {
+				n.StopIngress()
+			}
+			return result, errors.Join(err, abortErr)
+		}
 	}
 	if err = barrierCtx.Err(); err != nil {
 		abortErr := n.AbortHandoff(d.ID)

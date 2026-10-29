@@ -198,9 +198,9 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 			c.callsSealed = true
 		}
 	case "resume_calls":
-		_ = c.client.ResumeCalls()
-		_ = c.allocator.gate.Resume()
-		c.callsSealed = false
+		if err := c.resumeCalls(ctx); err != nil {
+			return reply, err
+		}
 	case "stats":
 		if c.owner == nil {
 			return reply, fmt.Errorf("CANDIDATE_NOT_COMMITTED")
@@ -368,10 +368,7 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		if err = c.client.RestoreRemote(ctx, actual.Epoch); err != nil {
 			return reply, err
 		}
-		_ = c.client.ResumeCalls()
-		_ = c.allocator.gate.Resume()
-		c.callsSealed = false
-		if err = c.client.RetryReleases(ctx); err != nil {
+		if err = c.resumeCalls(ctx); err != nil {
 			return reply, err
 		}
 		c.receiver, c.verified, c.decision = nil, false, handoff.Decision{}
@@ -404,6 +401,17 @@ func (c *Candidate) command(ctx context.Context, m peerMessage) (peerMessage, er
 		reply.Policy = &c.boot.Policy
 	}
 	return reply, nil
+}
+
+func (c *Candidate) resumeCalls(ctx context.Context) error {
+	if err := c.client.ResumeCalls(); err != nil {
+		return err
+	}
+	if err := c.allocator.gate.Resume(); err != nil {
+		return err
+	}
+	c.callsSealed = false
+	return c.client.RetryReleases(ctx)
 }
 
 // activate is serialized with commands, including recovery after a lost reply.

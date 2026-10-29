@@ -1,0 +1,110 @@
+{
+  "passed": false,
+  "agent": "nousresearch/hermes-agent@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "checks": {
+    "agent_startup_0": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.616
+    },
+    "agent_startup_1": {
+      "startup_restore_complete": true,
+      "wait_seconds": 21.587
+    },
+    "systemd_before": {
+      "main_pid": 179,
+      "pids": [
+        179
+      ],
+      "uids": [
+        986
+      ],
+      "tcp_listen_ports": [
+        14030
+      ],
+      "service_uid": 986,
+      "restarts": 0,
+      "notify_access": "main",
+      "kill_mode": "mixed",
+      "systemd": "systemd 252 (252.39-1~deb12u2)",
+      "kernel": "6.10.14-linuxkit",
+      "arch": "aarch64",
+      "filesystem": "overlayfs"
+    },
+    "preflight": {
+      "card_url": "http://127.0.0.1:55363/agents/hermes-local/a2a",
+      "streaming": true,
+      "capabilities_received": true,
+      "shared_port_management": true,
+      "management_authentication": true,
+      "metrics": true
+    },
+    "before_http": {
+      "session_id": "session_e495213fef39264493e2370d28524a06",
+      "history_messages": 4,
+      "recall": true,
+      "sse": {
+        "first_event_seconds": 0.009,
+        "total_seconds": 15.0,
+        "event_count": 15
+      },
+      "event_types": [
+        "assistant.completed",
+        "assistant.delta",
+        "done",
+        "message.started",
+        "run.completed",
+        "run.started",
+        "tool.progress"
+      ]
+    }
+  },
+  "started_at": "2026-10-29T06:00:32.094170+00:00",
+  "source_commit": "77335d81482f0ba67f2c3065c08840c07bb2bc3a",
+  "source_modified": true,
+  "artifact_sha256": [
+    "4c7860e86ddaaa8bd59efeaa4f3ae0cbf480357a7fc38e8c17edc8fa6a754a34",
+    "ed5bc73c78d01630915b4a7c93d71784ca759549ddbe62ca3e6fba9e5744c57e"
+  ],
+  "error_type": "CheckFailure",
+  "failed_check": "before_a2a",
+  "check_error": "Second A2A turn did not recall the first turn's code",
+  "diagnostics": {
+    "context_identity_preserved": true,
+    "task_identity_preserved": true,
+    "reply_text_bytes": 47,
+    "states": [
+      "TASK_STATE_SUBMITTED",
+      "TASK_STATE_WORKING",
+      "TASK_STATE_COMPLETED"
+    ]
+  },
+  "upstream_task_diagnostics": [
+    {
+      "endpoint": "isolated-0",
+      "tasks": [
+        {
+          "state": "TASK_STATE_COMPLETED",
+          "text_bytes": 95,
+          "artifact_count": 1,
+          "history_count": 0
+        },
+        {
+          "state": "TASK_STATE_COMPLETED",
+          "text_bytes": 1003,
+          "artifact_count": 1,
+          "history_count": 0
+        }
+      ]
+    },
+    {
+      "endpoint": "isolated-1",
+      "tasks": []
+    }
+  ],
+  "timing": {
+    "wall_seconds": 116.912,
+    "monotonic_seconds": 116.912,
+    "clock_difference_seconds": -0.0
+  },
+  "finished_at": "2026-10-29T06:02:29.005782+00:00"
+}

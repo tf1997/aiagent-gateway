@@ -42,7 +42,9 @@ type Server struct {
 	previousEpoch string
 	token         string
 	backend       Backend
-	mu            sync.Mutex
+	mu            contextMutex
+	callsMu       sync.Mutex
+	calls         map[string]*stateCall
 	leases        Leases
 	replies       map[string]cachedReply
 	order         []string
@@ -51,6 +53,16 @@ type Server struct {
 
 type cachedReply struct {
 	fingerprint string
+	response    Response
+}
+
+// An admitted call remains eligible even if later receipts advance its
+// stream's retirement floor during discovery. Concurrent retries share this
+// result; they cannot use that eligibility to execute an old operation again.
+// The barrier drains these calls before any image is exported.
+type stateCall struct {
+	fingerprint string
+	done        chan struct{}
 	response    Response
 }
 
@@ -132,39 +144,75 @@ func (s *Server) dispatch(ctx context.Context, q Request) (out Response) {
 	if err := ctx.Err(); err != nil {
 		return Response{Error: err.Error()}
 	}
-	if (q.Action == "acquire" || q.Action == "reserve") && s.backend.Discover != nil {
-		s.backend.Discover(ctx, q)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer func() { out = copyResponse(out) }()
-	if err := ctx.Err(); err != nil {
-		return Response{Epoch: s.epoch, Error: err.Error()}
-	}
 	key := q.Worker + "/" + q.ID
 	semantic := q
 	semantic.Epoch = ""
 	raw, _ := json.Marshal(semantic)
 	sum := sha256.Sum256(raw)
 	fingerprint := hex.EncodeToString(sum[:])
+	if err := s.mu.LockContext(ctx); err != nil {
+		return Response{Error: err.Error()}
+	}
+	epoch := s.epoch
 	if q.Epoch != "" && q.Epoch != s.epoch {
-		return Response{Epoch: s.epoch, Error: "STATE_GENERATION_CHANGED"}
+		s.mu.Unlock()
+		return Response{Epoch: epoch, Error: "STATE_GENERATION_CHANGED"}
 	}
 	if old, ok := s.replies[key]; ok {
+		s.mu.Unlock()
 		if old.fingerprint != fingerprint {
-			return Response{Epoch: s.epoch, Error: "OPERATION_CONFLICT"}
+			return Response{Epoch: epoch, Error: "OPERATION_CONFLICT"}
 		}
 		out = old.response
-		out.Epoch = s.epoch
-		return out
+		out.Epoch = epoch
+		return copyResponse(out)
 	}
-	readOnly := q.Action == "config" || q.Action == "status" || q.Action == "resolve" || q.Action == "list" || q.Action == "lookup" || q.Action == "cache_get"
-	stream, sequence := operationSequence(q.ID)
-	if floor, retired := s.retired[q.Worker+"/"+stream]; retired && !readOnly {
-		if sequence <= floor {
-			return Response{Epoch: s.epoch, Error: "OPERATION_RESULT_UNKNOWN"}
+	readOnly := readOnlyAction(q.Action)
+	if !readOnly {
+		s.callsMu.Lock()
+		if call := s.calls[key]; call != nil {
+			s.callsMu.Unlock()
+			s.mu.Unlock()
+			if call.fingerprint != fingerprint {
+				return Response{Epoch: epoch, Error: "OPERATION_CONFLICT"}
+			}
+			select {
+			case <-ctx.Done():
+				return Response{Epoch: epoch, Error: ctx.Err().Error()}
+			case <-call.done:
+				return copyResponse(call.response)
+			}
 		}
+		stream, sequence := operationSequence(q.ID)
+		if floor, retired := s.retired[q.Worker+"/"+stream]; retired && sequence <= floor {
+			s.callsMu.Unlock()
+			s.mu.Unlock()
+			return Response{Epoch: epoch, Error: "OPERATION_RESULT_UNKNOWN"}
+		}
+		call := &stateCall{fingerprint: fingerprint, done: make(chan struct{})}
+		if s.calls == nil {
+			s.calls = make(map[string]*stateCall)
+		}
+		s.calls[key] = call
+		s.callsMu.Unlock()
+		out = Response{Epoch: epoch, Error: "STATE_OPERATION_INTERRUPTED"}
+		defer func() {
+			s.callsMu.Lock()
+			call.response = copyResponse(out)
+			delete(s.calls, key)
+			close(call.done)
+			s.callsMu.Unlock()
+		}()
 	}
+	s.mu.Unlock()
+	if (q.Action == "acquire" || q.Action == "reserve") && s.backend.Discover != nil {
+		s.backend.Discover(ctx, q)
+	}
+	if err := s.mu.LockContext(ctx); err != nil {
+		return Response{Epoch: epoch, Error: err.Error()}
+	}
+	defer s.mu.Unlock()
+	defer func() { out = copyResponse(out) }()
 	out = s.backend.Execute(q, &s.leases)
 	s.revision++
 	out.Epoch = s.epoch
